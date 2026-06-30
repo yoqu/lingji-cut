@@ -35,6 +35,7 @@ import {
 } from '../../ui';
 import type { SelectOption } from '../../ui';
 import { normalizeProviderDraft, validateProviderDraft } from './ai-config-utils';
+import { LingjiGatewayConnect } from './LingjiGatewayConnect';
 import styles from './ProviderListSection.module.css';
 
 /** 生成唯一 ID */
@@ -1144,6 +1145,10 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
     onChange(next, newDefaultId);
   };
 
+  const handleGatewayConnected = (provider: LLMProvider) => {
+    onChange([...providers, provider], provider.id);
+  };
+
   const openAdd = () => {
     setEditTarget(emptyProvider());
     setIsAdding(true);
@@ -1167,9 +1172,12 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
           title="暂无 Provider"
           description="点击下方按钮添加你的第一个 Provider。"
           actions={
-            <Button type="button" variant="secondary" onClick={openAdd}>
-              + 添加 Provider
-            </Button>
+            <div className={styles.providerActions}>
+              <LingjiGatewayConnect onConnected={handleGatewayConnected} />
+              <Button type="button" variant="secondary" onClick={openAdd}>
+                + 添加 Provider
+              </Button>
+            </div>
           }
         />
       ) : (
@@ -1231,14 +1239,17 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
             ))}
           </div>
 
-          <Button
-            type="button"
-            variant="secondary"
-            className={styles.addProviderButton}
-            onClick={openAdd}
-          >
-            + 添加 Provider
-          </Button>
+          <div className={styles.providerActions}>
+            <LingjiGatewayConnect onConnected={handleGatewayConnected} />
+            <Button
+              type="button"
+              variant="secondary"
+              className={styles.addProviderButton}
+              onClick={openAdd}
+            >
+              + 添加 Provider
+            </Button>
+          </div>
         </>
       )}
 
