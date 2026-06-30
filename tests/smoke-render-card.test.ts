@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { smokeRenderCardTsx, assertCardRenders } from '../electron/remotion/smoke-render';
+import { smokeRenderCardTsx, assertCardRenders, validateMotionCardTsx } from '../electron/remotion/smoke-render';
 
 const GOOD = `import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
 export default function Good() {
@@ -53,5 +53,14 @@ describe('assertCardRenders', () => {
   it('rejects with the 渲染校验失败 + 请重新生成 message for a crashing component', async () => {
     await expect(assertCardRenders(BAD_UNDECLARED)).rejects.toThrow(/渲染校验失败/);
     await expect(assertCardRenders(BAD_UNDECLARED)).rejects.toThrow(/请重新生成/);
+  });
+});
+
+describe('validateMotionCardTsx', () => {
+  it('marks return null as a validation error while smoke rendering stays compatible', async () => {
+    const result = await validateMotionCardTsx(RETURNS_NULL, { checkRenderedLayout: false });
+    expect(result.render.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.code === 'returns-null' && issue.severity === 'error')).toBe(true);
   });
 });

@@ -13,6 +13,12 @@ import { getActiveProjectPath } from '../context';
 import { loadRecentProjects } from '../../recent-projects';
 import { registerGenerationTools } from '../headless-generation';
 import { registerCardTools } from '../card-tools';
+import {
+  acquireAiEditLock,
+  releaseAiEditLock,
+  heartbeatAiEditLock,
+  getAiEditLockStatus,
+} from '../../ai-edit/session-lock';
 
 function jsonResult(data: unknown) {
   return {
@@ -213,6 +219,76 @@ export function registerPipelineMcpTools(
     async () => {
       try {
         return jsonResult(await loadRecentProjects(getUserDataPath()));
+      } catch (err) {
+        return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'lingji_edit_lock',
+    {
+      title: '锁定编辑界面',
+      description:
+        '让运行中的灵机剪影进入 AI 编辑锁定状态，并写入兼容锁文件。锁定期间内容编辑界面不可操作，AI 面板仍可查看。',
+      inputSchema: {
+        projectPath: z.string().optional().describe('项目目录路径；为空时使用当前活动项目'),
+        scope: z.enum(['video', 'script']).describe('锁定范围'),
+        owner: z.string().optional().describe('锁拥有者，默认 agent'),
+        reason: z.string().optional().describe('锁定原因，供 UI 展示'),
+        ttlMs: z.number().optional().describe('锁有效期毫秒；默认 120000'),
+      },
+    },
+    async ({ projectPath, scope, owner, reason, ttlMs }) => {
+      try {
+        return jsonResult(await acquireAiEditLock({ projectPath, scope, owner, reason, ttlMs }));
+      } catch (err) {
+        return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'lingji_edit_unlock',
+    {
+      title: '解除编辑界面锁定',
+      description: '解除 AI 编辑锁定状态，并删除兼容锁文件。',
+      inputSchema: { projectPath: z.string().optional().describe('项目目录路径；为空时使用当前活动项目') },
+    },
+    async ({ projectPath }) => {
+      try {
+        return jsonResult(await releaseAiEditLock(projectPath));
+      } catch (err) {
+        return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'lingji_edit_heartbeat',
+    {
+      title: '刷新编辑界面锁',
+      description: '刷新 AI 编辑锁心跳，长时间编辑时使用。',
+      inputSchema: { projectPath: z.string().optional().describe('项目目录路径；为空时使用当前活动项目') },
+    },
+    async ({ projectPath }) => {
+      try {
+        return jsonResult(await heartbeatAiEditLock(projectPath));
+      } catch (err) {
+        return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'lingji_edit_lock_status',
+    {
+      title: '查询编辑界面锁',
+      description: '返回当前 AI 编辑锁状态。',
+    },
+    async () => {
+      try {
+        return jsonResult(getAiEditLockStatus());
       } catch (err) {
         return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
       }

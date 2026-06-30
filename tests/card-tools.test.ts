@@ -26,7 +26,14 @@ describe('registerCardTools', () => {
     try {
       const server = new FakeMcpServer();
       registerCardTools(server as never, () => null, () => '/tmp');
-      for (const n of ['lingji_list_cards', 'lingji_get_card', 'lingji_update_card', 'lingji_delete_card']) {
+      for (const n of [
+        'lingji_list_cards',
+        'lingji_get_card',
+        'lingji_update_card',
+        'lingji_delete_card',
+        'lingji_get_card_context',
+        'lingji_validate_card',
+      ]) {
         expect(server.tools.has(n)).toBe(true);
       }
       const res = (await server.tools.get('lingji_list_cards')!.handler({ projectPath: dir })) as { content: { text: string }[] };

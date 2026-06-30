@@ -44,6 +44,23 @@
   color: var(--color-text-secondary);
 }
 
+.aiEditLockBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-4) var(--space-8);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-selection-blue) 30%, transparent);
+  background: color-mix(in srgb, var(--color-selection-blue) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+}
+
+.aiEditLockBanner span:first-child {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
 .workflowError {
   font-size: var(--font-size-md);
   color: var(--color-danger);

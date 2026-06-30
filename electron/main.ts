@@ -82,6 +82,7 @@ import { registerPublishIpc } from './publish/ipc';
 import { configureBiliupRoot } from './publish/biliup-runtime';
 import { getBiliupDestRoot } from './publish/biliup-install';
 import { LockMonitor } from './ai-edit/lock-watcher';
+import { configureAiEditLockBroadcaster, applyObservedAiEditLock } from './ai-edit/session-lock';
 import { validateTimeline, type EditError } from '../src/lib/external-edit-validate';
 import { buildEditResult, writeEditResult } from './ai-edit/result-writer';
 import { consumeSelfWrite } from './ai-edit/self-write-guard';
@@ -208,6 +209,7 @@ let menuContext: MenuContext = {
   hasProject: false,
   recentProjects: [],
   isAutoRunning: false,
+  isAiEditing: false,
 };
 let fileWatcher: FSWatcher | null = null;
 let lockPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -378,8 +380,42 @@ function createApplicationMenu() {
       onExportLogs: () => {
         void exportLogsArchive();
       },
+      onShowAbout: () => {
+        void showAboutDialog();
+      },
     }),
   );
+}
+
+async function showAboutDialog() {
+  const wechatId = 'yoqu2020';
+  const detail = [
+    `版本 ${app.getVersion()}`,
+    '',
+    '本地优先的口播 / 播客视频创作工具，从素材、文稿、语音、字幕到导出 MP4 一站式完成。',
+    '',
+    `作者微信：${wechatId}`,
+    `微信群：加作者微信，备注「入群」即可加入交流群`,
+  ].join('\n');
+
+  const options: Electron.MessageBoxOptions = {
+    type: 'info',
+    title: '关于灵机剪影',
+    message: '灵机剪影',
+    detail,
+    buttons: ['复制微信号', '确定'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  };
+
+  const { response } = mainWindow
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+
+  if (response === 0) {
+    clipboard.writeText(wechatId);
+  }
 }
 
 function refreshApplicationMenu() {
@@ -464,6 +500,7 @@ function createWindow() {
 
   // 确保标题设置正确
   mainWindow.setTitle('灵机剪影');
+  configureAiEditLockBroadcaster(() => mainWindow);
 
   if (shouldAutoOpenDevTools({ isPackaged: app.isPackaged, debugMode: currentConfig.debugMode })) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -1799,6 +1836,7 @@ ipcMain.handle('set-menu-context', async (_event, context: MenuContext) => {
           }))
       : [],
     isAutoRunning: Boolean(context.isAutoRunning),
+    isAiEditing: Boolean(context.isAiEditing),
   };
 
   refreshApplicationMenu();
@@ -2335,7 +2373,9 @@ ipcMain.handle('start-watching', async (_event, dir: string) => {
       }
     },
     now: () => Date.now(),
-    onChange: (change) => mainWindow?.webContents.send('ai-edit-lock-changed', change),
+    onChange: (change) => {
+      applyObservedAiEditLock(change.lock ? { ...change.lock, projectPath: dir } : null);
+    },
   });
   lockPollTimer = setInterval(() => { void lockMon.poll(); }, 500);
   void lockMon.poll();

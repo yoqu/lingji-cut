@@ -1,29 +1,35 @@
-# Video Editing Reference
+# 视频编辑参考
 
-Use this reference before directly editing Lingji video timeline data or Motion Card source.
+直接编辑灵机剪影视频时间轴或 Motion Card 源码前读取本文件。
 
-## Editable Files
+## 可编辑文件
 
 - `<projectDir>/project.json` → only the `timeline` section.
 - `<projectDir>/ai-cards/<overlayId>/motionCard.tsx` → Motion Card Remotion source.
 
 Do not edit generated media artifacts: `podcast-audio.mp3`, `podcast-subtitles*.srt`, `covers/`, `ai-cards/<id>/image.png`, or rendered MP4 files.
 
-## Lock And Result Protocol
+## CLI 锁定与结果协议
 
-Before editing, create `<projectDir>/.lingji/edit-lock.json`:
+编辑前不要手写 `.lingji/edit-lock.json`。先通过 CLI 请求应用锁定界面：
 
-```json
-{
-  "owner": "codex",
-  "scope": "video",
-  "startedAt": 1718260000000,
-  "heartbeat": 1718260000000,
-  "ttlMs": 30000
-}
+```bash
+node "$LINGJI_CLI" edit lock --project <projectDir> --scope video --reason "AI 正在编辑视频内容" --json
 ```
 
-Use current epoch milliseconds. Refresh `heartbeat` if work exceeds about 15 seconds. Delete the lock after writing.
+如果编辑超过约 60 秒，刷新心跳：
+
+```bash
+node "$LINGJI_CLI" edit heartbeat --project <projectDir> --json
+```
+
+完成、失败或中断前都要解除锁定：
+
+```bash
+node "$LINGJI_CLI" edit unlock --project <projectDir> --json
+```
+
+锁定后，应用会禁用内容编辑界面，AI 面板仍可查看。`.lingji/edit-lock.json` 只是应用写出的兼容信号，不再由 agent 直接维护。
 
 After editing `project.json`, read `<projectDir>/.lingji/edit-result.json`. If `ok:false`, fix the listed `errors[].field` / `errors[].message`, rewrite `project.json`, and check again until `ok:true`. Editing `motionCard.tsx` does not produce this result file.
 
@@ -93,7 +99,9 @@ Edit `timeline.subtitle` for global voiceover subtitle styling:
 
 ## Motion Card TSX
 
-Edit `<projectDir>/ai-cards/<overlayId>/motionCard.tsx` directly.
+Edit `<projectDir>/ai-cards/<overlayId>/motionCard.tsx` directly. 文件名用 timeline overlay 的 `id`（即 `<overlayId>`），不是 `cardId`；写错路径不会生效。
+
+保存即生效：项目打开期间编辑器常驻文件监听，写入 `motionCard.tsx` 会自动热重载对应 overlay 的预览，无需重开项目。若改了无反应，先确认路径用的是 overlayId、且该卡已放置到时间轴。
 
 Hard constraints:
 
@@ -125,4 +133,3 @@ export default function Card() {
 - `cardAsset` is provided by the host runtime; do not import or redefine it.
 - The referenced file must already exist on disk under the project before export.
 - Tiny inline SVG/icon data URIs (< ~8KB) are tolerated, but prefer `cardAsset` for any real photo/illustration.
-

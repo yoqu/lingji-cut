@@ -1,4 +1,4 @@
 interface:
   display_name: "灵机剪影视频工作流"
   short_description: "连接稿件输入、灵机剪影项目生成、视频精修与导出协作流程"
-  default_prompt: "Use $lingji-video-workflow to turn this manuscript project into a Lingji video and refine the script or timeline as needed."
+  default_prompt: "使用 $lingji-video-workflow 将当前稿件或项目制作成灵机剪影视频，并按需精修脚本、时间轴或内容卡片。"

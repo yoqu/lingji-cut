@@ -1,8 +1,9 @@
-import { parseLock, isLockActive, type EditScope } from './lock-state';
+import { parseLock, isLockActive, type EditLock, type EditScope } from './lock-state';
 
 export interface LockChange {
   active: boolean;
   scope?: EditScope;
+  lock?: EditLock;
 }
 
 interface LockMonitorOptions {
@@ -25,6 +26,6 @@ export class LockMonitor {
     if (active === this.lastActive && scope === this.lastScope) return;
     this.lastActive = active;
     this.lastScope = scope;
-    this.opts.onChange({ active, scope });
+    this.opts.onChange({ active, scope, lock: active ? lock! : undefined });
   }
 }

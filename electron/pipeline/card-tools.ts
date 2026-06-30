@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { listCards, getCard, updateCard, deleteCard } from './card-ops';
+import { listCards, getCard, updateCard, deleteCard, getCardContext, validateCard } from './card-ops';
 import { emitProjectUpdated } from './headless-generation';
 import type { AICard } from '../../src/types/ai';
 
@@ -21,7 +21,7 @@ function err(e: unknown) {
 export function registerCardTools(
   server: McpServer,
   getMainWindow: () => BrowserWindow | null,
-  _getUserDataPath: () => string,
+  getUserDataPath: () => string,
 ): void {
   server.registerTool(
     'lingji_list_cards',
@@ -62,6 +62,51 @@ export function registerCardTools(
         emitProjectUpdated(getMainWindow, projectPath, ['aiAnalysis']);
         return jsonResult(r);
       } catch (e) { return err(e); }
+    },
+  );
+
+  server.registerTool(
+    'lingji_get_card_context',
+    {
+      title: '获取卡片上下文',
+      description:
+        '返回卡片生成/修复所需上下文：项目风格、有效提示词、段落字幕、segment、overlay 与 prompt 绑定。',
+      inputSchema: {
+        projectPath: z.string(),
+        cardId: z.string().optional(),
+        segmentId: z.string().optional(),
+        visualType: z.enum(['motion', 'image']).optional(),
+      },
+    },
+    async ({ projectPath, cardId, segmentId, visualType }) => {
+      try {
+        return jsonResult(
+          await getCardContext(projectPath, getUserDataPath(), {
+            cardId,
+            segmentId,
+            visualType,
+          }),
+        );
+      } catch (e) {
+        return err(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    'lingji_validate_card',
+    {
+      title: '验证卡片',
+      description:
+        '验证卡片是否可渲染，并检查缺失 overlay、媒体资产、文字对齐与遮挡风险。Motion Card 会先做渲染烟测。',
+      inputSchema: { projectPath: z.string(), cardId: z.string() },
+    },
+    async ({ projectPath, cardId }) => {
+      try {
+        return jsonResult(await validateCard(projectPath, cardId));
+      } catch (e) {
+        return err(e);
+      }
     },
   );
 }

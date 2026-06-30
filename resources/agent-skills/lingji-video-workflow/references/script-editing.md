@@ -1,8 +1,8 @@
-# Script Editing Reference
+# 脚本编辑参考
 
-Use this reference before directly editing a Lingji project’s `original.md` or `script.md`.
+直接编辑灵机项目的 `original.md` 或 `script.md` 前读取本文件。
 
-## Scope
+## 范围
 
 Editable files:
 
@@ -11,23 +11,27 @@ Editable files:
 
 Do not edit video timeline, cards, audio, subtitles, covers, or rendered media in this mode.
 
-## Lock Protocol
+## CLI 锁定协议
 
-Before writing either Markdown file, create `<projectDir>/.lingji/edit-lock.json`:
+写入 Markdown 前不要手写 `.lingji/edit-lock.json`。先通过 CLI 请求应用锁定脚本界面：
 
-```json
-{
-  "owner": "codex",
-  "scope": "script",
-  "startedAt": 1718260000000,
-  "heartbeat": 1718260000000,
-  "ttlMs": 30000
-}
+```bash
+node "$LINGJI_CLI" edit lock --project <projectDir> --scope script --reason "AI 正在编辑脚本文稿" --json
 ```
 
-Use current epoch milliseconds for `startedAt` and `heartbeat`. If editing takes more than about 15 seconds, rewrite the file with a fresh `heartbeat`; keep the interval below `ttlMs`.
+如果编辑超过约 60 秒，刷新心跳：
 
-Delete the lock after writing. Script edits do not produce `.lingji/edit-result.json`.
+```bash
+node "$LINGJI_CLI" edit heartbeat --project <projectDir> --json
+```
+
+完成、失败或中断前都要解除锁定：
+
+```bash
+node "$LINGJI_CLI" edit unlock --project <projectDir> --json
+```
+
+脚本编辑不产生 `.lingji/edit-result.json`。`.lingji/edit-lock.json` 只是应用写出的兼容信号，不再由 agent 直接维护。
 
 ## Save Behavior
 
@@ -38,10 +42,9 @@ Delete the lock after writing. Script edits do not produce `.lingji/edit-result.
 ## Direct Edit Steps
 
 1. Confirm `<projectDir>` contains the Lingji project files.
-2. Write the script lock.
+2. 执行 `lingji edit lock --scope script`。
 3. Read the target Markdown file.
 4. Apply the requested rewrite or polish.
 5. Write the complete updated Markdown file.
-6. Delete the lock.
+6. 执行 `lingji edit unlock`。
 7. Report that downstream generated artifacts may need regeneration.
-

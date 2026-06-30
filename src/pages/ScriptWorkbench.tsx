@@ -24,6 +24,7 @@ import {
 } from '../lib/script-utils';
 import { ReviewCursorAnimator } from '../lib/review-cursor-animator';
 import { useScriptStore } from '../store/script';
+import { useAiEditStore } from '../store/ai-edit';
 import { useTaskProgressStore } from '../store/task-progress';
 import { loadAISettings, useAIStore } from '../store/ai';
 import { resolveUserPromptBinding } from '../lib/llm/binding-resolver';
@@ -158,6 +159,8 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
   const hasAICardOverlays = useTimelineStore(
     (state) => state.timeline.overlays?.some((o) => o.overlayType === 'ai-card') ?? false,
   );
+  const aiEditLocked = useAiEditStore((s) => s.locked);
+  const aiEditReason = useAiEditStore((s) => s.reason);
 
   const [restoring, setRestoring] = useState(false);
   const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
@@ -397,10 +400,8 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     };
 
     void restore();
-
-    return () => {
-      void window.electronAPI.stopWatching();
-    };
+    // 文件监听生命周期由 App 统一管理（项目打开期间常驻），离开工作台时不要停止，
+    // 否则会杀掉编辑器页仍需要的 watcher，导致 Motion Card 改动不实时刷新。
     // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrateRef 是稳定 ref
   }, []);
 
@@ -1735,7 +1736,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           ) : null}
 
           {/* 快捷操作栏：导入文稿 / 媒体 */}
-          {projectDir && (
+          {projectDir && !aiEditLocked && (
             <QuickActionBar
               onImportText={() => { void handleImportText(); }}
               onImportDouyin={() => {
@@ -1744,6 +1745,12 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
               }}
             />
           )}
+          {aiEditLocked ? (
+            <div className={styles.aiEditLockBanner} role="status" aria-live="polite">
+              <span>AI 正在编辑当前项目</span>
+              <span>{aiEditReason ?? '脚本编辑区已切换为只读，等待 AI 完成后会自动解锁。'}</span>
+            </div>
+          ) : null}
           {projectDir && hasImportDetailAction && (workflow.step === 'idle' || workflow.step === 'error') && !hasAICardOverlays ? (
             <div className={styles.workflowBar}>
               <Button
@@ -1932,6 +1939,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                           onDismissAnnotation={activeFile === 'script.md' ? dismissAnnotation : undefined}
                           editorViewRef={editorViewRef}
                           readOnly={
+                            aiEditLocked ||
                             ((activeFile === 'script.md' || activeFile === 'original.md') && editorAgent.readOnly) ||
                             historyPreview.active
                           }

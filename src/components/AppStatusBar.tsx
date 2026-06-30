@@ -176,12 +176,13 @@ function WorkbenchStatsIndicator() {
 function AiEditLockIndicator() {
   const locked = useAiEditStore((s) => s.locked);
   const scope = useAiEditStore((s) => s.scope);
+  const reason = useAiEditStore((s) => s.reason);
   if (!locked) return null;
   const scopeLabel = scope === 'video' ? '视频' : scope === 'script' ? '脚本' : null;
   return (
     <span className={styles.aiEditLock}>
       <span className={styles.aiEditLockDot} />
-      <span>AI 正在编辑此项目（已锁定{scopeLabel ? ` · ${scopeLabel}` : ''}）</span>
+      <span>AI 正在编辑此项目（已锁定{scopeLabel ? ` · ${scopeLabel}` : ''}{reason ? ` · ${reason}` : ''}）</span>
     </span>
   );
 }

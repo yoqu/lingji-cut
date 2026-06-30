@@ -318,10 +318,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('file-changed', handler);
   },
   onAiEditLockChanged: (
-    callback: (change: { active: boolean; scope?: 'video' | 'script' }) => void,
+    callback: (change: {
+      active: boolean;
+      scope?: 'video' | 'script';
+      owner?: string;
+      projectPath?: string;
+      reason?: string;
+      startedAt?: number;
+      heartbeat?: number;
+      ttlMs?: number;
+    }) => void,
   ) => {
-    const handler = (_event: unknown, change: { active: boolean; scope?: 'video' | 'script' }) =>
-      callback(change);
+    const handler = (_event: unknown, change: {
+      active: boolean;
+      scope?: 'video' | 'script';
+      owner?: string;
+      projectPath?: string;
+      reason?: string;
+      startedAt?: number;
+      heartbeat?: number;
+      ttlMs?: number;
+    }) => callback(change);
     ipcRenderer.on('ai-edit-lock-changed', handler);
     return () => ipcRenderer.removeListener('ai-edit-lock-changed', handler);
   },

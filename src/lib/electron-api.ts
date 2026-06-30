@@ -88,6 +88,8 @@ export interface MenuContext {
    * 全局快捷键被屏蔽，避免在自动流程中触发副作用操作。
    */
   isAutoRunning?: boolean;
+  /** AI/Agent 正在编辑项目时锁定内容操作与写文件菜单。 */
+  isAiEditing?: boolean;
 }
 
 export type MenuEvent =
@@ -437,7 +439,16 @@ export interface ElectronAPI {
   stopWatching: () => Promise<void>;
   onFileChanged: (callback: (data: { file: string; content: string }) => void) => () => void;
   onAiEditLockChanged: (
-    callback: (change: { active: boolean; scope?: 'video' | 'script' }) => void,
+    callback: (change: {
+      active: boolean;
+      scope?: 'video' | 'script';
+      owner?: string;
+      projectPath?: string;
+      reason?: string;
+      startedAt?: number;
+      heartbeat?: number;
+      ttlMs?: number;
+    }) => void,
   ) => () => void;
   onFileTreeChanged: (callback: (data: { type: string; file: string }) => void) => () => void;
   readDirectory: (dir: string) => Promise<FileEntry[]>;

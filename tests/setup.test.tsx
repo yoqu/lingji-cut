@@ -6,38 +6,33 @@ describe('Setup', () => {
   it('renders hero banner and quick actions on welcome page', () => {
     const html = renderToStaticMarkup(
       <Setup
-        busy={false}
-        errorMessage={null}
         projectName=""
         recentProjects={[]}
-        onComplete={async () => undefined}
         onOpenRecentProject={async () => undefined}
         onImportScript={async () => undefined}
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
+        onImportProject={() => undefined}
       />,
     );
 
     expect(html).toContain('开始创作');
     expect(html).toContain('导入文稿');
-    expect(html).toContain('导入音频');
-    expect(html).toContain('抖音导入');
-    expect(html).toContain('本地视频');
+    expect(html).toContain('导入媒体');
+    expect(html).toContain('导入项目');
     expect(html).not.toContain('所有文件均在本地处理');
   });
 
   it('renders project name label when project is active', () => {
     const html = renderToStaticMarkup(
       <Setup
-        busy={false}
-        errorMessage={null}
         projectName="my-project"
         recentProjects={[]}
-        onComplete={async () => undefined}
         onOpenRecentProject={async () => undefined}
         onImportScript={async () => undefined}
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
+        onImportProject={() => undefined}
       />,
     );
 
@@ -48,8 +43,6 @@ describe('Setup', () => {
   it('renders recent projects in projects section', () => {
     const html = renderToStaticMarkup(
       <Setup
-        busy={false}
-        errorMessage={null}
         projectName=""
         recentProjects={[
           {
@@ -58,11 +51,11 @@ describe('Setup', () => {
             lastOpenedAt: new Date('2026-04-06T20:30:00+08:00').getTime(),
           },
         ]}
-        onComplete={async () => undefined}
         onOpenRecentProject={async () => undefined}
         onImportScript={async () => undefined}
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
+        onImportProject={() => undefined}
       />,
     );
 

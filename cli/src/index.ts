@@ -9,6 +9,7 @@ import { runAudioCommand } from './commands/audio';
 import { runSubtitleCommand } from './commands/subtitle';
 import { runCardsCommand } from './commands/cards';
 import { runCoverCommand } from './commands/cover';
+import { runEditCommand } from './commands/edit';
 import { runExportCommand } from './commands/export';
 import { CliError } from './errors';
 
@@ -24,7 +25,10 @@ const HELP = `灵机 CLI (lingji)
   lingji task wait <id>             轮询任务直到完成
   lingji audio gen [--project <p>] [--wait]   生成口播音频(TTS)
   lingji subtitle analyze [--wait]            字幕分析 + 卡片生成
-  lingji cards gen|list|show|update|regenerate|regen-media|convert|delete [<cardId>] [字段/--to/--wait]
+  lingji edit lock --scope video|script [--project <p>] [--reason <text>]
+  lingji edit unlock|heartbeat|status [--project <p>]
+  lingji cards context [--card <id>|--segment <id>] [--visual-type motion|image]
+  lingji cards gen|list|show|update|validate|regenerate|regen-media|convert|delete [<cardId>] [字段/--to/--wait]
   lingji cover prompt|image|gen [--wait]      封面提示词 / 出图 / 一次性
   lingji export [--out <file>] [--wait]       导出 MP4
 
@@ -53,10 +57,12 @@ async function dispatch(
       return runCardsCommand(action, positionals, flags, client);
     case 'cover':
       return runCoverCommand(action, flags, client);
+    case 'edit':
+      return runEditCommand(action, flags, client);
     case 'export':
       return runExportCommand(flags, client);
     default:
-      throw new CliError(`未知命令组: ${group}（支持 project/task/audio/subtitle/cards/cover/export）`, 'bad_args', 2);
+      throw new CliError(`未知命令组: ${group}（支持 project/task/audio/subtitle/edit/cards/cover/export）`, 'bad_args', 2);
   }
 }
 

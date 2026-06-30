@@ -34,6 +34,7 @@ import {
   getFileNameFromPath,
 } from '../lib/utils';
 import { loadAISettings, useAIStore } from '../store/ai';
+import { useAiEditStore } from '../store/ai-edit';
 import { useTimelineStore } from '../store/timeline';
 import { usePublishStore } from '../store/publish';
 import {
@@ -157,6 +158,9 @@ export function Editor({
     continueFromTtsDone,
     workflow,
   } = useAIVideoWorkflow();
+  const aiEditLocked = useAiEditStore((s) => s.locked);
+  const aiEditScope = useAiEditStore((s) => s.scope);
+  const aiEditReason = useAiEditStore((s) => s.reason);
   const assets = store.assets ?? [];
   const { timeline } = store;
   const overlayCount = timeline.overlays?.length ?? 0;
@@ -172,6 +176,9 @@ export function Editor({
     () => getEffectiveTimelineDurationMs(timeline),
     [timeline],
   );
+  const contentLocked = aiEditLocked;
+  const lockReasonLabel =
+    aiEditScope === 'video' ? '视频内容区已锁定' : aiEditScope === 'script' ? '脚本内容区已锁定' : '内容区已锁定';
 
   useEffect(() => {
     let cancelled = false;
@@ -747,6 +754,7 @@ export function Editor({
       <div
         className={styles.workspace}
         data-editor-region="workspace"
+        data-locked={contentLocked ? 'true' : 'false'}
         style={{
           gridTemplateColumns: layout.stackSidebar
             ? 'minmax(0, 1fr)'
@@ -802,6 +810,7 @@ export function Editor({
             <div
               className={styles.sidebarShell}
               data-editor-region="sidebar-shell"
+              data-active-panel={activePanel}
               data-editor-sidebar-style="flat-panel"
               data-editor-sidebar-width="340"
             >
@@ -932,6 +941,15 @@ export function Editor({
         )}
       </div>
 
+      {contentLocked ? (
+        <div className={styles.lockNotice} role="status" aria-live="polite">
+          <div className={styles.lockTitle}>{lockReasonLabel}</div>
+          <div className={styles.lockBody}>
+            {aiEditReason ?? 'AI 正在处理当前项目，内容编辑区已锁定。AI 面板仍可查看。'}
+          </div>
+        </div>
+      ) : null}
+
       <ResizeHandle
         axis="y"
         direction="shrink"
@@ -947,6 +965,7 @@ export function Editor({
         ref={timelineWrapRef}
         className={styles.timelineWrap}
         data-editor-region="timeline-wrap"
+        data-locked={contentLocked ? 'true' : 'false'}
       >
         <Timeline
           currentTimeMs={currentTimeMs}

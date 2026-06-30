@@ -28,6 +28,16 @@ export async function runCardsCommand(
   client: ToolCaller,
 ): Promise<unknown> {
   switch (action) {
+    case 'context': {
+      const projectPath = await resolveProjectPath(flags, client);
+      const payload: Record<string, unknown> = {
+        projectPath,
+      };
+      if (typeof flags.card === 'string') payload.cardId = flags.card;
+      if (typeof flags.segment === 'string') payload.segmentId = flags.segment;
+      if (typeof flags['visual-type'] === 'string') payload.visualType = flags['visual-type'];
+      return client.call('lingji_get_card_context', payload);
+    }
     case 'gen':
       return runGenerationCommand({ toolName: 'lingji_analyze_subtitles', flags, client });
     case 'list': {
@@ -56,6 +66,11 @@ export async function runCardsCommand(
       const projectPath = await resolveProjectPath(flags, client);
       return client.call('lingji_delete_card', { projectPath, cardId: requireId(positionals) });
     }
+    case 'validate': {
+      const projectPath = await resolveProjectPath(flags, client);
+      const cardId = requireId(positionals);
+      return client.call('lingji_validate_card', { projectPath, cardId });
+    }
     case 'regenerate':
       return runGenerationCommand({ toolName: 'lingji_regenerate_card', flags, client, extraArgs: { cardId: requireId(positionals) } });
     case 'regen-media':
@@ -66,6 +81,6 @@ export async function runCardsCommand(
       return runGenerationCommand({ toolName: 'lingji_convert_card', flags, client, extraArgs: { cardId: requireId(positionals), to } });
     }
     default:
-      throw new CliError(`未知 cards 子命令: ${action ?? '(空)'}（支持 gen/list/show/update/regenerate/regen-media/convert/delete）`, 'bad_args', 2);
+      throw new CliError(`未知 cards 子命令: ${action ?? '(空)'}（支持 context/gen/list/show/update/validate/regenerate/regen-media/convert/delete）`, 'bad_args', 2);
   }
 }

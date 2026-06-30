@@ -33,6 +33,7 @@ import { PublishWorkbench } from './components/publish/PublishWorkbench';
 import { getFileNameFromPath, readAudioDurationMs } from './lib/utils';
 import { createDefaultTimeline } from './types';
 import type { AICard, AIAnalysisResult } from './types/ai';
+import { buildAICardTimelineDraft } from './types/ai';
 import { getCurrentAISaveStatus, loadAISettings, subscribeToAISaveStatus, useAIStore, type AutoWorkflowParams } from './store/ai';
 import type { ProjectData } from './lib/project-persistence';
 import { handleExternalEdit } from './lib/external-edit-sync';
@@ -116,7 +117,6 @@ export default function App() {
     [],
   );
   const [isHydrating, setIsHydrating] = useState(() => Boolean(getCurrentProjectDir()));
-  const [isSettingUp, setIsSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [currentProjectDir, setCurrentProjectDir] = useState(() => getCurrentProjectDir());
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>([]);
@@ -566,6 +566,19 @@ export default function App() {
           if (projectData.aiAnalysis?.analysisResult) {
             setAIAnalysisResult(projectData.aiAnalysis.analysisResult);
             setCoverCandidates(projectData.aiAnalysis.coverCandidates ?? []);
+            // 卡片被外部工具（MCP/CLI regenerate/convert/update）改写后只更新了 aiAnalysis，
+            // 这里把更新后的卡片重新灌回已放置的 timeline overlay，使预览实时反映最新
+            // motionCard.tsx / 时间 / 展示模式，无需重开项目。只刷新已放置的卡片，绝不自动放置新卡。
+            const timelineStore = useTimelineStore.getState();
+            const placedSourceIds = new Set(
+              timelineStore.timeline.overlays
+                .filter((o) => o.overlayType === 'ai-card' && o.aiCardData?.sourceCardId)
+                .map((o) => o.aiCardData!.sourceCardId as string),
+            );
+            const drafts = projectData.aiAnalysis.analysisResult.cards
+              .filter((card) => placedSourceIds.has(card.id))
+              .map(buildAICardTimelineDraft);
+            if (drafts.length > 0) timelineStore.addAICardsToTimeline(drafts);
           } else {
             clearAIAnalysis();
             setCoverCandidates(projectData.aiAnalysis?.coverCandidates ?? []);
@@ -620,6 +633,10 @@ export default function App() {
   // preload 用 ipcRenderer.on 注册，多处订阅互不覆盖，各自返回独立 cleanup。
   useEffect(() => {
     if (!currentProjectDir) return;
+    // 项目打开期间常驻文件监听：file-first 编辑 motionCard.tsx / project.json / script.md
+    // 都要实时灌回。watcher 由 App 统一管理，不再依赖 ScriptWorkbench 挂载——否则停留在
+    // 编辑器页时监听器关闭，AI 改 Motion Card 不刷新，必须重开项目才生效。
+    void window.electronAPI?.startWatching?.(currentProjectDir);
     const offEdit = window.electronAPI?.onFileChanged?.((data) => {
       void handleExternalEdit(data, {
         loadProject: async (dir) => {
@@ -635,11 +652,12 @@ export default function App() {
       });
     });
     const offLock = window.electronAPI?.onAiEditLockChanged?.((change) => {
-      useAiEditStore.getState().setLock({ active: change.active, scope: change.scope });
+      useAiEditStore.getState().setLock(change);
     });
     return () => {
       offEdit?.();
       offLock?.();
+      void window.electronAPI?.stopWatching?.();
     };
   }, [currentProjectDir]);
 
@@ -664,6 +682,7 @@ export default function App() {
 
   useEffect(() => subscribeToSaveStatus(setSaveStatus), []);
   useEffect(() => subscribeToAISaveStatus(setAISaveStatus), []);
+  const aiEditLocked = useAiEditStore((s) => s.locked);
 
   useEffect(() => {
     void window.electronAPI.setMenuContext({
@@ -675,8 +694,9 @@ export default function App() {
       })),
       // 一键成稿运行中：菜单项需要按禁用态渲染，避免误触
       isAutoRunning: page === 'auto-run',
+      isAiEditing: aiEditLocked,
     });
-  }, [currentProjectDir, page, recentProjects]);
+  }, [aiEditLocked, currentProjectDir, page, recentProjects]);
 
   const handleNewProject = useCallback(async () => {
     const projectDir = await window.electronAPI.selectProjectDirectory();
@@ -1067,35 +1087,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [currentProjectDir, handleCommand, page]);
 
-  const handleSetupComplete = async (audioPath: string, srtPath: string) => {
-    setIsSettingUp(true);
-    setSetupError(null);
-
-    try {
-      let projectDir = getCurrentProjectDir();
-      if (!projectDir) {
-        projectDir = (await window.electronAPI.selectProjectDirectory()) || '';
-        if (!projectDir) {
-          return;
-        }
-
-        setProjectDir(projectDir);
-        void syncWorkspaceState();
-      }
-
-      setTimeline(createDefaultTimeline());
-      const { entries, durationMs } = await window.electronAPI.parseSrtFile(srtPath);
-      setSrtEntries(entries);
-      setPodcast(audioPath, srtPath, durationMs);
-      setPage('editor');
-    } catch (error) {
-      console.error('初始化工程失败:', error);
-      setSetupError('初始化工程失败，请确认 SRT 文件格式正确。');
-    } finally {
-      setIsSettingUp(false);
-    }
-  };
-
   // ── 双向同步：ScriptWorkbench ↔ Editor 共享工作目录 ──
 
   // 方向 A：script store 选定新目录 → 更新 timeline store + App 状态
@@ -1246,11 +1237,8 @@ export default function App() {
             >
               {page === 'welcome' || page === 'setup' ? (
                 <Setup
-                  busy={isSettingUp}
-                  errorMessage={setupError}
                   projectName={projectName}
                   recentProjects={recentProjects}
-                  onComplete={handleSetupComplete}
                   onOpenRecentProject={openProject}
                   onRemoveRecentProject={handleRemoveRecentProject}
                   onImportScript={handleImportScript}

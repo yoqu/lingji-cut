@@ -60,9 +60,9 @@ export function buildFileFirstContractBlock(): string {
 你可以**直接编辑本项目目录下的文件**来修改视频与文稿，编辑器会实时热重载预览，无需调用任何 App 内工具。
 
 ### 锁协议
-- 编辑前在 \`.lingji/edit-lock.json\` 写入锁：\`{ owner, scope: "video" | "script", startedAt, heartbeat, ttlMs: 30000 }\`。
-- 长任务每约 15s 更新一次 \`heartbeat\`，防止锁被判定过期。
-- 编辑完成后删除 \`.lingji/edit-lock.json\`。
+- 编辑前执行 \`node "$LINGJI_CLI" edit lock --project <projectDir> --scope video|script --reason "<说明>" --json\`，由应用锁定内容界面并写出兼容锁文件。
+- 长任务每约 60s 执行 \`node "$LINGJI_CLI" edit heartbeat --project <projectDir> --json\`。
+- 编辑完成后执行 \`node "$LINGJI_CLI" edit unlock --project <projectDir> --json\`。
 
 ### 结果协议
 - 修改 \`project.json\` 后，读取 \`.lingji/edit-result.json\`（\`{ ok, errors }\`）自查校验结果。

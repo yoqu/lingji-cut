@@ -16,21 +16,17 @@
 
 ## 编辑前：锁协议
 
-在修改任何项目文件之前，先写入锁文件：
+在修改任何项目文件之前，先通过 CLI 请求应用锁定界面，不要手写锁文件：
 
-```json
-// .lingji/edit-lock.json
-{
-  "owner": "<你的描述>",
-  "scope": "script",   // 或 "video"
-  "startedAt": "<ISO 时间>",
-  "heartbeat": "<ISO 时间>",
-  "ttlMs": 30000
-}
+```bash
+node "$LINGJI_CLI" edit lock --project <projectDir> --scope script --reason "AI 正在编辑脚本文稿" --json
+# 或
+node "$LINGJI_CLI" edit lock --project <projectDir> --scope video --reason "AI 正在编辑视频内容" --json
 ```
 
-- 长任务每约 15 秒更新一次 `heartbeat`，防止锁被判定过期。
-- 编辑完成后**删除** `.lingji/edit-lock.json`。
+- 长任务每约 60 秒执行 `node "$LINGJI_CLI" edit heartbeat --project <projectDir> --json`。
+- 编辑完成后**执行** `node "$LINGJI_CLI" edit unlock --project <projectDir> --json`。
+- `.lingji/edit-lock.json` 是应用写出的兼容信号，不由 agent 直接维护。
 
 ---
 
