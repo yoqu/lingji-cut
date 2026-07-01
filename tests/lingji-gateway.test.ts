@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connectLingjiGateway } from '../src/lib/llm/lingji-gateway';
+import {
+  applyLingjiFallbackProviders,
+  connectLingjiGateway,
+  LINGJI_FALLBACK_IDS,
+  type LingjiSession,
+} from '../src/lib/llm/lingji-gateway';
+import { buildDefaultAISettings } from '../src/store/ai';
 
 function mockEnvelope(data: unknown, code = 0, message = 'ok') {
   return { ok: true, status: 200, json: async () => ({ code, message, data }) } as Response;
@@ -52,5 +58,46 @@ describe('connectLingjiGateway', () => {
     await expect(
       connectLingjiGateway({ baseUrl: 'http://localhost:8080', email: 'a@b.com', password: 'bad' }),
     ).rejects.toThrow('邮箱或密码错误');
+  });
+});
+
+describe('applyLingjiFallbackProviders', () => {
+  const SESSION: LingjiSession = {
+    apiKey: 'lj_abc',
+    profile: { email: 'a@b.com' },
+    balance: 100,
+    tier: 'FREE',
+  };
+
+  it('四类都 upsert，且空默认时设为默认（baseUrl 按约定拼接）', () => {
+    const out = applyLingjiFallbackProviders(buildDefaultAISettings(), SESSION, 'http://localhost:15173');
+    expect(out.llmProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.llm)?.baseUrl).toBe('http://localhost:15173/v1');
+    expect(out.imageProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.image)?.baseUrl).toBe('http://localhost:15173');
+    expect(out.ttsProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.tts)?.baseUrl).toBe('http://localhost:15173');
+    expect(out.videoProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.video)?.baseUrl).toBe('http://localhost:15173');
+    expect(out.defaultProviderId).toBe(LINGJI_FALLBACK_IDS.llm);
+    expect(out.defaultImageProviderId).toBe(LINGJI_FALLBACK_IDS.image);
+    expect(out.defaultTtsProviderId).toBe(LINGJI_FALLBACK_IDS.tts);
+    expect(out.defaultVideoProviderId).toBe(LINGJI_FALLBACK_IDS.video);
+  });
+
+  it('已有默认时不覆盖用户选择，但仍 upsert provider', () => {
+    const base = { ...buildDefaultAISettings(), defaultProviderId: 'user-x', defaultModel: 'm' };
+    const out = applyLingjiFallbackProviders(base, SESSION, 'http://localhost:15173');
+    expect(out.defaultProviderId).toBe('user-x');
+    expect(out.llmProviders.some((p) => p.id === LINGJI_FALLBACK_IDS.llm)).toBe(true);
+  });
+
+  it('重复调用 id 幂等：不重复，且刷新 apiKey', () => {
+    const once = applyLingjiFallbackProviders(buildDefaultAISettings(), SESSION, 'http://localhost:15173');
+    const twice = applyLingjiFallbackProviders(once, { ...SESSION, apiKey: 'lj_new' }, 'http://localhost:15173');
+    expect(twice.llmProviders.filter((p) => p.id === LINGJI_FALLBACK_IDS.llm)).toHaveLength(1);
+    expect(twice.llmProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.llm)?.apiKey).toBe('lj_new');
+    expect(twice.imageProviders.filter((p) => p.id === LINGJI_FALLBACK_IDS.image)).toHaveLength(1);
+  });
+
+  it('去掉 base 尾斜杠', () => {
+    const out = applyLingjiFallbackProviders(buildDefaultAISettings(), SESSION, 'https://lingji.qushenma.com/');
+    expect(out.llmProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.llm)?.baseUrl).toBe('https://lingji.qushenma.com/v1');
   });
 });
