@@ -13,7 +13,7 @@ import {
   Input,
 } from '../../ui';
 
-const DEFAULT_GATEWAY = 'http://localhost:8080';
+const DEFAULT_GATEWAY = 'http://localhost:18080';
 
 /**
  * 一键登录灵机剪影账户：登录后自动生成网关密钥并配置好 Provider，开箱即用调 AI。

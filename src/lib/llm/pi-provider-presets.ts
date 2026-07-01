@@ -28,7 +28,7 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
     piProviderId: null,
     providerName: '灵机剪影网关',
     type: 'openai_compatible',
-    baseUrl: 'http://localhost:8080/v1',
+    baseUrl: 'http://localhost:18080/v1',
     models: ['gpt-4o-mini', 'gpt-4o'],
     apiKeyPlaceholder: 'lj_...',
     apiKeyRequired: true,
