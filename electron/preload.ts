@@ -165,6 +165,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('lingji-get-account') as Promise<
       import('./lingji-account').LingjiAccount | null
     >,
+  lingjiRefreshConfig: () =>
+    ipcRenderer.invoke('lingji-refresh-config') as Promise<{
+      session: import('../src/lib/llm/lingji-gateway').LingjiSession;
+      base: string;
+    } | null>,
   listSystemFonts: () =>
     ipcRenderer.invoke('list-system-fonts') as Promise<
       import('../src/lib/cover-editor/contracts').ListSystemFontsResult

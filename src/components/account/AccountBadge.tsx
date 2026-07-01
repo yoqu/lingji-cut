@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LogIn, User } from 'lucide-react';
 import type { LingjiAccount } from '../../lib/electron-api';
-import { applyLingjiFallbackProviders } from '../../lib/llm/lingji-gateway';
+import { applyLingjiFallbackProviders, type LingjiSession } from '../../lib/llm/lingji-gateway';
 import { buildDefaultAISettings, loadAISettings, saveAISettings } from '../../store/ai';
 import styles from './AccountBadge.module.css';
 
+/** 用会话（含服务端下发配置）重建四类托管 Provider 并落盘。 */
+async function applySession(session: LingjiSession, base: string): Promise<void> {
+  const settings = (await loadAISettings()) ?? buildDefaultAISettings();
+  await saveAISettings(applyLingjiFallbackProviders(settings, session, base));
+}
+
 /**
  * 欢迎页账号面板：未登录显示浏览器授权登录入口；登录后展示邮箱/积分/会员档位与退出。
- * 登录成功自动 upsert 四类兜底 Provider（服务器基址由主进程烘焙，渲染层不可见改）。
+ * 登录成功自动配置四类托管 Provider；启动时从统一网关刷新下发配置并回灌（地址/模型由服务端下发，用户不可编辑）。
  */
 export function AccountBadge() {
   const [account, setAccount] = useState<LingjiAccount | null>(null);
@@ -16,7 +22,16 @@ export function AccountBadge() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void window.electronAPI.lingjiGetAccount().then(setAccount).catch(() => undefined);
+    // 启动时用缓存账户拉取最新下发配置，重建托管 Provider，保证配置始终以服务端为准。
+    void (async () => {
+      try {
+        const refreshed = await window.electronAPI.lingjiRefreshConfig();
+        if (refreshed) await applySession(refreshed.session, refreshed.base);
+      } catch {
+        /* 离线/失败静默，沿用本地缓存 */
+      }
+      await window.electronAPI.lingjiGetAccount().then(setAccount).catch(() => undefined);
+    })();
   }, []);
 
   const login = useCallback(async () => {
@@ -24,8 +39,7 @@ export function AccountBadge() {
     setError(null);
     try {
       const { session, base } = await window.electronAPI.lingjiLogin();
-      const settings = (await loadAISettings()) ?? buildDefaultAISettings();
-      await saveAISettings(applyLingjiFallbackProviders(settings, session, base));
+      await applySession(session, base);
       setAccount(await window.electronAPI.lingjiGetAccount());
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败');

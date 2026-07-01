@@ -206,7 +206,7 @@ export interface RecentProjectEntry {
   coverImageUrl?: string;
 }
 
-/** 灵机剪影缓存账户（主进程 safeStorage 落盘结构，含长效网关密钥 lj_）。 */
+/** 灵机剪影缓存账户（主进程 safeStorage 落盘结构，含长效网关密钥 lj_ 与服务端下发配置）。 */
 export interface LingjiAccount {
   email: string;
   displayName?: string;
@@ -215,6 +215,7 @@ export interface LingjiAccount {
   balance: number;
   apiKey: string;
   connectedAt: string;
+  providers?: import('./llm/lingji-gateway').LingjiGatewayConfig;
 }
 
 export interface ElectronAPI {
@@ -348,6 +349,11 @@ export interface ElectronAPI {
   }>;
   lingjiLogout: () => Promise<void>;
   lingjiGetAccount: () => Promise<LingjiAccount | null>;
+  /** 用缓存账户拉取最新下发配置并回灌；返回可重建四类 provider 的 session 与基址，未登录返回 null。 */
+  lingjiRefreshConfig: () => Promise<{
+    session: import('./llm/lingji-gateway').LingjiSession;
+    base: string;
+  } | null>;
   saveTimeline: (projectDir: string, data: string) => Promise<string>;
   loadTimeline: (projectDir: string) => Promise<string | null>;
   saveAIAnalysis: (projectDir: string, data: string) => Promise<string>;

@@ -16,6 +16,7 @@ import {
   Select,
 } from '../../ui';
 import type { SelectOption } from '../../ui';
+import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import styles from './ImageProviderListSection.module.css';
 
 /** 生成唯一 ID */
@@ -425,17 +426,25 @@ export function VideoProviderListSection({
                     </span>
                   </div>
                   <div className={styles.providerActions}>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
-                      编辑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDelete(p.id)}
-                    >
-                      删除
-                    </Button>
+                    {isLingjiManagedProviderId(p.id) ? (
+                      <Badge variant="secondary" size="xs">
+                        服务端托管
+                      </Badge>
+                    ) : (
+                      <>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                          编辑
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDelete(p.id)}
+                        >
+                          删除
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
 

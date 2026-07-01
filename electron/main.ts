@@ -164,7 +164,7 @@ import { createWorkbenchTabContextMenuTemplate } from './workbench-tab-context-m
 import { getWindowChromeOptions } from './window-chrome';
 import { getPipelineService, attachTaskProgressBridge } from './pipeline';
 import { setActiveProjectPath } from './pipeline/context';
-import { lingjiLogin, lingjiLogout, loadAccount } from './lingji-account';
+import { lingjiLogin, lingjiLogout, lingjiRefreshConfig, loadAccount } from './lingji-account';
 
 const execFileAsync = promisify(execFile);
 
@@ -2837,6 +2837,7 @@ ipcMain.handle('llm:claude-code-acp-list-models', async () => {
 ipcMain.handle('lingji-login', async () => lingjiLogin());
 ipcMain.handle('lingji-logout', async () => lingjiLogout());
 ipcMain.handle('lingji-get-account', async () => loadAccount());
+ipcMain.handle('lingji-refresh-config', async () => lingjiRefreshConfig());
 
 // 开发模式下让 Ctrl+C 能正常退出 Electron
 if (process.env.NODE_ENV_ELECTRON_VITE === 'development') {

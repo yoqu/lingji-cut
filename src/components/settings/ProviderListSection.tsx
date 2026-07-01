@@ -15,6 +15,7 @@ import {
   getPiBuiltinProviderId,
 } from '../../lib/llm/pi-provider-presets';
 import { testProviderModel } from '../../lib/llm/test-provider';
+import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import {
   Badge,
   Button,
@@ -1195,17 +1196,25 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
                     ) : null}
                   </div>
                   <div className={styles.providerActions}>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
-                      编辑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDelete(p.id)}
-                    >
-                      删除
-                    </Button>
+                    {isLingjiManagedProviderId(p.id) ? (
+                      <Badge variant="secondary" size="xs">
+                        服务端托管
+                      </Badge>
+                    ) : (
+                      <>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                          编辑
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDelete(p.id)}
+                        >
+                          删除
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
 

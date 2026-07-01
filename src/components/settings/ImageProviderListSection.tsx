@@ -21,6 +21,7 @@ import {
   validateImageProviderDraft,
 } from './ai-config-utils';
 import { useTaskProgressStore } from '../../store/task-progress';
+import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import styles from './ImageProviderListSection.module.css';
 
 /** 生成唯一 ID */
@@ -539,17 +540,25 @@ export function ImageProviderListSection({
                   </div>
                   <div className={styles.providerActions}>
                     <TestButton provider={p} />
-                    <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
-                      编辑
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDelete(p.id)}
-                    >
-                      删除
-                    </Button>
+                    {isLingjiManagedProviderId(p.id) ? (
+                      <Badge variant="secondary" size="xs">
+                        服务端托管
+                      </Badge>
+                    ) : (
+                      <>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                          编辑
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDelete(p.id)}
+                        >
+                          删除
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </div>
 

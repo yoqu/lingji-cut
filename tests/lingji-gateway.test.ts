@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyLingjiFallbackProviders,
   connectLingjiGateway,
+  isLingjiManagedProviderId,
   LINGJI_FALLBACK_IDS,
+  type LingjiGatewayConfig,
   type LingjiSession,
 } from '../src/lib/llm/lingji-gateway';
 import { buildDefaultAISettings } from '../src/store/ai';
@@ -99,5 +101,35 @@ describe('applyLingjiFallbackProviders', () => {
   it('去掉 base 尾斜杠', () => {
     const out = applyLingjiFallbackProviders(buildDefaultAISettings(), SESSION, 'https://lingji.qushenma.com/');
     expect(out.llmProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.llm)?.baseUrl).toBe('https://lingji.qushenma.com/v1');
+  });
+
+  it('服务端下发配置优先：type/path/models 全部来自 session.providers', () => {
+    const providers: LingjiGatewayConfig = {
+      llm: { type: 'openai_compatible', path: '/gw', models: ['srv-chat'], defaultModel: 'srv-chat' },
+      image: { type: 'openai_image', path: '/img', models: ['srv-img'], defaultModel: 'srv-img' },
+      tts: { type: 'minimax', path: '/tts', models: ['srv-tts'], defaultModel: 'srv-tts' },
+      video: { type: 'custom', path: '/vid', models: ['srv-vid'], defaultModel: 'srv-vid' },
+    };
+    const out = applyLingjiFallbackProviders(
+      buildDefaultAISettings(),
+      { ...SESSION, providers },
+      'http://localhost:15173',
+    );
+    expect(out.llmProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.llm)?.baseUrl).toBe('http://localhost:15173/gw');
+    expect(out.imageProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.image)?.baseUrl).toBe('http://localhost:15173/img');
+    expect(out.imageProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.image)?.models).toEqual(['srv-img']);
+    expect(out.ttsProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.tts)?.baseUrl).toBe('http://localhost:15173/tts');
+    expect(out.videoProviders.find((p) => p.id === LINGJI_FALLBACK_IDS.video)?.models).toEqual(['srv-vid']);
+    expect(out.defaultModel).toBe('srv-chat');
+  });
+});
+
+describe('isLingjiManagedProviderId', () => {
+  it('识别托管 id 前缀', () => {
+    expect(isLingjiManagedProviderId(LINGJI_FALLBACK_IDS.llm)).toBe(true);
+    expect(isLingjiManagedProviderId('lingji-fallback-image')).toBe(true);
+    expect(isLingjiManagedProviderId('user-provider-x')).toBe(false);
+    expect(isLingjiManagedProviderId(null)).toBe(false);
+    expect(isLingjiManagedProviderId(undefined)).toBe(false);
   });
 });

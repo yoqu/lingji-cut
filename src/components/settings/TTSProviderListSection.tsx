@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { TTSProvider } from '../../types/ai';
 import { Badge, Button, EmptyState } from '../../ui';
+import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import {
   createEmptyTTSProvider,
   getTTSProviderTypeLabel,
@@ -68,8 +69,14 @@ export function TTSProviderListSection({
                     </span>
                   </div>
                   <div className={styles.providerActions}>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setEditTarget(provider)}>编辑</Button>
-                    <Button type="button" variant="destructive" size="sm" onClick={() => handleDelete(provider.id)}>删除</Button>
+                    {isLingjiManagedProviderId(provider.id) ? (
+                      <Badge variant="secondary" size="xs">服务端托管</Badge>
+                    ) : (
+                      <>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setEditTarget(provider)}>编辑</Button>
+                        <Button type="button" variant="destructive" size="sm" onClick={() => handleDelete(provider.id)}>删除</Button>
+                      </>
+                    )}
                   </div>
                 </div>
                 <span className={styles.providerBaseUrl}>{provider.baseUrl}</span>

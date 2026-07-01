@@ -4,13 +4,14 @@ import crypto from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type { LingjiGatewayConfig } from '../src/lib/llm/lingji-gateway';
 
 /**
  * 桌面端灵机剪影账户：浏览器授权 + 本地回调（loopback）+ PKCE 登录，safeStorage 落盘。
  * 服务器基址烘焙进包，用户不可见改：开发 localhost:15173 / 生产 lingji.qushenma.com。
  */
 
-/** 落盘账户结构（含长效网关密钥 lj_）。 */
+/** 落盘账户结构（含长效网关密钥 lj_ 与服务端下发的网关配置）。 */
 export interface LingjiAccount {
   email: string;
   displayName?: string;
@@ -19,6 +20,8 @@ export interface LingjiAccount {
   balance: number;
   apiKey: string;
   connectedAt: string;
+  /** 服务端下发的四类网关 Provider 配置（登录/刷新时更新）。 */
+  providers?: LingjiGatewayConfig;
 }
 
 /** 授权换取后的会话（返回渲染层，用于 upsert 兜底 provider）。 */
@@ -27,6 +30,8 @@ export interface LingjiSession {
   profile: { email: string; displayName?: string; avatarUrl?: string };
   balance: number;
   tier: string;
+  /** 服务端下发的四类网关 Provider 配置。 */
+  providers?: LingjiGatewayConfig;
 }
 
 const ACCOUNT_FILE = path.join(os.homedir(), '.lingji', 'account.json');
@@ -105,8 +110,18 @@ async function exchangeCode(
   return env.data;
 }
 
+async function writeAccount(account: LingjiAccount): Promise<void> {
+  await fs.mkdir(path.dirname(ACCOUNT_FILE), { recursive: true });
+  const json = JSON.stringify(account);
+  if (safeStorage.isEncryptionAvailable()) {
+    await fs.writeFile(ACCOUNT_FILE, safeStorage.encryptString(json));
+  } else {
+    await fs.writeFile(ACCOUNT_FILE, json, 'utf-8');
+  }
+}
+
 async function persistAccount(session: LingjiSession): Promise<void> {
-  const account: LingjiAccount = {
+  await writeAccount({
     email: session.profile.email,
     displayName: session.profile.displayName,
     avatarUrl: session.profile.avatarUrl,
@@ -114,13 +129,24 @@ async function persistAccount(session: LingjiSession): Promise<void> {
     balance: session.balance,
     apiKey: session.apiKey,
     connectedAt: new Date().toISOString(),
-  };
-  await fs.mkdir(path.dirname(ACCOUNT_FILE), { recursive: true });
-  const json = JSON.stringify(account);
-  if (safeStorage.isEncryptionAvailable()) {
-    await fs.writeFile(ACCOUNT_FILE, safeStorage.encryptString(json));
-  } else {
-    await fs.writeFile(ACCOUNT_FILE, json, 'utf-8');
+    providers: session.providers,
+  });
+}
+
+/** 用 lj_ key 拉取服务端下发的四类网关配置；失败返回 undefined（不阻断登录）。 */
+async function fetchClientConfig(
+  base: string,
+  apiKey: string,
+): Promise<LingjiGatewayConfig | undefined> {
+  try {
+    const res = await fetch(`${base}/v1/client-config`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const env = (await res.json()) as Envelope<{ providers: LingjiGatewayConfig }>;
+    if (env.code !== 0 || !env.data?.providers) return undefined;
+    return env.data.providers;
+  } catch {
+    return undefined;
   }
 }
 
@@ -156,11 +182,38 @@ export async function lingjiLogin(): Promise<{ session: LingjiSession; base: str
     await shell.openExternal(buildAuthorizeUrl(base, loopback.redirectUri, state, challenge));
     const { code } = await loopback.done;
     const session = await exchangeCode(base, code, verifier);
+    // token 端点已随登录下发 providers；旧服务端未带时回落到 /v1/client-config。
+    if (!session.providers) {
+      session.providers = await fetchClientConfig(base, session.apiKey);
+    }
     await persistAccount(session);
     return { session, base };
   } finally {
     loopback.close();
   }
+}
+
+/**
+ * 用已缓存账户拉取最新下发配置并回灌本地（启动/刷新时调用）。
+ * 返回可直接用于重建四类 provider 的 session 与烘焙基址；未登录返回 null。
+ */
+export async function lingjiRefreshConfig(): Promise<{ session: LingjiSession; base: string } | null> {
+  const account = await loadAccount();
+  if (!account) return null;
+  const base = lingjiBaseUrl();
+  const fresh = await fetchClientConfig(base, account.apiKey);
+  const providers = fresh ?? account.providers;
+  if (fresh) await writeAccount({ ...account, providers: fresh });
+  return {
+    base,
+    session: {
+      apiKey: account.apiKey,
+      profile: { email: account.email, displayName: account.displayName, avatarUrl: account.avatarUrl },
+      balance: account.balance,
+      tier: account.tier,
+      providers,
+    },
+  };
 }
 
 /**
