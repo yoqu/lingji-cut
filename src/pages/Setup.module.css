@@ -66,6 +66,22 @@
   z-index: 2;
 }
 
+.heroTopRight {
+  position: absolute;
+  top: 14px;
+  right: var(--space-8);
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.heroTopRight .donateBadge {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
 .donateBadge {
   position: absolute;
   top: 14px;

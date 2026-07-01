@@ -23,6 +23,7 @@ import { getAllRoles } from '../lib/script-templates';
 import heroBg from '../assets/hero-bg.png';
 import { DonateDialog } from '../components/Donate';
 import { ContactDialog } from '../components/Contact';
+import { AccountBadge } from '../components/account/AccountBadge';
 import styles from './Setup.module.css';
 
 interface SetupProps {
@@ -205,15 +206,18 @@ export function Setup({
               {projectName}
             </div>
           )}
-          <button
-            type="button"
-            className={styles.donateBadge}
-            onClick={() => setDonateOpen(true)}
-            title="支持作者"
-          >
-            <Heart size={13} strokeWidth={1.8} />
-            支持作者
-          </button>
+          <div className={styles.heroTopRight}>
+            <AccountBadge />
+            <button
+              type="button"
+              className={styles.donateBadge}
+              onClick={() => setDonateOpen(true)}
+              title="支持作者"
+            >
+              <Heart size={13} strokeWidth={1.8} />
+              支持作者
+            </button>
+          </div>
           <button
             type="button"
             className={styles.createButton}
