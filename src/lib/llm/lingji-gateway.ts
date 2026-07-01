@@ -23,6 +23,20 @@ export const LINGJI_FALLBACK_IDS = {
  * base 为烘焙服务器基址（无尾斜杠、无 /v1），各 provider 的 baseUrl 按各自运行时拼接约定：
  * LLM `{base}/v1`、图片/TTS/视频 `{base}`（分别落 /v1/images/generations、/v1/t2a_v2、/ent/v2/text2video）。
  */
+/** 从会话构建对话兜底 LLM Provider（供设置页登录入口复用）。base 无尾斜杠。 */
+export function buildLingjiLlmProvider(session: LingjiSession, base: string): LLMProvider {
+  return {
+    id: LINGJI_FALLBACK_IDS.llm,
+    name: '灵机剪影网关',
+    type: 'openai_compatible',
+    baseUrl: `${base.replace(/\/+$/, '')}/v1`,
+    apiKey: session.apiKey,
+    models: ['gpt-4o-mini', 'gpt-4o'],
+    defaultModel: 'gpt-4o-mini',
+    enableThinking: false,
+  };
+}
+
 export function applyLingjiFallbackProviders(
   settings: AISettings,
   session: LingjiSession,
@@ -39,16 +53,7 @@ export function applyLingjiFallbackProviders(
     return copy;
   };
 
-  const llm: LLMProvider = {
-    id: LINGJI_FALLBACK_IDS.llm,
-    name: '灵机剪影网关',
-    type: 'openai_compatible',
-    baseUrl: `${b}/v1`,
-    apiKey: key,
-    models: ['gpt-4o-mini', 'gpt-4o'],
-    defaultModel: 'gpt-4o-mini',
-    enableThinking: false,
-  };
+  const llm: LLMProvider = buildLingjiLlmProvider(session, b);
   const image = {
     id: LINGJI_FALLBACK_IDS.image,
     name: '灵机剪影图片',
