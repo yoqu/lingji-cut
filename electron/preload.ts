@@ -155,6 +155,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('delete-card-media-assets', { projectDir, cardId }),
   saveCoverEdit: (args: import('../src/lib/cover-editor/contracts').SaveCoverEditArgs) =>
     ipcRenderer.invoke('save-cover-edit', args),
+  lingjiLogin: () =>
+    ipcRenderer.invoke('lingji-login') as Promise<{
+      session: import('../src/lib/llm/lingji-gateway').LingjiSession;
+      base: string;
+    }>,
+  lingjiLogout: () => ipcRenderer.invoke('lingji-logout') as Promise<void>,
+  lingjiGetAccount: () =>
+    ipcRenderer.invoke('lingji-get-account') as Promise<
+      import('./lingji-account').LingjiAccount | null
+    >,
   listSystemFonts: () =>
     ipcRenderer.invoke('list-system-fonts') as Promise<
       import('../src/lib/cover-editor/contracts').ListSystemFontsResult

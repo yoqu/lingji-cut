@@ -164,6 +164,7 @@ import { createWorkbenchTabContextMenuTemplate } from './workbench-tab-context-m
 import { getWindowChromeOptions } from './window-chrome';
 import { getPipelineService, attachTaskProgressBridge } from './pipeline';
 import { setActiveProjectPath } from './pipeline/context';
+import { lingjiLogin, lingjiLogout, loadAccount } from './lingji-account';
 
 const execFileAsync = promisify(execFile);
 
@@ -2831,6 +2832,11 @@ ipcMain.handle('llm:claude-code-acp-cancel', async (_event, requestId: string) =
 ipcMain.handle('llm:claude-code-acp-list-models', async () => {
   return headlessAcpProvider.listModels();
 });
+
+// 灵机剪影账户：浏览器授权登录 / 退出 / 读缓存账户（服务器基址烘焙进包，渲染层不可见改）
+ipcMain.handle('lingji-login', async () => lingjiLogin());
+ipcMain.handle('lingji-logout', async () => lingjiLogout());
+ipcMain.handle('lingji-get-account', async () => loadAccount());
 
 // 开发模式下让 Ctrl+C 能正常退出 Electron
 if (process.env.NODE_ENV_ELECTRON_VITE === 'development') {

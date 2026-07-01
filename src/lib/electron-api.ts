@@ -206,6 +206,17 @@ export interface RecentProjectEntry {
   coverImageUrl?: string;
 }
 
+/** 灵机剪影缓存账户（主进程 safeStorage 落盘结构，含长效网关密钥 lj_）。 */
+export interface LingjiAccount {
+  email: string;
+  displayName?: string;
+  avatarUrl?: string;
+  tier: string;
+  balance: number;
+  apiKey: string;
+  connectedAt: string;
+}
+
 export interface ElectronAPI {
   parseSrtFile: (filePath: string) => Promise<{ entries: SrtEntry[]; durationMs: number }>;
   /** 弹出系统通知（mac 通知中心 / Windows 通知）。点击通知聚焦主窗口。 */
@@ -330,6 +341,13 @@ export interface ElectronAPI {
     args: import('./cover-editor/contracts').SaveCoverEditArgs,
   ) => Promise<import('./cover-editor/contracts').SaveCoverEditResult>;
   listSystemFonts: () => Promise<import('./cover-editor/contracts').ListSystemFontsResult>;
+  /** 灵机剪影账户浏览器授权登录；返回会话与烘焙服务器基址（用于 upsert 兜底 provider）。 */
+  lingjiLogin: () => Promise<{
+    session: import('./llm/lingji-gateway').LingjiSession;
+    base: string;
+  }>;
+  lingjiLogout: () => Promise<void>;
+  lingjiGetAccount: () => Promise<LingjiAccount | null>;
   saveTimeline: (projectDir: string, data: string) => Promise<string>;
   loadTimeline: (projectDir: string) => Promise<string | null>;
   saveAIAnalysis: (projectDir: string, data: string) => Promise<string>;
