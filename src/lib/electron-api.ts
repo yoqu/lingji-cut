@@ -349,10 +349,14 @@ export interface ElectronAPI {
   }>;
   lingjiLogout: () => Promise<void>;
   lingjiGetAccount: () => Promise<LingjiAccount | null>;
-  /** 用缓存账户拉取最新下发配置并回灌；返回可重建四类 provider 的 session 与基址，未登录返回 null。 */
+  /**
+   * 用缓存账户拉取最新下发配置与余额并回灌；返回可重建四类 provider 的 session 与基址，
+   * 未登录返回 null；key 被服务端吊销时 expired=true（UI 应提示重新登录）。
+   */
   lingjiRefreshConfig: () => Promise<{
     session: import('./llm/lingji-gateway').LingjiSession;
     base: string;
+    expired?: boolean;
   } | null>;
   saveTimeline: (projectDir: string, data: string) => Promise<string>;
   loadTimeline: (projectDir: string) => Promise<string | null>;

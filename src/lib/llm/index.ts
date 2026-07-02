@@ -9,7 +9,22 @@ import {
   parseStructuredOutput,
 } from './content';
 import { createChatModel, createChatModelFromProvider } from './model';
-import { INSUFFICIENT_CREDITS_MESSAGE, isInsufficientCreditsError, normalizeCreditsError } from './credits-error';
+import {
+  INSUFFICIENT_CREDITS_MESSAGE,
+  isInsufficientCreditsError,
+  isLingjiGatewayKey,
+  normalizeCreditsError,
+  normalizeCreditsErrorForKey,
+} from './credits-error';
+
+/** 解析本次调用实际使用的 provider apiKey（binding 优先，回落默认 provider / 旧字段）。 */
+function resolveProviderApiKey(settings: AISettings, binding?: ResolvedBinding): string | undefined {
+  return (
+    binding?.provider?.apiKey ??
+    settings.llmProviders?.find((p) => p.id === settings.defaultProviderId)?.apiKey ??
+    settings.llmApiKey
+  );
+}
 
 export interface StreamCallbacks {
   onReasoningChunk?: (chunk: string) => void;
@@ -219,6 +234,7 @@ async function streamWithRetry<T>(
   const hardTimeoutMs = options.hardTimeoutMs ?? STRUCTURED_HARD_TIMEOUT_MS;
   const thinking = isThinkingBinding(binding);
   const tel = options.telemetry;
+  const gatewayKey = resolveProviderApiKey(settings, binding);
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= STRUCTURED_MAX_RETRIES; attempt++) {
@@ -269,9 +285,19 @@ async function streamWithRetry<T>(
       });
       return parsed;
     } catch (error) {
-      // 积分不足重试无意义，直接给用户可行动的错误。
-      if (isInsufficientCreditsError(error)) {
-        throw new Error(INSUFFICIENT_CREDITS_MESSAGE);
+      // 托管网关积分不足：重试无意义，补齐失败日志/遥测配对后直接给可行动的错误。
+      if (isLingjiGatewayKey(gatewayKey) && isInsufficientCreditsError(error)) {
+        llmLog(`${label} ✗ 积分不足 attempt=${attempt} 耗时=${Date.now() - callStart}ms`);
+        tel?.emit('llm.end', {
+          label: telemetryLabel,
+          attempt,
+          durationMs: Date.now() - callStart,
+          ok: false,
+          retry: attempt > 0,
+          error: INSUFFICIENT_CREDITS_MESSAGE,
+          willRetry: false,
+        });
+        throw normalizeCreditsError(error) as Error;
       }
       lastError = error;
       const willRetry = attempt < STRUCTURED_MAX_RETRIES;
@@ -355,7 +381,7 @@ export async function generateText(
     );
     return assertNonEmptyContent(extractTextContent(response.content), 'LLM 返回空内容');
   } catch (error) {
-    throw normalizeCreditsError(error);
+    throw normalizeCreditsErrorForKey(resolveProviderApiKey(settings, binding), error);
   }
 }
 
@@ -393,7 +419,7 @@ export async function streamText(
 
     return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
   } catch (error) {
-    throw normalizeCreditsError(error);
+    throw normalizeCreditsErrorForKey(resolveProviderApiKey(settings, binding), error);
   }
 }
 
@@ -426,6 +452,6 @@ export async function streamTextWithProvider(
 
     return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
   } catch (error) {
-    throw normalizeCreditsError(error);
+    throw normalizeCreditsErrorForKey(provider.apiKey, error);
   }
 }

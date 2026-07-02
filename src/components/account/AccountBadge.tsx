@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LogIn, User } from 'lucide-react';
 import type { LingjiAccount } from '../../lib/electron-api';
-import { applyLingjiFallbackProviders, type LingjiSession } from '../../lib/llm/lingji-gateway';
+import {
+  applyLingjiFallbackProviders,
+  clearLingjiProviderKeys,
+  type LingjiSession,
+} from '../../lib/llm/lingji-gateway';
 import { buildDefaultAISettings, loadAISettings, saveAISettings } from '../../store/ai';
 import styles from './AccountBadge.module.css';
 
@@ -21,32 +25,33 @@ export function AccountBadge() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // 启动时用缓存账户拉取最新下发配置，重建托管 Provider，保证配置始终以服务端为准。
-    void (async () => {
-      try {
-        const refreshed = await window.electronAPI.lingjiRefreshConfig();
-        if (refreshed) await applySession(refreshed.session, refreshed.base);
-      } catch {
-        /* 离线/失败静默，沿用本地缓存 */
+  /** 刷新余额/tier 与服务端下发配置并回灌托管 Provider；key 失效时提示重新登录。 */
+  const refreshAccount = useCallback(async () => {
+    try {
+      const refreshed = await window.electronAPI.lingjiRefreshConfig();
+      if (refreshed?.expired) {
+        setError('登录已失效，请退出后重新登录');
+      } else if (refreshed) {
+        await applySession(refreshed.session, refreshed.base);
+        setError(null);
       }
-      await window.electronAPI.lingjiGetAccount().then(setAccount).catch(() => undefined);
-    })();
+    } catch {
+      /* 离线/失败静默，沿用本地缓存 */
+    }
+    await window.electronAPI.lingjiGetAccount().then(setAccount).catch(() => undefined);
   }, []);
 
-  /** 展开面板时刷新余额/tier（消耗积分后保持面板数字为准）。 */
+  useEffect(() => {
+    // 启动时用缓存账户拉取最新下发配置，重建托管 Provider，保证配置始终以服务端为准。
+    void refreshAccount();
+  }, [refreshAccount]);
+
+  /** 展开面板时刷新（消耗积分后保持面板数字为准）；副作用放在 updater 之外保持纯函数。 */
   const toggleMenu = useCallback(() => {
-    setMenuOpen((v) => {
-      if (!v) {
-        void window.electronAPI
-          .lingjiRefreshConfig()
-          .then(() => window.electronAPI.lingjiGetAccount())
-          .then((fresh) => fresh && setAccount(fresh))
-          .catch(() => undefined);
-      }
-      return !v;
-    });
-  }, []);
+    const next = !menuOpen;
+    if (next) void refreshAccount();
+    setMenuOpen(next);
+  }, [menuOpen, refreshAccount]);
 
   const login = useCallback(async () => {
     setLoading(true);
@@ -64,8 +69,16 @@ export function AccountBadge() {
 
   const logout = useCallback(async () => {
     await window.electronAPI.lingjiLogout();
+    try {
+      // 托管 provider 保留（不动用户默认选择），但清空失效的 lj_ key，避免后续调用报含混的 401
+      const settings = await loadAISettings();
+      if (settings) await saveAISettings(clearLingjiProviderKeys(settings));
+    } catch {
+      /* 清 key 失败不阻断退出 */
+    }
     setAccount(null);
     setMenuOpen(false);
+    setError(null);
   }, []);
 
   if (!account) {
@@ -98,6 +111,7 @@ export function AccountBadge() {
       </button>
       {menuOpen && (
         <div className={styles.menu}>
+          {error && <div className={styles.error}>{error}</div>}
           <div className={styles.menuRow}>
             <span>账号</span>
             <strong>{account.email}</strong>

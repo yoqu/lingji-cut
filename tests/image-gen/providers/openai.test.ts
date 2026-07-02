@@ -89,7 +89,7 @@ describe('openaiImageProvider', () => {
     expect(result.images[0].mimeType).toBe('image/png');
   });
 
-  it('b64_json 响应：请求体包含正确字段', async () => {
+  it('b64_json 响应：请求体包含正确字段（gpt-image 系不发 response_format）', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(JSON.stringify({ data: [{ b64_json: 'abc' }] }), { status: 200 }),
     );
@@ -99,8 +99,20 @@ describe('openaiImageProvider', () => {
     const [, init] = spy.mock.calls[0];
     const body = JSON.parse(init?.body as string);
     expect(body.size).toBe('1024x1024');
-    expect(body.response_format).toBe('b64_json');
+    expect(body.response_format).toBeUndefined();
     expect(body.n).toBe(2);
+  });
+
+  it('dall-e 系模型仍显式发送 response_format=b64_json', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ b64_json: 'abc' }] }), { status: 200 }),
+    );
+
+    await openaiImageProvider.generate(makeReq({ model: 'dall-e-3' }), makeConfig(), makeCtx());
+
+    const [, init] = spy.mock.calls[0];
+    const body = JSON.parse(init?.body as string);
+    expect(body.response_format).toBe('b64_json');
   });
 
   // ── 正常 url 响应 ─────────────────────────────────────────────────────────
@@ -144,7 +156,7 @@ describe('openaiImageProvider', () => {
 
   // ── aspectRatio 映射 ──────────────────────────────────────────────────────
 
-  it('aspectRatio 16:9 → size=1792x1024', async () => {
+  it('gpt-image 系 aspectRatio 16:9 → size=1536x1024', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(JSON.stringify({ data: [{ b64_json: 'x' }] }), { status: 200 }),
     );
@@ -153,10 +165,10 @@ describe('openaiImageProvider', () => {
 
     const [, init] = spy.mock.calls[0];
     const body = JSON.parse(init?.body as string);
-    expect(body.size).toBe('1792x1024');
+    expect(body.size).toBe('1536x1024');
   });
 
-  it('aspectRatio 9:16 → size=1024x1792', async () => {
+  it('gpt-image 系 aspectRatio 9:16 → size=1024x1536', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(JSON.stringify({ data: [{ b64_json: 'x' }] }), { status: 200 }),
     );
@@ -165,7 +177,23 @@ describe('openaiImageProvider', () => {
 
     const [, init] = spy.mock.calls[0];
     const body = JSON.parse(init?.body as string);
-    expect(body.size).toBe('1024x1792');
+    expect(body.size).toBe('1024x1536');
+  });
+
+  it('dall-e 系 aspectRatio 16:9 → size=1792x1024', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: [{ b64_json: 'x' }] }), { status: 200 }),
+    );
+
+    await openaiImageProvider.generate(
+      makeReq({ model: 'dall-e-3', aspectRatio: '16:9' }),
+      makeConfig(),
+      makeCtx(),
+    );
+
+    const [, init] = spy.mock.calls[0];
+    const body = JSON.parse(init?.body as string);
+    expect(body.size).toBe('1792x1024');
   });
 
   // ── extraParams 透传 ──────────────────────────────────────────────────────

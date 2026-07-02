@@ -58,6 +58,22 @@ function resolveGatewayConfig(session: LingjiSession): LingjiGatewayConfig {
   return session.providers ?? DEFAULT_LINGJI_GATEWAY_CONFIG;
 }
 
+/**
+ * 退出登录后清空四类托管 Provider 的 lj_ key：保留 provider 与用户默认选择，
+ * 但让后续调用显式报"未配置密钥"而不是拿失效 key 打出含混的 401。
+ */
+export function clearLingjiProviderKeys(settings: AISettings): AISettings {
+  const blank = <T extends { id: string; apiKey: string }>(list: T[] | undefined): T[] | undefined =>
+    list?.map((p) => (isLingjiManagedProviderId(p.id) ? { ...p, apiKey: '' } : p));
+  return {
+    ...settings,
+    llmProviders: blank(settings.llmProviders) ?? settings.llmProviders,
+    imageProviders: blank(settings.imageProviders) ?? settings.imageProviders,
+    ttsProviders: blank(settings.ttsProviders) ?? settings.ttsProviders,
+    videoProviders: blank(settings.videoProviders) ?? settings.videoProviders,
+  };
+}
+
 /** 烘焙基址（去尾斜杠）+ 下发 path。 */
 function joinBase(base: string, path: string): string {
   return `${base.replace(/\/+$/, '')}${path || ''}`;
@@ -129,19 +145,36 @@ export function applyLingjiFallbackProviders(
     extras: { managedBy: 'lingji' },
   };
 
+  // 默认 provider 是托管项时，默认模型必须跟随服务端下发轮换：
+  // binding-resolver 要求 model ∈ provider.models，滞留旧模型名会让请求在本地被拒。
+  const followModel = (
+    defaultProviderId: string | null | undefined,
+    managedId: string,
+    current: string | null | undefined,
+    delivered: { models: string[]; defaultModel: string | null },
+  ): string | null => {
+    const useManaged = (defaultProviderId ?? managedId) === managedId;
+    if (useManaged && (!current || !delivered.models.includes(current))) {
+      return delivered.defaultModel ?? delivered.models[0] ?? null;
+    }
+    return current ?? delivered.defaultModel;
+  };
+
   return {
     ...settings,
     llmProviders: upsert(settings.llmProviders, llm),
     defaultProviderId: settings.defaultProviderId ?? llm.id,
-    defaultModel: settings.defaultModel ?? llm.defaultModel ?? null,
+    defaultModel: followModel(settings.defaultProviderId, llm.id, settings.defaultModel, cfg.llm),
     imageProviders: upsert(settings.imageProviders, image),
     defaultImageProviderId: settings.defaultImageProviderId ?? image.id,
-    defaultImageModel: settings.defaultImageModel ?? cfg.image.defaultModel,
+    defaultImageModel: followModel(
+      settings.defaultImageProviderId, image.id, settings.defaultImageModel, cfg.image),
     ttsProviders: upsert(settings.ttsProviders, tts),
     defaultTtsProviderId: settings.defaultTtsProviderId ?? tts.id,
     videoProviders: upsert(settings.videoProviders, video),
     defaultVideoProviderId: settings.defaultVideoProviderId ?? video.id,
-    defaultVideoModel: settings.defaultVideoModel ?? cfg.video.defaultModel,
+    defaultVideoModel: followModel(
+      settings.defaultVideoProviderId, video.id, settings.defaultVideoModel, cfg.video),
   };
 }
 

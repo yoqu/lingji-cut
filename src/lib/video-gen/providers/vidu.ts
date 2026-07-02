@@ -1,4 +1,4 @@
-import { INSUFFICIENT_CREDITS_MESSAGE } from '../../llm/credits-error';
+import { INSUFFICIENT_CREDITS_MESSAGE, isLingjiGatewayKey } from '../../llm/credits-error';
 import { VideoGenerationError, httpStatusToErrorCode } from '../errors';
 import { pollVideoUntilDone } from '../async-poller';
 import type {
@@ -35,7 +35,9 @@ async function submitJob(
     throw new VideoGenerationError(
       code,
       'vidu',
-      code === 'quota' ? INSUFFICIENT_CREDITS_MESSAGE : `Vidu submit 失败 HTTP ${res.status}`,
+      code === 'quota' && isLingjiGatewayKey(cfg.apiKey)
+        ? INSUFFICIENT_CREDITS_MESSAGE
+        : `Vidu submit 失败 HTTP ${res.status}`,
       undefined,
       await safeText(res),
     );

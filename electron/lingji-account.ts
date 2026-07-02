@@ -113,11 +113,13 @@ async function exchangeCode(
 async function writeAccount(account: LingjiAccount): Promise<void> {
   await fs.mkdir(path.dirname(ACCOUNT_FILE), { recursive: true });
   const json = JSON.stringify(account);
-  if (safeStorage.isEncryptionAvailable()) {
-    await fs.writeFile(ACCOUNT_FILE, safeStorage.encryptString(json));
-  } else {
-    await fs.writeFile(ACCOUNT_FILE, json, 'utf-8');
-  }
+  const payload = safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(json)
+    : Buffer.from(json, 'utf-8');
+  // tmp + rename 原子替换：刷新写频次较高，避免中途崩溃写坏文件导致静默登出
+  const tmp = `${ACCOUNT_FILE}.tmp`;
+  await fs.writeFile(tmp, payload);
+  await fs.rename(tmp, ACCOUNT_FILE);
 }
 
 async function persistAccount(session: LingjiSession): Promise<void> {
@@ -133,15 +135,19 @@ async function persistAccount(session: LingjiSession): Promise<void> {
   });
 }
 
-/** 用 lj_ key 拉取服务端下发的四类网关配置；失败返回 undefined（不阻断登录）。 */
+/** 鉴权失效哨兵：lj_ key 被服务端吊销时刷新方须显式感知，而非静默沿用缓存。 */
+const UNAUTHORIZED = Symbol('lingji-unauthorized');
+
+/** 用 lj_ key 拉取服务端下发的四类网关配置；网络失败返回 undefined（不阻断登录）。 */
 async function fetchClientConfig(
   base: string,
   apiKey: string,
-): Promise<LingjiGatewayConfig | undefined> {
+): Promise<LingjiGatewayConfig | typeof UNAUTHORIZED | undefined> {
   try {
     const res = await fetch(`${base}/v1/client-config`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
+    if (res.status === 401 || res.status === 403) return UNAUTHORIZED;
     const env = (await res.json()) as Envelope<{ providers: LingjiGatewayConfig }>;
     if (env.code !== 0 || !env.data?.providers) return undefined;
     return env.data.providers;
@@ -150,15 +156,16 @@ async function fetchClientConfig(
   }
 }
 
-/** 用 lj_ key 拉取最新余额/tier；失败返回 undefined（不阻断）。 */
+/** 用 lj_ key 拉取最新余额/tier；网络失败返回 undefined（不阻断）。 */
 async function fetchBootstrap(
   base: string,
   apiKey: string,
-): Promise<{ balance: number; tier: string } | undefined> {
+): Promise<{ balance: number; tier: string } | typeof UNAUTHORIZED | undefined> {
   try {
     const res = await fetch(`${base}/api/client/bootstrap`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
+    if (res.status === 401 || res.status === 403) return UNAUTHORIZED;
     const env = (await res.json()) as Envelope<{ balance: number; tier: string }>;
     if (env.code !== 0 || typeof env.data?.balance !== 'number') return undefined;
     return { balance: env.data.balance, tier: env.data.tier };
@@ -201,7 +208,8 @@ export async function lingjiLogin(): Promise<{ session: LingjiSession; base: str
     const session = await exchangeCode(base, code, verifier);
     // token 端点已随登录下发 providers；旧服务端未带时回落到 /v1/client-config。
     if (!session.providers) {
-      session.providers = await fetchClientConfig(base, session.apiKey);
+      const fetched = await fetchClientConfig(base, session.apiKey);
+      session.providers = fetched === UNAUTHORIZED ? undefined : fetched;
     }
     await persistAccount(session);
     return { session, base };
@@ -212,25 +220,32 @@ export async function lingjiLogin(): Promise<{ session: LingjiSession; base: str
 
 /**
  * 用已缓存账户拉取最新下发配置与余额/tier 并回灌本地（启动/展开账号面板/耗时任务结束时调用）。
- * 返回可直接用于重建四类 provider 的 session 与烘焙基址；未登录返回 null。
+ * 返回可直接用于重建四类 provider 的 session 与烘焙基址；未登录返回 null；
+ * lj_ key 被服务端吊销时带回 expired=true（UI 提示重新登录，不静默沿用缓存）。
  */
-export async function lingjiRefreshConfig(): Promise<{ session: LingjiSession; base: string } | null> {
+export async function lingjiRefreshConfig(): Promise<
+  { session: LingjiSession; base: string; expired?: boolean } | null
+> {
   const account = await loadAccount();
   if (!account) return null;
   const base = lingjiBaseUrl();
-  const [freshProviders, freshAccount] = await Promise.all([
+  const [providersResult, bootstrapResult] = await Promise.all([
     fetchClientConfig(base, account.apiKey),
     fetchBootstrap(base, account.apiKey),
   ]);
+  const expired = providersResult === UNAUTHORIZED || bootstrapResult === UNAUTHORIZED;
+  const freshProviders = providersResult === UNAUTHORIZED ? undefined : providersResult;
+  const freshAccount = bootstrapResult === UNAUTHORIZED ? undefined : bootstrapResult;
   const merged: LingjiAccount = {
     ...account,
     providers: freshProviders ?? account.providers,
     balance: freshAccount?.balance ?? account.balance,
     tier: freshAccount?.tier ?? account.tier,
   };
-  if (freshProviders || freshAccount) await writeAccount(merged);
+  if (JSON.stringify(merged) !== JSON.stringify(account)) await writeAccount(merged);
   return {
     base,
+    ...(expired ? { expired: true } : {}),
     session: {
       apiKey: merged.apiKey,
       profile: { email: merged.email, displayName: merged.displayName, avatarUrl: merged.avatarUrl },

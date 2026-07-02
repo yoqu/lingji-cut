@@ -1,5 +1,5 @@
 import type { ImageProviderCapabilities } from '../../../types/ai';
-import { INSUFFICIENT_CREDITS_MESSAGE } from '../../llm/credits-error';
+import { INSUFFICIENT_CREDITS_MESSAGE, isLingjiGatewayKey } from '../../llm/credits-error';
 import { ImageGenerationError, httpStatusToErrorCode } from '../errors';
 import type {
   ImageAspectRatio,
@@ -35,12 +35,18 @@ function resolveImageUrl(url: string | null | undefined, baseUrl: string): strin
   }
 }
 
-function aspectRatioToSize(ar: ImageAspectRatio | undefined): string {
+/** gpt-image 系与 dall-e 系尺寸体系不同：前者 1536/1024，后者 1792/1024。 */
+function isGptImageModel(model: string): boolean {
+  return /^gpt-image/i.test(model);
+}
+
+function aspectRatioToSize(ar: ImageAspectRatio | undefined, model: string): string {
+  const gptImage = isGptImageModel(model);
   switch (ar) {
     case '16:9':
-      return '1792x1024';
+      return gptImage ? '1536x1024' : '1792x1024';
     case '9:16':
-      return '1024x1792';
+      return gptImage ? '1024x1536' : '1024x1792';
     case '1:1':
     default:
       return '1024x1024';
@@ -58,13 +64,17 @@ export const openaiImageProvider: ImageGenerationProvider = {
     const baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     const url = `${baseUrl}/v1/images/generations`;
 
+    const model = req.model?.trim() || 'gpt-image-1';
     const body: Record<string, unknown> = {
-      model: req.model?.trim() || 'gpt-image-1',
+      model,
       prompt: req.prompt,
       n: req.n ?? 1,
-      size: aspectRatioToSize(req.aspectRatio),
-      response_format: 'b64_json',
+      size: aspectRatioToSize(req.aspectRatio, model),
     };
+    // gpt-image 系不接受 response_format 参数（默认即返回 b64）；dall-e 系需显式指定
+    if (!isGptImageModel(model)) {
+      body['response_format'] = 'b64_json';
+    }
 
     // extraParams 透传：quality、style（仅当显式传入时）
     if (req.extraParams) {
@@ -115,7 +125,9 @@ export const openaiImageProvider: ImageGenerationProvider = {
       throw new ImageGenerationError(
         errorCode,
         'openai_image',
-        errorCode === 'quota' ? INSUFFICIENT_CREDITS_MESSAGE : `OpenAI API 错误 ${response.status}`,
+        errorCode === 'quota' && isLingjiGatewayKey(config.apiKey)
+          ? INSUFFICIENT_CREDITS_MESSAGE
+          : `OpenAI API 错误 ${response.status}`,
         undefined,
         raw,
       );
