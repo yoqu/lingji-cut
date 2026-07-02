@@ -150,6 +150,23 @@ async function fetchClientConfig(
   }
 }
 
+/** 用 lj_ key 拉取最新余额/tier；失败返回 undefined（不阻断）。 */
+async function fetchBootstrap(
+  base: string,
+  apiKey: string,
+): Promise<{ balance: number; tier: string } | undefined> {
+  try {
+    const res = await fetch(`${base}/api/client/bootstrap`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const env = (await res.json()) as Envelope<{ balance: number; tier: string }>;
+    if (env.code !== 0 || typeof env.data?.balance !== 'number') return undefined;
+    return { balance: env.data.balance, tier: env.data.tier };
+  } catch {
+    return undefined;
+  }
+}
+
 /** 读缓存账户；无/损坏返回 null。 */
 export async function loadAccount(): Promise<LingjiAccount | null> {
   try {
@@ -194,24 +211,32 @@ export async function lingjiLogin(): Promise<{ session: LingjiSession; base: str
 }
 
 /**
- * 用已缓存账户拉取最新下发配置并回灌本地（启动/刷新时调用）。
+ * 用已缓存账户拉取最新下发配置与余额/tier 并回灌本地（启动/展开账号面板/耗时任务结束时调用）。
  * 返回可直接用于重建四类 provider 的 session 与烘焙基址；未登录返回 null。
  */
 export async function lingjiRefreshConfig(): Promise<{ session: LingjiSession; base: string } | null> {
   const account = await loadAccount();
   if (!account) return null;
   const base = lingjiBaseUrl();
-  const fresh = await fetchClientConfig(base, account.apiKey);
-  const providers = fresh ?? account.providers;
-  if (fresh) await writeAccount({ ...account, providers: fresh });
+  const [freshProviders, freshAccount] = await Promise.all([
+    fetchClientConfig(base, account.apiKey),
+    fetchBootstrap(base, account.apiKey),
+  ]);
+  const merged: LingjiAccount = {
+    ...account,
+    providers: freshProviders ?? account.providers,
+    balance: freshAccount?.balance ?? account.balance,
+    tier: freshAccount?.tier ?? account.tier,
+  };
+  if (freshProviders || freshAccount) await writeAccount(merged);
   return {
     base,
     session: {
-      apiKey: account.apiKey,
-      profile: { email: account.email, displayName: account.displayName, avatarUrl: account.avatarUrl },
-      balance: account.balance,
-      tier: account.tier,
-      providers,
+      apiKey: merged.apiKey,
+      profile: { email: merged.email, displayName: merged.displayName, avatarUrl: merged.avatarUrl },
+      balance: merged.balance,
+      tier: merged.tier,
+      providers: merged.providers,
     },
   };
 }

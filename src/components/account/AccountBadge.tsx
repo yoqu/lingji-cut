@@ -34,6 +34,20 @@ export function AccountBadge() {
     })();
   }, []);
 
+  /** 展开面板时刷新余额/tier（消耗积分后保持面板数字为准）。 */
+  const toggleMenu = useCallback(() => {
+    setMenuOpen((v) => {
+      if (!v) {
+        void window.electronAPI
+          .lingjiRefreshConfig()
+          .then(() => window.electronAPI.lingjiGetAccount())
+          .then((fresh) => fresh && setAccount(fresh))
+          .catch(() => undefined);
+      }
+      return !v;
+    });
+  }, []);
+
   const login = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -71,7 +85,7 @@ export function AccountBadge() {
       <button
         type="button"
         className={styles.pill}
-        onClick={() => setMenuOpen((v) => !v)}
+        onClick={toggleMenu}
         title={account.email}
       >
         {account.avatarUrl ? (

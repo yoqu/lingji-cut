@@ -1,4 +1,5 @@
 import type { ImageProviderCapabilities } from '../../../types/ai';
+import { INSUFFICIENT_CREDITS_MESSAGE } from '../../llm/credits-error';
 import { ImageGenerationError, httpStatusToErrorCode } from '../errors';
 import type {
   ImageAspectRatio,
@@ -114,7 +115,7 @@ export const openaiImageProvider: ImageGenerationProvider = {
       throw new ImageGenerationError(
         errorCode,
         'openai_image',
-        `OpenAI API 错误 ${response.status}`,
+        errorCode === 'quota' ? INSUFFICIENT_CREDITS_MESSAGE : `OpenAI API 错误 ${response.status}`,
         undefined,
         raw,
       );

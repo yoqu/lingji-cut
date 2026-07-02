@@ -9,6 +9,7 @@ import {
   parseStructuredOutput,
 } from './content';
 import { createChatModel, createChatModelFromProvider } from './model';
+import { INSUFFICIENT_CREDITS_MESSAGE, isInsufficientCreditsError, normalizeCreditsError } from './credits-error';
 
 export interface StreamCallbacks {
   onReasoningChunk?: (chunk: string) => void;
@@ -268,6 +269,10 @@ async function streamWithRetry<T>(
       });
       return parsed;
     } catch (error) {
+      // 积分不足重试无意义，直接给用户可行动的错误。
+      if (isInsufficientCreditsError(error)) {
+        throw new Error(INSUFFICIENT_CREDITS_MESSAGE);
+      }
       lastError = error;
       const willRetry = attempt < STRUCTURED_MAX_RETRIES;
       llmLog(
@@ -344,11 +349,14 @@ export async function generateText(
   userMessage: string,
   binding?: ResolvedBinding,
 ): Promise<string> {
-  const response = await pickModel(settings, binding).invoke(
-    buildPromptMessages(systemPrompt, userMessage),
-  );
-
-  return assertNonEmptyContent(extractTextContent(response.content), 'LLM 返回空内容');
+  try {
+    const response = await pickModel(settings, binding).invoke(
+      buildPromptMessages(systemPrompt, userMessage),
+    );
+    return assertNonEmptyContent(extractTextContent(response.content), 'LLM 返回空内容');
+  } catch (error) {
+    throw normalizeCreditsError(error);
+  }
 }
 
 export async function streamText(
@@ -360,29 +368,33 @@ export async function streamText(
   binding?: ResolvedBinding,
   signal?: AbortSignal,
 ): Promise<string> {
-  // signal 透传给底层 SDK fetch：用户取消时直接中断网络请求，而非仅停本地播放。
-  const stream = await pickModel(settings, binding).stream(
-    buildPromptMessages(systemPrompt, userMessage),
-    signal ? { signal } : undefined,
-  );
-  let fullText = '';
+  try {
+    // signal 透传给底层 SDK fetch：用户取消时直接中断网络请求，而非仅停本地播放。
+    const stream = await pickModel(settings, binding).stream(
+      buildPromptMessages(systemPrompt, userMessage),
+      signal ? { signal } : undefined,
+    );
+    let fullText = '';
 
-  for await (const chunk of stream) {
-    const reasoningChunk = extractReasoningContent(chunk);
-    if (reasoningChunk) {
-      callbacks?.onReasoningChunk?.(reasoningChunk);
+    for await (const chunk of stream) {
+      const reasoningChunk = extractReasoningContent(chunk);
+      if (reasoningChunk) {
+        callbacks?.onReasoningChunk?.(reasoningChunk);
+      }
+
+      const textChunk = extractTextContent(chunk.content);
+      if (!textChunk) {
+        continue;
+      }
+
+      fullText += textChunk;
+      onChunk(textChunk);
     }
 
-    const textChunk = extractTextContent(chunk.content);
-    if (!textChunk) {
-      continue;
-    }
-
-    fullText += textChunk;
-    onChunk(textChunk);
+    return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
+  } catch (error) {
+    throw normalizeCreditsError(error);
   }
-
-  return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
 }
 
 export async function streamTextWithProvider(
@@ -393,23 +405,27 @@ export async function streamTextWithProvider(
   onChunk: (chunk: string) => void,
   options?: { enableThinking?: boolean } & StreamCallbacks,
 ): Promise<string> {
-  // 默认沿用 provider.enableThinking；调用方显式传入 options.enableThinking 时优先生效
-  const chatModel = createChatModelFromProvider(provider, model, {
-    enableThinking: options?.enableThinking,
-  });
-  const stream = await chatModel.stream(buildPromptMessages(systemPrompt, userMessage));
-  let fullText = '';
+  try {
+    // 默认沿用 provider.enableThinking；调用方显式传入 options.enableThinking 时优先生效
+    const chatModel = createChatModelFromProvider(provider, model, {
+      enableThinking: options?.enableThinking,
+    });
+    const stream = await chatModel.stream(buildPromptMessages(systemPrompt, userMessage));
+    let fullText = '';
 
-  for await (const chunk of stream) {
-    const reasoningChunk = extractReasoningContent(chunk);
-    if (reasoningChunk) {
-      options?.onReasoningChunk?.(reasoningChunk);
+    for await (const chunk of stream) {
+      const reasoningChunk = extractReasoningContent(chunk);
+      if (reasoningChunk) {
+        options?.onReasoningChunk?.(reasoningChunk);
+      }
+      const textChunk = extractTextContent(chunk.content);
+      if (!textChunk) continue;
+      fullText += textChunk;
+      onChunk(textChunk);
     }
-    const textChunk = extractTextContent(chunk.content);
-    if (!textChunk) continue;
-    fullText += textChunk;
-    onChunk(textChunk);
-  }
 
-  return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
+    return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
+  } catch (error) {
+    throw normalizeCreditsError(error);
+  }
 }

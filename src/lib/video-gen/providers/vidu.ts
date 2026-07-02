@@ -1,3 +1,4 @@
+import { INSUFFICIENT_CREDITS_MESSAGE } from '../../llm/credits-error';
 import { VideoGenerationError, httpStatusToErrorCode } from '../errors';
 import { pollVideoUntilDone } from '../async-poller';
 import type {
@@ -30,10 +31,11 @@ async function submitJob(
     }),
   });
   if (!res.ok) {
+    const code = httpStatusToErrorCode(res.status);
     throw new VideoGenerationError(
-      httpStatusToErrorCode(res.status),
+      code,
       'vidu',
-      `Vidu submit 失败 HTTP ${res.status}`,
+      code === 'quota' ? INSUFFICIENT_CREDITS_MESSAGE : `Vidu submit 失败 HTTP ${res.status}`,
       undefined,
       await safeText(res),
     );
