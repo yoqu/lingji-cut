@@ -278,12 +278,17 @@ interface AgentFeedStore {
   selectedKey: string | null;
   /** 是否有进行中的会话（状态栏观测图标显隐）。 */
   hasActive: boolean;
+  /** 编辑器右侧观测视图是否在场（在场时 openPanel 路由到 Inspector 而非浮层）。 */
+  dockMounted: boolean;
+  /** 单调计数：每次 +1 表示"请编辑器把 Inspector 切到观测视图"。 */
+  focusToken: number;
 
   applyEvent: (ev: AgentFeedEvent) => void;
-  /** 打开面板；给 feedId 时选中该任务最近更新的会话。 */
+  /** 打开观测：编辑器在场切右侧 Inspector，否则弹状态栏浮层；给 feedId 时选中该任务最近更新的会话。 */
   openPanel: (feedId?: string) => void;
   closePanel: () => void;
   selectSession: (key: string) => void;
+  setDockMounted: (mounted: boolean) => void;
   clearAll: () => void;
 }
 
@@ -299,6 +304,8 @@ export const useAgentFeedStore = create<AgentFeedStore>((set, get) => ({
   panelOpen: false,
   selectedKey: null,
   hasActive: false,
+  dockMounted: false,
+  focusToken: 0,
 
   applyEvent: (ev) => {
     const key = sessionKeyOf(ev);
@@ -328,7 +335,7 @@ export const useAgentFeedStore = create<AgentFeedStore>((set, get) => ({
   },
 
   openPanel: (feedId) => {
-    const { sessions, selectedKey } = get();
+    const { sessions, selectedKey, dockMounted, focusToken } = get();
     let nextSelected = selectedKey;
     if (feedId) {
       const list = sessionsForFeed(sessions, feedId);
@@ -343,10 +350,17 @@ export const useAgentFeedStore = create<AgentFeedStore>((set, get) => ({
       }
       nextSelected = latest?.key ?? null;
     }
-    set({ panelOpen: true, selectedKey: nextSelected });
+    if (dockMounted) {
+      set({ selectedKey: nextSelected, focusToken: focusToken + 1 });
+    } else {
+      set({ panelOpen: true, selectedKey: nextSelected });
+    }
   },
 
   closePanel: () => set({ panelOpen: false }),
+
+  setDockMounted: (mounted) =>
+    set(mounted ? { dockMounted: true, panelOpen: false } : { dockMounted: false }),
 
   selectSession: (key) => set({ selectedKey: key }),
 

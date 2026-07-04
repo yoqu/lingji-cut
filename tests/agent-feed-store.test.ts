@@ -5,6 +5,7 @@ import {
   sessionKeyOf,
   sessionsForFeed,
   hasFeedSessions,
+  useAgentFeedStore,
   type AgentFeedEvent,
   type AgentFeedSession,
 } from '../src/store/agent-feed';
@@ -200,5 +201,39 @@ describe('阶段状态机与模型标注', () => {
     const sculptorTurn = s.turns.find((t) => t.agentId === 'sculptor')!;
     expect(s.turnStages[String(directorTurn.id)]).toBe('director');
     expect(s.turnStages[String(sculptorTurn.id)]).toBe('sculpt');
+  });
+});
+
+describe('dock 路由', () => {
+  it('dockMounted=false 时 openPanel 打开浮层；true 时改发 focusToken 不开浮层', () => {
+    const store = useAgentFeedStore;
+    store.getState().clearAll();
+    store.getState().setDockMounted(false);
+    store.getState().applyEvent(ev({ role: 'director', kind: 'text', text: 'x' }));
+
+    store.getState().openPanel('task-1');
+    expect(store.getState().panelOpen).toBe(true);
+    expect(store.getState().selectedKey).toBe('task-1::seg-1');
+
+    store.getState().closePanel();
+    const tokenBefore = store.getState().focusToken;
+    store.getState().setDockMounted(true);
+    store.getState().openPanel('task-1');
+    expect(store.getState().panelOpen).toBe(false);
+    expect(store.getState().focusToken).toBe(tokenBefore + 1);
+
+    store.getState().setDockMounted(false);
+    store.getState().clearAll();
+  });
+
+  it('setDockMounted(true) 收起已打开的浮层', () => {
+    const store = useAgentFeedStore;
+    store.getState().applyEvent(ev({ role: 'director', kind: 'text', text: 'x' }));
+    store.getState().openPanel();
+    expect(store.getState().panelOpen).toBe(true);
+    store.getState().setDockMounted(true);
+    expect(store.getState().panelOpen).toBe(false);
+    store.getState().setDockMounted(false);
+    store.getState().clearAll();
   });
 });
