@@ -1,0 +1,531 @@
+/**
+ * motion-agent-run.ts
+ *
+ * Motion Card 多 agent 编排器：导演（card-director）→ 雕刻（card-sculptor）→
+ * 机械质检（lint + 渲染校验，进程内）→ 审查（card-reviewer）的确定性循环。
+ *
+ * 这是 Motion TSX 生成的**唯一路径**（无直连 LLM 回退）：ai-analysis 的
+ * generateCardForSegment 把提示词素材以闭包交给这里注入的 provider，本文件
+ * 用进程内 pi 无头会话（PiHeadlessSession）逐角色执行：
+ *   1. 导演：cards.animation 任务书 → JSON 分镜（storyboard）；机器校验
+ *      （cue 合法性 / 单调性 / 数字防编造），不合法回喂重出，≤ MAX_STORYBOARD_ITER。
+ *   2. 雕刻：cards.segment 任务书（分镜 + motion-kit API + 风格 tokens）+ 逐字稿
+ *      → file-first 写 workDir/motionCard.tsx。
+ *   3. 机械质检：tsx-lint（禁 API / 非法 import / 循环风险）→ 注入的 validate
+ *      （assertCardRenders：编译 + 冒烟渲染 + 布局探针含字幕安全区）；失败回喂雕刻，≤ MAX_FIX_ITER。
+ *   4. 审查：5 个设计问题（分镜兑现 / 状态演进 / 焦点层级 / 运动多样 / 风格保真）
+ *      → 严格 JSON 裁决；不通过则 issues 回喂雕刻，≤ MAX_REVIEW_ITER。
+ *
+ * 循环上限、阶段进度（onPhase）与 abort 全部由本编排器确定性控制，不依赖模型自觉。
+ */
+
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import type {
+  MotionCardAgentContext,
+  MotionCardAgentProvider,
+  MotionCardAgentResult,
+} from '../../src/lib/ai-analysis';
+import type { AISettings, PromptBindingMap } from '../../src/types/ai';
+import type { PromptKind } from '../../src/lib/prompts/types';
+import { resolvePromptBinding } from '../../src/lib/llm/binding-resolver';
+import { piModelRef } from '../agent-runtime/pi-provider-projection';
+import {
+  parseStoryboard,
+  storyboardParseHint,
+  validateStoryboard,
+  formatStoryboardIssues,
+} from '../../src/lib/motion-storyboard';
+import { lintMotionCardTsx, formatLintIssues } from '../../src/lib/motion-card-lint';
+import { buildFallbackCardTsx } from '../../src/lib/motion-card-fallback';
+import {
+  PiHeadlessSession,
+  ensurePiHeadlessConfig,
+  type PiHeadlessCreateInput,
+  type PiHeadlessStreamEvent,
+} from '../agent-runtime/pi-headless';
+import type { AgentFeedEmitInput, AgentFeedRole, AgentFeedStage } from './agent-feed';
+import { ensurePiAgentRoles, loadPiAgentRole, type PiAgentRole } from '../agent-runtime/pi-agents-seed';
+
+export const MAX_STORYBOARD_ITER = 2;
+/** 解析失败（回复不是合法 JSON）单独计预算，不烧语义回喂轮——弱导演常先输出散文/截断。 */
+export const MAX_STORYBOARD_PARSE_RETRY = 2;
+export const MAX_FIX_ITER = 3;
+export const MAX_REVIEW_ITER = 2;
+
+export interface ReviewVerdict {
+  pass: boolean;
+  issues: Array<{ severity?: string; element?: string; rule?: string; fix?: string }>;
+}
+
+/** 容错解析审查 JSON：抽第一个 {...}；解析失败按通过处理（审查员不阻断出卡）。 */
+export function parseReviewVerdict(text: string): ReviewVerdict {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return { pass: true, issues: [] };
+  try {
+    const parsed = JSON.parse(m[0]) as Partial<ReviewVerdict>;
+    return {
+      pass: parsed.pass !== false,
+      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+    };
+  } catch {
+    return { pass: true, issues: [] };
+  }
+}
+
+/** 工具入参序列化（观测展示用，容错非 JSON / 循环引用）。 */
+function safeStringify(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatIssues(issues: ReviewVerdict['issues']): string {
+  return issues
+    .map(
+      (it, i) =>
+        `${i + 1}. [${it.severity ?? 'warn'}] ${it.element ?? ''} 违反「${it.rule ?? ''}」：${it.fix ?? ''}`,
+    )
+    .join('\n');
+}
+
+export interface MotionAgentProviderOptions {
+  userDataPath: string;
+  projectPath: string;
+  /** 角色种子目录（resources/pi-agents/agents）；由调用方按 app.getAppPath() 解析。 */
+  rolesSeedDir: string;
+  signal?: AbortSignal;
+  /**
+   * 会话级模型覆盖（`${providerId}/${modelId}`）：导演跟随 cards.animation 绑定、
+   * 雕刻/审查跟随 cards.segment 绑定；缺省则跟随 pi settings 默认。
+   * 由 resolveMotionCardModels 从提示词绑定解析。
+   */
+  directorModel?: string;
+  sculptorModel?: string;
+  /** 阶段回调（导演/雕刻/验证/审查/修复），供任务进度映射。 */
+  onPhase?: (phase: string) => void;
+  /** 观测事件回调（角色流式输出/工具调用/编排里程碑），供渲染端观测面板。 */
+  onAgentEvent?: (ev: AgentFeedEmitInput) => void;
+  /** 测试注入。 */
+  deps?: {
+    createSession?: (input: PiHeadlessCreateInput) => Promise<Pick<PiHeadlessSession, 'prompt' | 'dispose' | 'abort'>>;
+    loadRole?: (name: Parameters<typeof loadPiAgentRole>[0]) => Promise<PiAgentRole>;
+    ensureConfig?: () => Promise<unknown>;
+    ensureRoles?: () => Promise<void>;
+  };
+}
+
+/**
+ * 创建 Motion Card 多 agent provider（注入 generateCardForSegment.options.generateMotionCard）。
+ * 每次调用（即每张 motion 卡）在独立临时 workDir 内完成，互不干扰，可并发。
+ */
+export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions): MotionCardAgentProvider {
+  const {
+    userDataPath,
+    rolesSeedDir,
+    signal,
+    directorModel,
+    sculptorModel,
+    onPhase,
+    onAgentEvent,
+    deps = {},
+  } = opts;
+  const createSession = deps.createSession ?? PiHeadlessSession.create.bind(PiHeadlessSession);
+  const loadRole =
+    deps.loadRole ?? ((name: Parameters<typeof loadPiAgentRole>[0]) => loadPiAgentRole(name, { seedRoot: rolesSeedDir }));
+  const ensureConfig = deps.ensureConfig ?? (() => ensurePiHeadlessConfig(userDataPath));
+  const ensureRoles = deps.ensureRoles ?? (() => ensurePiAgentRoles(rolesSeedDir));
+
+  return async (ctx: MotionCardAgentContext): Promise<MotionCardAgentResult> => {
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw new Error('Motion 卡多 agent 生成已取消');
+    };
+    throwIfAborted();
+    await ensureConfig();
+    await ensureRoles();
+
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lingji-motion-'));
+    const tsxPath = path.join(workDir, 'motionCard.tsx');
+    if (ctx.existingTsx) {
+      await fs.writeFile(tsxPath, ctx.existingTsx, 'utf-8');
+    }
+
+    const label = ctx.label ?? ctx.segmentId;
+
+    // ── 观测事件：按卡片键（segmentId）标注，供渲染端观测面板还原对话流。
+    const feedEmit = onAgentEvent
+      ? (ev: Omit<AgentFeedEmitInput, 'cardKey' | 'cardLabel'>) =>
+          onAgentEvent({ ...ev, cardKey: ctx.segmentId, cardLabel: label })
+      : undefined;
+    const milestone = (text: string) => feedEmit?.({ role: 'orchestrator', kind: 'milestone', text });
+    const roleStream = (role: AgentFeedRole, model?: string): Pick<PiHeadlessCreateInput, 'onEvent'> =>
+      feedEmit
+        ? {
+            onEvent: (ev: PiHeadlessStreamEvent) => {
+              if (ev.type === 'text_delta') feedEmit({ role, kind: 'text', text: ev.delta, model });
+              else if (ev.type === 'thinking_delta') feedEmit({ role, kind: 'thinking', text: ev.delta, model });
+              else if (ev.type === 'tool_use') {
+                feedEmit({
+                  role,
+                  kind: 'tool_use',
+                  toolCallId: ev.id,
+                  toolName: ev.name,
+                  toolInput: safeStringify(ev.input),
+                  model,
+                });
+              } else {
+                feedEmit({
+                  role,
+                  kind: 'tool_result',
+                  toolCallId: ev.toolUseId,
+                  toolName: ev.name,
+                  toolOutput: ev.content,
+                  isError: ev.isError,
+                  model,
+                });
+              }
+            },
+          }
+        : {};
+
+    let phaseStartedAt = Date.now();
+    const setPhase = (phase: string, stage?: AgentFeedStage, round?: number) => {
+      phaseStartedAt = Date.now();
+      onPhase?.(phase);
+      feedEmit?.({ role: 'orchestrator', kind: 'phase', text: phase, stage, round });
+    };
+    const emit = (phase: string, ok = true, extra: Record<string, unknown> = {}) => {
+      ctx.telemetry?.emit('llm.end', {
+        label: `${label}:${phase}`,
+        attempt: 0,
+        durationMs: Date.now() - phaseStartedAt,
+        ok,
+        ...extra,
+      });
+    };
+    // 传输层容错：provider 截断 / 网络抖动（如 "Unexpected end of JSON input"）重试一次，
+    // 不让单次瞬时故障直接判死整张卡。
+    const promptWithRetry = async (
+      session: Pick<PiHeadlessSession, 'prompt'>,
+      text: string,
+    ): Promise<string> => {
+      try {
+        return await session.prompt(text);
+      } catch (err) {
+        throwIfAborted();
+        emit('prompt-retry', false, { error: err instanceof Error ? err.message : String(err) });
+        return await session.prompt(text);
+      }
+    };
+
+    let sculptor: Awaited<ReturnType<typeof createSession>> | null = null;
+    try {
+      // ── 1. 导演：JSON 分镜 + 机器校验回喂 ─────────────────────────────────────
+      setPhase('导演', 'director');
+      const directorRole = await loadRole('card-director');
+      const director = await createSession({
+        systemPrompt: directorRole.systemPrompt,
+        tools: [],
+        cwd: workDir,
+        signal,
+        model: directorModel,
+        ...roleStream('director', directorModel),
+      });
+      let direction = '';
+      try {
+        const parts = [ctx.buildDirectorPrompt()];
+        if (ctx.animationDirectionDraft) {
+          parts.push(`===== 用户已有的动画指导草案（保留其载体与节拍意图，补全为合法 storyboard）=====\n${ctx.animationDirectionDraft}`);
+        }
+        if (ctx.existingTsx) {
+          parts.push(
+            `===== 现有组件源码（精雕模式：先诊断其设计问题——载体选错 / 状态演进缺失 / 焦点不明 / 节拍脱节，分镜须针对性修正）=====\n\`\`\`tsx\n${ctx.existingTsx}\n\`\`\``,
+          );
+        }
+        const FIELD_EXAMPLE = `{"claim":"...","carrier":"data-hero","scene":"...","focus":{"beat":1,"emphasis":"countup-settle"},"beats":[{"cue":null,"kind":"build","adds":"标题「考研报名」","motion":"软落入场"},{"cue":2,"kind":"build","adds":"数字 28842","changes":"标题保持","motion":"计数到 28842"}]}`;
+        let reply = (await promptWithRetry(director, parts.join('\n\n'))).trim();
+        // 解析失败与语义失败分开计预算：解析重试只需"重新输出 JSON"，
+        // 不该消耗针对 cue/数字等设计错误的语义回喂轮（弱导演常先散文/截断再给对 JSON）。
+        let parseRounds = 0;
+        let semanticRounds = 0;
+        for (;;) {
+          throwIfAborted();
+          const storyboard = parseStoryboard(reply);
+          const verdictSb = validateStoryboard(storyboard, {
+            cueCount: ctx.cueCount ?? 0,
+            transcript: ctx.segmentTranscript,
+          });
+          if (verdictSb.ok && storyboard) {
+            direction = JSON.stringify(storyboard, null, 2);
+            break;
+          }
+          const parseFailed = !storyboard;
+          const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+          emit('storyboard', false, {
+            errors: verdictSb.errors.length,
+            detail: verdictSb.errors.slice(0, 3).join('；'),
+            ...(parseFailed
+              ? { rawHead: oneLine(reply.slice(0, 160)), rawTail: oneLine(reply.slice(-120)) }
+              : {}),
+          });
+          if (parseFailed) {
+            milestone(`分镜回复无法解析（第 ${parseRounds + 1} 次）：${storyboardParseHint(reply)}`);
+            if (parseRounds >= MAX_STORYBOARD_PARSE_RETRY) {
+              throw new Error(
+                `导演回复 ${parseRounds + 1} 次均无法解析出 JSON 分镜（${storyboardParseHint(reply)}）；建议更换 cards.animation 绑定的导演模型或关闭其思考输出。`,
+              );
+            }
+            parseRounds += 1;
+            setPhase(`分镜重出（解析失败 ${parseRounds}/${MAX_STORYBOARD_PARSE_RETRY}）`, 'director', parseRounds);
+            reply = (
+              await promptWithRetry(
+                director,
+                [
+                  `===== 上一条回复无法解析出 JSON 分镜 =====`,
+                  storyboardParseHint(reply),
+                  `重新输出：只输出一个 JSON 对象，不要任何解释 / 思考过程 / markdown 围栏，字段名与示例一致：`,
+                  FIELD_EXAMPLE,
+                ].join('\n'),
+              )
+            ).trim();
+            continue;
+          }
+          milestone(
+            `分镜未通过机器校验（第 ${semanticRounds + 1} 轮）：${verdictSb.errors.slice(0, 3).join('；')}`,
+          );
+          if (semanticRounds >= MAX_STORYBOARD_ITER) {
+            throw new Error(
+              `导演分镜 ${MAX_STORYBOARD_ITER} 轮后仍未通过机器校验：${verdictSb.errors.join('；')}`,
+            );
+          }
+          semanticRounds += 1;
+          setPhase(`分镜重出 ${semanticRounds}/${MAX_STORYBOARD_ITER}`, 'director', semanticRounds);
+          reply = (
+            await promptWithRetry(
+              director,
+              [
+                `===== 分镜未通过机器校验，请逐条修正后重新输出完整 JSON（只输出 JSON，字段名必须与示例一致）=====`,
+                formatStoryboardIssues(verdictSb),
+                `字段名对照示例（beats 每拍必须有字符串字段 adds；示例仅示范结构，内容用你自己的设计）：`,
+                FIELD_EXAMPLE,
+              ].join('\n'),
+            )
+          ).trim();
+        }
+      } finally {
+        director.dispose();
+      }
+      emit('director');
+      throwIfAborted();
+
+      // ── 2. 雕刻 ────────────────────────────────────────────────────────────────
+      setPhase('雕刻', 'sculpt');
+      const sculptorRole = await loadRole('card-sculptor');
+      sculptor = await createSession({
+        systemPrompt: sculptorRole.systemPrompt,
+        tools: ['read', 'write', 'edit'],
+        cwd: workDir,
+        writeWithinDir: workDir,
+        signal,
+        model: sculptorModel,
+        ...roleStream('sculptor', sculptorModel),
+      });
+      const sculptParts = [
+        ctx.buildCardPrompt(direction),
+        `===== 本段口播逐字稿（内容忠实的唯一来源）=====\n${ctx.segmentTranscript}`,
+        ctx.existingTsx
+          ? `===== 执行 =====\n工作目录已有 motionCard.tsx（现有实现）。按任务书与分镜用 edit 工具针对性改造它；改造完成即停止。`
+          : `===== 执行 =====\n用 write 工具把完整组件写入 ./motionCard.tsx；写完即停止。`,
+      ];
+      await promptWithRetry(sculptor, sculptParts.join('\n\n'));
+
+      // ── 3/4. 验证 + 审查循环 ──────────────────────────────────────────────────
+      const readTsx = async (): Promise<string> => {
+        try {
+          return (await fs.readFile(tsxPath, 'utf-8')).trim();
+        } catch {
+          return '';
+        }
+      };
+
+      let tsx = '';
+      let fixIter = 0;
+      let reviewIter = 0;
+      let rescueTried = false;
+      let fallbackUsed = false;
+
+      // 终极兜底：LLM 雕刻彻底失败时，由分镜确定性编译一张纯原语简版卡（不经 LLM）。
+      const tryDeterministicFallback = async (lastProblem: string): Promise<boolean> => {
+        try {
+          const storyboard = parseStoryboard(direction);
+          if (!storyboard) return false;
+          const fallbackTsx = buildFallbackCardTsx(storyboard, ctx.presetMotionTokens ?? '{}');
+          const lint = lintMotionCardTsx(fallbackTsx);
+          if (!lint.ok) {
+            emit('fallback', false, { error: formatLintIssues(lint.issues).slice(0, 200) });
+            return false;
+          }
+          await ctx.validate?.(fallbackTsx);
+          await fs.writeFile(tsxPath, fallbackTsx, 'utf-8');
+          tsx = fallbackTsx;
+          fallbackUsed = true;
+          emit('fallback', true, { reason: lastProblem.slice(0, 160) });
+          milestone('LLM 雕刻未能通过校验，已由分镜确定性编译兜底卡');
+          return true;
+        } catch (err) {
+          emit('fallback', false, { error: err instanceof Error ? err.message.slice(0, 200) : String(err) });
+          return false;
+        }
+      };
+
+      // 单轮"取件+机械质检"：lint error / 结构缺失 / validate 抛错时回喂雕刻修复；耗尽即失败。
+      const validateWithFixes = async (): Promise<void> => {
+        for (;;) {
+          throwIfAborted();
+          tsx = await readTsx();
+          let problem: string | null = null;
+          if (!tsx || !tsx.includes('export default')) {
+            problem = 'motionCard.tsx 缺失或没有 export default 的组件；请用 write 工具写入完整组件。';
+          } else {
+            setPhase('验证', 'mechqa');
+            const lint = lintMotionCardTsx(tsx);
+            if (!lint.ok) {
+              problem = `静态 lint 未通过：\n${formatLintIssues(lint.issues.filter((i) => i.severity === 'error'))}`;
+            } else {
+              try {
+                await ctx.validate?.(tsx);
+              } catch (err) {
+                problem = `渲染校验失败：${err instanceof Error ? err.message : String(err)}`;
+              }
+            }
+          }
+          if (!problem) return;
+          emit('validate', false, { error: problem });
+          milestone(`机械质检未通过：${problem}`);
+          if (fixIter >= MAX_FIX_ITER) {
+            // 降级救援（一次性）：多轮逐点修复仍卡在布局，说明自由布局能力不足——
+            // 推倒重写为纯原语组合（原语内置安全区/配重/排布，结构上不会横竖溢出）。
+            if (!rescueTried) {
+              rescueTried = true;
+              setPhase('简化重写', 'sculpt');
+              await promptWithRetry(
+                sculptor!,
+                [
+                  `===== 多轮修复仍未通过校验，执行降级重写 =====`,
+                  `剩余问题：\n${problem}`,
+                  `放弃现有自定义布局，用 write 整体重写 motionCard.tsx，规则收紧为：`,
+                  `- 只用 <CardStage tokens={TOKENS}> 作根 + useBeats 定节拍 + 内容原语（Kicker/StatHero/BarChart/TrendLine/CompareRow/ListBuild/ProcessFlow/QuoteBlock）自上而下纵向排布（外层再包一个 display:'flex', flexDirection:'column', gap 适度的 div 即可）。`,
+                  `- 不写任何 position:'absolute'；不写固定像素宽高（原语自适应）；每行上屏文字 ≤ 14 字。`,
+                  `- 分镜的每一拍映射到一个原语；内容装不下就删次要拍，保住 focus 焦点拍。`,
+                ].join('\n'),
+              );
+              continue;
+            }
+            setPhase('兜底出卡', 'sculpt');
+            if (await tryDeterministicFallback(problem)) return;
+            throw new Error(`Motion 卡多 agent 生成失败（修复 ${MAX_FIX_ITER} 轮 + 降级重写后仍未通过渲染校验）：${problem}`);
+          }
+          fixIter += 1;
+          setPhase(`修复 ${fixIter}/${MAX_FIX_ITER}`, 'mechqa', fixIter);
+          await promptWithRetry(
+            sculptor!,
+            `===== 验证未通过，请修复 =====\n${problem}\n\n逐条定位到 motionCard.tsx 的对应位置用 edit 修复；不要整文件盲目重写，修完自查相邻问题。布局类问题（越界 / 裁切 / 侵入字幕区）优先靠**删减文字、缩短文案、缩小次要元素**解决——内容装不下就删，绝不往字幕安全区（底部 20%）挤；横向排布用 flex + 百分比宽（如两栏各 45%），严禁固定像素宽度相加超过画布。`,
+          );
+        }
+      };
+
+      await validateWithFixes();
+
+      const reviewerRole = await loadRole('card-reviewer');
+      for (;;) {
+        // 兜底卡是确定性模板产物，设计审查没有可改空间，直接收尾。
+        if (fallbackUsed) break;
+        throwIfAborted();
+        setPhase('审查', 'review');
+        const reviewer = await createSession({
+          systemPrompt: reviewerRole.systemPrompt,
+          tools: [],
+          cwd: workDir,
+          signal,
+          model: sculptorModel,
+          ...roleStream('reviewer', sculptorModel),
+        });
+        let verdict: ReviewVerdict;
+        try {
+          verdict = parseReviewVerdict(
+            await promptWithRetry(reviewer, 
+              [
+                `===== 导演的 JSON 分镜（storyboard，设计蓝图）=====\n${direction}`,
+                `===== 机械校验结论 =====\n已通过（静态 lint + 编译 + 冒烟渲染 + 布局探针含字幕安全区）；机械规则不必复查，只判设计兑现度。`,
+                `===== motionCard.tsx =====\n\`\`\`tsx\n${tsx}\n\`\`\``,
+              ].join('\n\n'),
+            ),
+          );
+        } finally {
+          reviewer.dispose();
+        }
+        if (verdict.pass || reviewIter >= MAX_REVIEW_ITER) {
+          if (!verdict.pass) {
+            emit('review', false, { unresolved: verdict.issues.length });
+            milestone(`审查意见未完全解决（${verdict.issues.length} 项），按回炉上限收卡`);
+          } else {
+            emit('review');
+            milestone('审查通过');
+          }
+          break;
+        }
+        milestone(`审查未通过（${verdict.issues.length} 项）：\n${formatIssues(verdict.issues)}`);
+        reviewIter += 1;
+        setPhase(`回炉 ${reviewIter}/${MAX_REVIEW_ITER}`, 'sculpt', reviewIter);
+        await promptWithRetry(
+          sculptor,
+          `===== 审查未通过（第 ${reviewIter} 轮），请按意见修复 =====\n${formatIssues(verdict.issues)}\n\n逐条修复后自查相邻铁律；只改相关代码。`,
+        );
+        await validateWithFixes();
+      }
+
+      feedEmit?.({
+        role: 'orchestrator',
+        kind: 'done',
+        text: fallbackUsed ? '完成（兜底出卡）' : '生成完成',
+      });
+      return { tsx, animationDirection: direction };
+    } catch (err) {
+      feedEmit?.({
+        role: 'orchestrator',
+        kind: 'error',
+        text: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      sculptor?.dispose();
+      await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  };
+}
+
+/**
+ * 从提示词绑定解析 Motion 卡各角色的会话模型：导演跟随 cards.animation 绑定、
+ * 雕刻/审查跟随 cards.segment 绑定，转成 pi `--model` 引用。
+ * 解析失败（未绑定 / 模型不在 provider / provider 无法投影）时返回 undefined，
+ * 回退到 pi settings 默认——保持既有行为，不因绑定异常中断出卡。
+ */
+export function resolveMotionCardModels(
+  settings: AISettings,
+  projectBindings: PromptBindingMap | null,
+): { directorModel?: string; sculptorModel?: string } {
+  const pick = (kind: PromptKind): string | undefined => {
+    try {
+      const { provider, model } = resolvePromptBinding(kind, settings, projectBindings);
+      return piModelRef(provider, model) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return { directorModel: pick('cards.animation'), sculptorModel: pick('cards.segment') };
+}
