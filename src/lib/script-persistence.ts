@@ -16,37 +16,6 @@ export interface PersistedScriptState {
   fileTreeView?: 'all' | 'resources';
 }
 
-// --- v1 → v2 迁移 ---
-
-function deriveReviewStateFromV1(
-  currentStep: number,
-  annotations: Annotation[],
-): ReviewState {
-  const pending = annotations.some((a) => a.status === 'pending');
-  const resolved = annotations.length > 0 && annotations.every((a) => a.status !== 'pending');
-
-  if (currentStep === 4 && resolved) return 'clean';
-  if ((currentStep === 3 || currentStep === 4) && pending) return 'issues';
-  return 'idle';
-}
-
-export function migratePersistedState(raw: Record<string, unknown>): PersistedScriptState {
-  if (raw.version === 2) return raw as unknown as PersistedScriptState;
-
-  const annotations = Array.isArray(raw.annotations) ? (raw.annotations as Annotation[]) : [];
-  const reviewState = deriveReviewStateFromV1((raw.currentStep as number) ?? 0, annotations);
-
-  return {
-    version: 2,
-    templateId: (raw.templateId as string) ?? 'news-broadcast',
-    annotations,
-    reviewState,
-    lastReviewedDocVersion: reviewState === 'idle' ? 0 : 1,
-    createdAt: (raw.createdAt as string) ?? new Date().toISOString(),
-    updatedAt: (raw.updatedAt as string) ?? new Date().toISOString(),
-  };
-}
-
 export function createPersistedScriptState(
   reviewState: ReviewState,
   scriptDocVersion: number,
@@ -69,19 +38,6 @@ export function createPersistedScriptState(
     updatedAt: new Date().toISOString(),
     fileTreeView: options?.fileTreeView ?? 'resources',
   };
-}
-
-export function parsePersistedScriptState(raw: unknown): PersistedScriptState | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const obj = raw as Record<string, unknown>;
-
-  // v2 格式直接返回
-  if (obj.version === 2) return obj as unknown as PersistedScriptState;
-
-  // v1 格式迁移到 v2
-  if (obj.version === 1) return migratePersistedState(obj);
-
-  return null;
 }
 
 // --- projectDir 持久化 (localStorage) ---
@@ -156,21 +112,6 @@ export async function saveAllDirtyFiles(
   }
 }
 
-// --- script-state.json 防抖保存 ---
-
-let stateTimer: ReturnType<typeof setTimeout> | null = null;
-
-export function debouncedSaveState(
-  projectDir: string,
-  state: PersistedScriptState,
-  delayMs = 300,
-): void {
-  if (stateTimer) clearTimeout(stateTimer);
-  stateTimer = setTimeout(() => {
-    void saveScriptState(projectDir, state);
-  }, delayMs);
-}
-
 // --- project.json script 段防抖保存 ---
 
 let scriptSectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -192,25 +133,9 @@ export function debouncedSaveScriptSection(
   }, delayMs);
 }
 
-export async function saveScriptState(
-  projectDir: string,
-  state: PersistedScriptState,
-): Promise<void> {
-  await window.electronAPI.saveScriptState(projectDir, JSON.stringify(state, null, 2));
-}
-
 export async function loadScriptState(
   projectDir: string,
 ): Promise<PersistedScriptState | null> {
-  const raw = await window.electronAPI.loadScriptState(projectDir);
-  if (raw) {
-    try {
-      return parsePersistedScriptState(JSON.parse(raw));
-    } catch {
-      return null;
-    }
-  }
-
   try {
     const projectRaw = await window.electronAPI.loadProject(projectDir);
     if (!projectRaw) return null;

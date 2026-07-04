@@ -6,7 +6,7 @@ import { hasRenderableJsx } from './compile-card';
  * AI 卡片在 Remotion 里的渲染分支决策（纯函数，便于测试）：
  * - media：image / video 媒体卡，直接渲染 assetPath 指向的图片 / 视频
  * - card-host：motion-card 且有可执行的编译产物，交给 CardHost 求值
- * - placeholder：媒体未生成、motion-card 缺编译产物、或旧版/未知卡 → 降级占位
+ * - placeholder：媒体未生成、motion-card 缺编译产物、或未知渲染模式 → 降级占位
  */
 export type AICardRenderPlan =
   | { kind: 'media'; mediaType: AICardMediaType; assetPath: string }
@@ -40,6 +40,6 @@ export function resolveAICardRenderPlan(
     return { kind: 'card-host' };
   }
 
-  // 旧 HTML 卡片 / 其它非媒体非 motion 的遗留卡 → 占位提示重新生成。
+  // 非媒体且非 motion-card 的未知渲染模式 → 占位提示重新生成。
   return { kind: 'placeholder' };
 }

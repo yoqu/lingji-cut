@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTaskProgressStore } from '../store/task-progress';
 import type { TaskCategory, TaskProgressItem } from '../store/task-progress';
+import { useAgentFeedStore, hasFeedSessions } from '../store/agent-feed';
 import { Progress } from '../ui';
 import styles from './TaskProgressPanel.module.css';
 
@@ -72,6 +73,22 @@ const CATEGORY_COLORS: Record<TaskCategory, string> = {
   'publish': '#64d2ff',
 };
 
+/** 任务对应的观测入口：存在 agent 观测会话（feedId=任务 id）时显示「查看过程」。 */
+function ObserveButton({ taskId }: { taskId: string }) {
+  const hasFeed = useAgentFeedStore((s) => hasFeedSessions(s.sessions, taskId));
+  const openPanel = useAgentFeedStore((s) => s.openPanel);
+  if (!hasFeed) return null;
+  return (
+    <button
+      className={styles.actionBtn}
+      onClick={() => openPanel(taskId)}
+      title="查看 agent 生成过程"
+    >
+      查看过程
+    </button>
+  );
+}
+
 function TaskRow({ task }: { task: TaskProgressItem }) {
   const removeTask = useTaskProgressStore((s) => s.removeTask);
   const icon = CATEGORY_ICONS[task.category] ?? '📁';
@@ -117,6 +134,7 @@ function TaskRow({ task }: { task: TaskProgressItem }) {
       )}
       {task.status !== 'active' && <span className={styles.taskPct} />}
 
+      <ObserveButton taskId={task.id} />
       {task.status === 'active' && task.canCancel && task.onCancel && (
         <button className={styles.cancelBtn} onClick={task.onCancel} title="取消">⏹</button>
       )}

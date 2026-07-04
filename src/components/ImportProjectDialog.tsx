@@ -40,11 +40,6 @@ const SCENARIO_COPY: Record<ImportProjectScenario, ScenarioCopy> = {
     description: '检测到 project.json，将读取现有项目数据并修复跨机器路径。',
     variant: 'success',
   },
-  legacy: {
-    tag: '旧版本项目',
-    description: '检测到旧格式（timeline.json / script-state.json 等），导入时自动迁移为新格式。',
-    variant: 'info',
-  },
   mediaOnly: {
     tag: '仅含媒资',
     description: '未找到 project.json，将创建一个空的项目骨架，已有媒资会保留在目录中。',
@@ -59,9 +54,6 @@ const SCENARIO_COPY: Record<ImportProjectScenario, ScenarioCopy> = {
 
 const FILE_KIND_LABEL: Record<DetectedFileKind, string> = {
   projectJson: 'project.json',
-  legacyTimeline: 'timeline.json (旧)',
-  legacyAIAnalysis: 'ai-analysis.json (旧)',
-  legacyScriptState: 'script-state.json (旧)',
   scriptMd: 'script.md',
   originalMd: 'original.md',
   audioMp3: 'podcast-audio.mp3',
@@ -87,9 +79,6 @@ function summarizeDetectedFiles(files: ImportProjectScanResult['detectedFiles'])
   }
   const ORDER: DetectedFileKind[] = [
     'projectJson',
-    'legacyTimeline',
-    'legacyAIAnalysis',
-    'legacyScriptState',
     'scriptMd',
     'originalMd',
     'audioMp3',

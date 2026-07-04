@@ -9,6 +9,14 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Page } from 'playwright';
 import { withContext } from '../engine';
+import {
+  formatScheduleDate,
+  qrcodePngPath,
+  runLoginPoll,
+  runUploadWithContext,
+  saveQrcodeFromDataUrl,
+  sleep,
+} from '../platform-shared';
 import type { LoginOptions, PlatformModule, UploadVideoOptions } from '../types';
 
 // ─── URLs ─────────────────────────────────────────────────────────────────────
@@ -36,28 +44,6 @@ const UPLOAD_SUCCESS_KEYWORDS = [
 ] as const;
 
 const XHS_MAX_TAGS = 10; // 小红书标签上限（main.py: max_tags = 10）
-
-// ─── Login poll constants (xiaohongshu_cookie_gen defaults) ──────────────────
-
-const LOGIN_POLL_INTERVAL_MS = 3000; // poll_interval: int = 3
-const LOGIN_MAX_CHECKS = 100; // max_checks: int = 100
-
-// ─── Utilities ────────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/**
- * port of publish_date.strftime("%Y-%m-%d %H:%M")
- */
-function formatXhsDate(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}`
-  );
-}
 
 // ─── Login helpers ────────────────────────────────────────────────────────────
 
@@ -118,15 +104,10 @@ async function _saveXhsQrcode(
 ): Promise<void> {
   try {
     const src = await _extractXhsQrcodeSrc(page);
-    const pngPath = path.join(path.dirname(storagePath), 'xhs_login_qrcode.png');
+    const pngPath = qrcodePngPath(storagePath, 'xhs_login_qrcode.png');
 
     if (src.startsWith('data:image/')) {
-      const match = src.match(/^data:image\/[^;]+;base64,(.+)$/s);
-      if (match) {
-        await fs.mkdir(path.dirname(pngPath), { recursive: true });
-        await fs.writeFile(pngPath, Buffer.from(match[1], 'base64'));
-        onQrcode?.(pngPath);
-      }
+      await saveQrcodeFromDataUrl(src, pngPath, onQrcode);
     } else {
       // non-data-url: screenshot the locator element
       const qrcodeImg = await _findXhsQrcodeLocator(page);
@@ -300,7 +281,7 @@ async function _setScheduleTimeXiaohongshu(page: Page, publishDate: Date): Promi
     .click();
   await sleep(1000);
 
-  const dateStr = formatXhsDate(publishDate); // "YYYY-MM-DD HH:MM"
+  const dateStr = formatScheduleDate(publishDate); // "YYYY-MM-DD HH:MM"
   await page.locator('.d-datepicker-input-filter input.d-text').fill(dateStr);
   await sleep(1000);
 }
@@ -417,16 +398,18 @@ export const xiaohongshu: PlatformModule = {
         // Show QR code immediately before entering the wait loop
         await _saveXhsQrcode(page, opts.storageStatePath, opts.onQrcode);
 
-        for (let i = 0; i < LOGIN_MAX_CHECKS; i++) {
-          if (await _isXhsLoginCompleted(page)) {
-            await sleep(2000);
-            await ctx.storageState({ path: opts.storageStatePath });
-            return { success: true, message: '小红书扫码登录成功' };
-          }
-          await sleep(LOGIN_POLL_INTERVAL_MS);
+        const result = await runLoginPoll({
+          isCompleted: () => _isXhsLoginCompleted(page),
+          successMessage: '小红书扫码登录成功',
+          timeoutMessage: '等待小红书扫码登录超时',
+        });
+
+        if (result.success) {
+          await sleep(2000);
+          await ctx.storageState({ path: opts.storageStatePath });
         }
 
-        return { success: false, message: '等待小红书扫码登录超时' };
+        return result;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, message };
@@ -480,14 +463,6 @@ export const xiaohongshu: PlatformModule = {
    * context 由 engine.withContext 管理；上传完成后刷新 storageState
    */
   async uploadVideo(opts: UploadVideoOptions): Promise<void> {
-    await withContext(
-      { storageStatePath: opts.storageStatePath, headless: opts.headless },
-      async (ctx) => {
-        const page = await ctx.newPage();
-        await uploadXiaohongshuVideo(page, opts);
-        // port of: await context.storage_state(path=self.account_file)
-        await ctx.storageState({ path: opts.storageStatePath });
-      },
-    );
+    await runUploadWithContext(opts, (page) => uploadXiaohongshuVideo(page, opts));
   },
 };

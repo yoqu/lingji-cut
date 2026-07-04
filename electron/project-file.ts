@@ -1,14 +1,11 @@
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import path from 'node:path';
 import {
-  DEFAULT_WORKFLOW_META,
   createDefaultProjectData,
   mergeProjectSection,
   type ProjectData,
   type ProjectSection,
 } from '../src/lib/project-persistence';
-import { parsePersistedScriptState } from '../src/lib/script-persistence';
 import {
   dehydrateTimelineCards,
   hydrateTimelineCards,
@@ -133,118 +130,42 @@ function cardIo(projectDir: string) {
   };
 }
 
-async function tryReadLegacyFile<T>(filePath: string): Promise<T | null> {
-  try {
-    return JSON.parse(await fs.readFile(filePath, 'utf-8')) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function removeLegacyFile(filePath: string): Promise<void> {
-  try {
-    await fs.unlink(filePath);
-  } catch {
-    // 忽略删除失败（文件不存在等情况）
-  }
-}
-
-async function migrateFromLegacyFiles(projectDir: string): Promise<ProjectData> {
-  const data = createDefaultProjectData();
-
-  // 迁移 timeline.json
-  const legacyTimeline = await tryReadLegacyFile<TimelineData>(
-    path.join(projectDir, 'timeline.json'),
-  );
-  if (legacyTimeline) {
-    data.timeline = legacyTimeline;
-  }
-
-  // 迁移 script-state.json
-  const legacyScript = await tryReadLegacyFile<unknown>(
-    path.join(projectDir, 'script-state.json'),
-  );
-  if (legacyScript) {
-    const parsed = parsePersistedScriptState(legacyScript);
-    if (parsed) {
-      // ReviewState 在 store/script.ts 可能含 'pending'/'stale'，
-      // ProjectScriptState 只接受 'idle' | 'issues' | 'clean'，做安全降级
-      const safeReviewState = (
-        ['idle', 'issues', 'clean'] as const
-      ).includes(parsed.reviewState as 'idle' | 'issues' | 'clean')
-        ? (parsed.reviewState as 'idle' | 'issues' | 'clean')
-        : 'idle';
-      data.script = {
-        templateId: parsed.templateId,
-        annotations: parsed.annotations,
-        reviewState: safeReviewState,
-        lastReviewedDocVersion: parsed.lastReviewedDocVersion,
-        manualStageOverride: parsed.manualStageOverride ?? null,
-      };
-    }
-  }
-
-  // 写入 project.json，再删除旧文件
-  await writeProjectJson(projectDir, data);
-  await Promise.all([
-    removeLegacyFile(path.join(projectDir, 'timeline.json')),
-    removeLegacyFile(path.join(projectDir, 'ai-analysis.json')),
-    removeLegacyFile(path.join(projectDir, 'script-state.json')),
-  ]);
-
-  return data;
-}
-
-async function hydrateExistingProjectData(projectDir: string, data: ProjectData): Promise<ProjectData> {
-  const currentAI = data.aiAnalysis ?? {
-    analysisResult: null,
-    coverCandidates: [],
-  };
-  const hasWorkflowMeta = data.workflowMeta !== undefined;
-  // 视觉编排下线后 aiAnalysis 只保留 analysisResult + coverCandidates。
-  // 若旧工程含 motionCards / storyboardPlan，这里一次性剥离并回写。
+/**
+ * 旧工程的 aiAnalysis 可能遗留 motionCards / storyboardPlan 等已下线字段。
+ * 检测到时仅做内存态剥离，不回写磁盘（下次保存 aiAnalysis 段时自然清除）；
+ * workflowMeta 缺省由 extractWorkflowMetaSection 默认填充，无需落盘补全。
+ */
+function normalizeProjectData(data: ProjectData): ProjectData {
+  const currentAI = data.aiAnalysis;
   const legacyExtras =
+    !currentAI ||
     'motionCards' in currentAI ||
     'storyboardPlan' in currentAI ||
     currentAI.analysisResult === undefined ||
     currentAI.coverCandidates === undefined;
-  if (!legacyExtras && hasWorkflowMeta) {
-    return data;
-  }
-  const nextData: ProjectData = {
+  if (!legacyExtras) return data;
+  return {
     ...data,
     aiAnalysis: {
-      analysisResult: currentAI.analysisResult ?? null,
-      coverCandidates: currentAI.coverCandidates ?? [],
+      analysisResult: currentAI?.analysisResult ?? null,
+      coverCandidates: currentAI?.coverCandidates ?? [],
     },
-    workflowMeta: hasWorkflowMeta ? data.workflowMeta : { ...DEFAULT_WORKFLOW_META },
   };
-
-  await writeProjectJson(projectDir, nextData);
-  return nextData;
 }
 
 /**
  * 加载项目文件：
  * 1. 若 project.json 存在，直接读取
- * 2. 若有旧文件（timeline.json / ai-analysis.json / script-state.json），迁移后返回
- * 3. 否则创建默认 ProjectData 并写入
+ * 2. 否则创建默认 ProjectData 并写入
  */
 async function loadProjectFileRaw(projectDir: string): Promise<ProjectData> {
   const read = await readProjectJsonClassified(projectDir);
-  if (read.status === 'ok') return hydrateExistingProjectData(projectDir, read.data);
+  if (read.status === 'ok') return normalizeProjectData(read.data);
   if (read.status === 'corrupt') {
     // 文件存在但损坏：备份原文并抛错，绝不用默认工程覆盖（否则丢失全部数据）。
     const backupPath = await backupCorruptProjectFile(projectDir, read.raw);
     throw new ProjectFileCorruptError(projectDir, backupPath, read.error);
   }
-
-  const hasLegacy =
-    existsSync(path.join(projectDir, 'timeline.json')) ||
-    existsSync(path.join(projectDir, 'ai-analysis.json')) ||
-    existsSync(path.join(projectDir, 'script-state.json'));
-
-  if (hasLegacy) return migrateFromLegacyFiles(projectDir);
 
   const data = createDefaultProjectData();
   await writeProjectJson(projectDir, data);

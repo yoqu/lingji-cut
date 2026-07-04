@@ -10,9 +10,10 @@ import { createDefaultTimeline } from '../../../src/types';
 import {
   MIMO_TTS_CHUNK_CHAR_BUDGET,
   groupSentencesByBudget,
-  buildSrtFromChunks,
+  isTruncatedMimoChunk,
   type ChunkPart,
 } from '../../tts-chunking';
+import { buildAlignedSrtFromChunks, type TtsTranscribe } from '../../tts-srt-align';
 import { concatWavFiles } from '../../media-concat';
 import { readAudioDurationMs } from '../../media-duration';
 import { listUserPromptEntries } from '../../user-prompts-io';
@@ -36,6 +37,7 @@ export interface RuntimeMediaBinaries {
 interface TtsRunDeps {
   runner?: (options: TTSRunnerOptions) => Promise<TTSRunnerResult>;
   resolveBinaries?: () => Promise<RuntimeMediaBinaries> | RuntimeMediaBinaries;
+  transcribe?: TtsTranscribe;
 }
 
 async function loadDefaultBinaries(): Promise<RuntimeMediaBinaries> {
@@ -196,9 +198,12 @@ async function runMimoChunked(args: MimoChunkedArgs): Promise<{
   try {
     for (let i = 0; i < chunks.length; i++) {
       const speakText = chunks[i].map((u) => u.speak).join('');
-      let buf: Buffer | null = null;
+      const chunkChars = chunks[i].reduce((n, u) => n + u.subtitle.length, 0);
+      const partPath = join(tmpDir, `chunk-${i}.wav`);
+      let ok = false;
+      let durMs = 0;
       let lastErr: unknown;
-      for (let attempt = 0; attempt <= 2 && !buf; attempt++) {
+      for (let attempt = 0; attempt <= 2 && !ok; attempt++) {
         try {
           const r = await runner({
             text: speakText,
@@ -208,29 +213,33 @@ async function runMimoChunked(args: MimoChunkedArgs): Promise<{
             styleInstruction,
             speakText,
           });
-          if (r.audioBuffer.byteLength > 0) buf = r.audioBuffer;
-          else lastErr = new Error('MiMo 返回空音频');
+          if (r.audioBuffer.byteLength === 0) {
+            lastErr = new Error('MiMo 返回空音频');
+            continue;
+          }
+          await writeFile(partPath, r.audioBuffer);
+          try {
+            if (!ffprobePath) throw new Error('ffprobe 未找到');
+            durMs = await readAudioDurationMs(partPath, { ffprobePath });
+          } catch {
+            durMs = Math.max(1_000, chunkChars * 200);
+          }
+          if (isTruncatedMimoChunk(durMs, chunkChars)) {
+            const msg = `MiMo 第 ${i + 1} 块音频疑似截断（${durMs}ms / ${chunkChars} 字），第 ${attempt + 1} 次重试`;
+            handle.log(`[warn] ${msg}`);
+            lastErr = new Error(msg);
+            continue;
+          }
+          ok = true;
         } catch (err) {
           lastErr = err;
           if ((err as { name?: string }).name === 'AbortError') throw err;
         }
       }
-      if (!buf) {
+      if (!ok) {
         throw lastErr instanceof Error ? lastErr : new Error('MiMo 分块合成失败');
       }
-
-      const partPath = join(tmpDir, `chunk-${i}.wav`);
-      await writeFile(partPath, buf);
       partPaths.push(partPath);
-
-      let durMs: number;
-      try {
-        if (!ffprobePath) throw new Error('ffprobe 未找到');
-        durMs = await readAudioDurationMs(partPath, { ffprobePath });
-      } catch {
-        const chunkChars = chunks[i].reduce((n, u) => n + u.subtitle.length, 0);
-        durMs = Math.max(1_000, chunkChars * 200);
-      }
       parts.push({ durMs, units: chunks[i] });
 
       const pct = 25 + Math.round((55 * (i + 1)) / chunks.length);
@@ -240,7 +249,14 @@ async function runMimoChunked(args: MimoChunkedArgs): Promise<{
     handle.update({ phase: '拼接音频', percent: 82 });
     await concatWavFiles(partPaths, audioPath, { ffmpegPath });
     const durationMs = parts.reduce((sum, p) => sum + p.durMs, 0);
-    const srtText = buildSrtFromChunks(parts);
+    handle.update({ phase: 'ASR 校准字幕', percent: 88 });
+    const { srtText } = await buildAlignedSrtFromChunks({
+      audioPath,
+      parts,
+      signal: handle.signal,
+      transcribe: deps.transcribe,
+      log: (level, message) => handle.log(`[${level}] ${message}`),
+    });
     return { audioPath, durationMs, srtText };
   } finally {
     await rm(tmpDir, { recursive: true, force: true });

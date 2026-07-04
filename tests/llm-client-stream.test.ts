@@ -25,13 +25,27 @@ vi.mock('@langchain/openai', () => ({
 
 import { streamText } from '../src/lib/llm';
 
-const TEST_SETTINGS: AISettings = {
-  llmBaseUrl: 'https://example.com/v1',
-  llmApiKey: 'test-key',
-  llmModel: 'gpt-4o-mini',
-  jimengApiUrl: '',
-  jimengSessionId: '',
-};
+function makeSettings(providerOverrides: Record<string, unknown> = {}): AISettings {
+  return {
+    llmProviders: [
+      {
+        id: 'p1',
+        name: 'Test',
+        type: 'openai_compatible',
+        baseUrl: 'https://example.com/v1',
+        apiKey: 'test-key',
+        models: ['gpt-4o-mini'],
+        ...providerOverrides,
+      },
+    ],
+    defaultProviderId: 'p1',
+    defaultModel: 'gpt-4o-mini',
+    jimengApiUrl: '',
+    jimengSessionId: '',
+  } as AISettings;
+}
+
+const TEST_SETTINGS: AISettings = makeSettings();
 
 describe('streamText', () => {
   beforeEach(() => {
@@ -83,16 +97,13 @@ describe('streamText', () => {
     expect(onReasoningChunk.mock.calls.map(([chunk]) => chunk)).toEqual(['先分析一下']);
   });
 
-  it('passes enableThinking=false through modelKwargs', async () => {
+  it('passes provider enableThinking=false through modelKwargs', async () => {
     streamMock.mockImplementation(async function* streamOnce() {
       yield { content: '最终答案' };
     });
 
     await streamText(
-      {
-        ...TEST_SETTINGS,
-        enableThinking: false,
-      },
+      makeSettings({ enableThinking: false }),
       '系统提示',
       '用户输入',
       vi.fn(),
@@ -116,5 +127,20 @@ describe('streamText', () => {
     await expect(streamText(TEST_SETTINGS, '系统提示', '用户输入', vi.fn())).rejects.toThrow(
       'LLM 流式返回空内容',
     );
+  });
+
+  it('throws a configuration error when no provider is configured', async () => {
+    const empty = {
+      llmProviders: [],
+      defaultProviderId: null,
+      defaultModel: null,
+      jimengApiUrl: '',
+      jimengSessionId: '',
+    } as unknown as AISettings;
+
+    await expect(streamText(empty, '系统提示', '用户输入', vi.fn())).rejects.toThrow(
+      '请先在「设置 → AI」中配置 LLM Provider 与模型',
+    );
+    expect(chatOpenAIMock).not.toHaveBeenCalled();
   });
 });

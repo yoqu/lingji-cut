@@ -278,6 +278,28 @@ describe('bcut asr', () => {
     });
   });
 
+  it('parses word-level timestamps when bcut returns words', () => {
+    const payload = parseBcutResultPayload({
+      utterances: [
+        {
+          transcript: '你好',
+          start_time: 0,
+          end_time: 600,
+          words: [
+            { label: '你', start_time: 0, end_time: 300 },
+            { label: '好', start_time: 300, end_time: 600 },
+            { label: ' ', start_time: 600, end_time: 600 },
+          ],
+        },
+      ],
+    });
+
+    expect(payload.segments[0].words).toEqual([
+      { text: '你', startMs: 0, endMs: 300 },
+      { text: '好', startMs: 300, endMs: 600 },
+    ]);
+  });
+
   it('transcribes audio with the bcut http workflow in js', async () => {
     const audioPath = path.join(tmpDir, 'audio.mp3');
     await fs.writeFile(audioPath, 'audio-binary', 'utf8');

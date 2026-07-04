@@ -51,6 +51,31 @@ describe('writePiConfig', () => {
     expect(auth).toEqual({});
   });
 
+  it('并发调用不撕裂配置文件（并行重试回归）', async () => {
+    // 复刻批量并行重试：同一 pi 配置目录被 N 个 writePiConfig 同时命中。
+    // 修复前 auth.json 的 read-modify-write + 非原子写会读到半截 JSON 抛
+    // "Unexpected end of JSON input"；修复后串行化 + 原子写应全部成功。
+    const ai = {
+      llmProviders: [
+        { id: 'a', name: 'A', type: 'openai_compatible', baseUrl: 'https://a/v1', apiKey: 'k', models: ['m1'] },
+      ],
+      defaultProviderId: 'a', defaultModel: 'm1',
+    } as unknown as AISettings;
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, () => writePiConfig(dir, ai)),
+    );
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+
+    // 三个文件仍是完整可解析 JSON，且无残留 .tmp-* 临时文件。
+    const models = JSON.parse(await fs.readFile(path.join(dir, 'models.json'), 'utf-8'));
+    expect(models.providers.a.api).toBe('openai-completions');
+    JSON.parse(await fs.readFile(path.join(dir, 'settings.json'), 'utf-8'));
+    JSON.parse(await fs.readFile(path.join(dir, 'auth.json'), 'utf-8'));
+    const leftovers = (await fs.readdir(dir)).filter((f) => f.includes('.tmp-'));
+    expect(leftovers).toEqual([]);
+  });
+
   it('merges auth.json instead of replacing existing pi credentials', async () => {
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(

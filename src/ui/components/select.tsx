@@ -781,27 +781,15 @@ function SelectOptionComponent(_props: SelectOptionProps) {
 }
 SelectOptionComponent.displayName = "Select.Option";
 
-// Multi Select convenience component
-const MultiSelectComponent = React.forwardRef<
-	HTMLDivElement,
-	Omit<MultiSelectProps, "type">
->((props, _ref) => <SelectBase type="multiple" {...props} />);
-MultiSelectComponent.displayName = "Select.Multiple";
-
 // ============================================================================
 // Export
 // ============================================================================
 
 type SelectComponent = typeof SelectBase & {
 	Option: typeof SelectOptionComponent;
-	Multiple: typeof MultiSelectComponent;
 };
 
 const Select = SelectBase as SelectComponent;
 Select.Option = SelectOptionComponent;
-Select.Multiple = MultiSelectComponent;
 
 export { Select };
-
-// Backward compatibility - will be removed in next major version
-export { MultiSelectComponent as MultiSelect };

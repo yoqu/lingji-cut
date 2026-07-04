@@ -22,14 +22,6 @@ function asAsyncIterable(...chunks: Array<{ content: unknown }>) {
 
 vi.mock('../src/lib/llm/model', () => {
   return {
-    createChatModel: vi.fn(() => ({
-      bind: () => ({
-        invoke: async () => ({ content: '{"k":1}' }),
-        stream: async () => asAsyncIterable({ content: '{"k":1}' }),
-      }),
-      invoke: async () => ({ content: 'hello' }),
-      stream: async () => asAsyncIterable({ content: 'hello' }),
-    })),
     createChatModelFromProvider: vi.fn(() => ({
       bind: () => ({
         invoke: async () => ({ content: '{"k":2}' }),
@@ -42,7 +34,7 @@ vi.mock('../src/lib/llm/model', () => {
 });
 
 import { generateStructuredData, generateText } from '../src/lib/llm';
-import { createChatModel, createChatModelFromProvider } from '../src/lib/llm/model';
+import { createChatModelFromProvider } from '../src/lib/llm/model';
 
 const provider: LLMProvider = {
   id: 'A',
@@ -72,10 +64,17 @@ const settings: AISettings = {
 const binding: ResolvedBinding = { provider, model: 'm' };
 
 describe('generate with optional binding', () => {
-  it('不传 binding：走 createChatModel(settings)（兼容老调用）', async () => {
+  it('不传 binding：回落到默认 provider 并走 createChatModelFromProvider', async () => {
     const r = await generateStructuredData(settings, 'sys', 'usr');
-    expect(r).toEqual({ k: 1 });
-    expect(createChatModel).toHaveBeenCalled();
+    expect(r).toEqual({ k: 2 });
+    expect(createChatModelFromProvider).toHaveBeenCalledWith(provider, 'm');
+  });
+
+  it('不传 binding 且没有可用 provider：抛出配置引导错误', async () => {
+    const empty: AISettings = { ...settings, llmProviders: [], defaultProviderId: null, defaultModel: null };
+    await expect(generateStructuredData(empty, 'sys', 'usr')).rejects.toThrow(
+      '请先在「设置 → AI」中配置 LLM Provider 与模型',
+    );
   });
 
   it('传 binding：走 createChatModelFromProvider 并由 provider 自身决定 thinking 模式', async () => {

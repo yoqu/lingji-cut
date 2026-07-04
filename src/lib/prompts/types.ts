@@ -167,10 +167,24 @@ const LOCKED_COVER_REGENERATION = `【系统契约 · 不可修改】
 - coverPrompts: 数组，且只能包含 1 条字符串`;
 
 const LOCKED_CARDS_SEGMENT = `【系统契约 · 不可修改】
-只输出**一个 \`\`\`tsx 代码块**，块内是单文件 Remotion 函数组件并 export default；代码块之外不要写任何文字、解释或 JSON。
-组件从 "remotion" 引入 useCurrentFrame/useVideoConfig/interpolate/spring/Easing/AbsoluteFill/Sequence，从 "react" 引入所需 API；动画必须是 useCurrentFrame() 的纯函数；禁止 fetch/setTimeout/setInterval/Math.random/new Date/requestAnimationFrame 等非确定性或副作用 API。
-组件必须完整：函数体内必须 return 真实 JSX（至少一个 <AbsoluteFill> 根节点），严禁用 “// ... build out the rest”/“// TODO”/“…” 等注释收尾或 return null，否则渲染黑屏视为失败。
+用 write / edit 工具把完整组件写入工作目录的 motionCard.tsx（修复轮次用 edit 针对性修改）；不要把组件源码全文输出到对话，只简述实现了分镜的哪几拍。
+组件必须是单文件 TSX：export default function Card({ cues = [] })；只能 import remotion / react / @lingji/motion-kit；动画必须是 useCurrentFrame() 的纯函数，禁止 fetch/setTimeout/setInterval/Math.random/new Date/requestAnimationFrame 等非确定性或副作用 API（静态 lint 会逐条拦截）。
+组件必须完整：函数体内必须 return 真实 JSX（<CardStage> 或 <AbsoluteFill> 根节点），严禁用 “// ... build out the rest”/“// TODO”/“…” 等注释收尾或 return null，否则渲染黑屏视为失败。
 卡片的标题 / 时间 / 类型 / 样式等元信息由系统从 segment 合成，不需要、也不要在代码里或代码外输出这些字段。`;
+
+const LOCKED_CARDS_ANIMATION = `【系统契约 · 不可修改】
+只输出一个 JSON 对象（不加 markdown 代码块、不加任何解释），结构如下：
+{
+  "claim": "一句话论点",
+  "carrier": "data-hero|comparison|trend|list-build|process|quote|concept",
+  "scene": "一句话描述整卡终态画面",
+  "focus": { "beat": 1, "emphasis": "countup-settle|slam|underline-sweep|brighten" },
+  "beats": [
+    { "cue": null, "kind": "build", "adds": "新出现的元素及内容", "motion": "动作意图" },
+    { "cue": 2, "kind": "build|transform|accent", "adds": "…", "changes": "已有元素如何变化（可省略）", "motion": "…" }
+  ]
+}
+beats 1-6 个；cue 必须是逐句节拍里的合法索引且随拍序单调不减（仅第 0 拍允许 null）；adds/changes 中的数字与专名必须来自逐字稿原文。机器会逐条校验，不合法将被打回重出。`;
 
 const LOCKED_SCRIPT_REVIEW = `【系统契约 · 不可修改】
 请以严格 JSON 格式返回审查结果，且只返回 JSON：
@@ -238,38 +252,37 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
   'cards.segment': {
     kind: 'cards.segment',
     label: '段落信息卡片生成',
-    description: '围绕单个 segment 生成一张 Motion Card（Remotion TSX 组件，需校验通过）',
+    description: '把 cards.animation 的 JSON 分镜实现为 Motion Card（组合 @lingji/motion-kit 的 Remotion TSX 组件，file-first 写入 motionCard.tsx，需通过 lint + 渲染校验）',
     group: 'ai-analysis',
     variables: [
-      { name: 'globalPrompt', description: '整期创作提示词' },
-      { name: 'programSummary', description: '节目级总结' },
-      { name: 'keywords', description: '节目关键词（顿号分隔）' },
+      { name: 'motionKitApi', description: '@lingji/motion-kit 的 API 摘要（CardStage/useBeats/内容原语/手法函数；与 kit 实现同源维护）' },
+      { name: 'presetMotionTokens', description: '所选风格预设的 motion tokens JSON（palette/fonts/typeScale/surface/ambient/camera/persona），原样定义为 TOKENS 常量' },
+      { name: 'presetStyleNotes', description: '风格预设的少量专属提示（如玻璃拟态面板、渐变标题）；无则为空' },
+      { name: 'animationDirection', description: '本卡 JSON 分镜（cards.animation 产出的 storyboard；无则为"无"）' },
+      { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 与运行时 cues 数组对齐，与分镜的 cue 字段对应）' },
       { name: 'segmentId', description: 'segment id' },
       { name: 'segmentTitle', description: 'segment 标题' },
       { name: 'segmentSummary', description: 'segment 摘要' },
-      { name: 'segmentStartMs', description: 'segment 起始毫秒' },
-      { name: 'segmentEndMs', description: 'segment 结束毫秒' },
-      { name: 'segmentTranscriptExcerpt', description: 'segment 原始摘录' },
-      { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 与运行时 cues 数组对齐），供模型把焦点元素锚到讲出它的那一句' },
-      { name: 'segmentVisualType', description: '上游判定的卡片形式：motion 或 image' },
       { name: 'cardPrompt', description: '单卡追加提示词' },
-      { name: 'animationDirection', description: '本卡逐拍动画脚本（cards.animation 产出；无则为"无"）' },
       { name: 'currentCardSection', description: '当前卡片线索多行块（由调用方构造）' },
       { name: 'programContext', description: '节目级浓缩上下文（节目摘要、关键词、当前段在整期中的位置）' },
-      { name: 'fullTranscript', description: '兼容旧模板：与 programContext 同值，不再注入完整全文，避免 token 爆炸' },
-      { name: 'sandboxReference', description: 'Remotion Motion 组件运行时约束（cards.segment 校验 motion-card 所需）' },
-      { name: 'styleSystemBlock', description: '系统风格库注入的视觉系统块；由所选风格预设的对应 facet 决定' },
+      { name: 'globalPrompt', description: '整期创作提示词（兼容旧模板）' },
+      { name: 'programSummary', description: '节目级总结（兼容旧模板）' },
+      { name: 'keywords', description: '节目关键词（兼容旧模板）' },
+      { name: 'segmentTranscriptExcerpt', description: 'segment 原始摘录（兼容旧模板）' },
+      { name: 'styleSystemBlock', description: '兼容旧模板：与 presetMotionTokens 同源的风格块' },
+      { name: 'sandboxReference', description: '兼容旧模板：运行时约束说明' },
     ],
     lockedContract: {
       position: 'user-tail',
       content: LOCKED_CARDS_SEGMENT,
-      reason: '业务侧按此结构创建 AICard 并对 motionCard.tsx 做 Remotion 组件校验；修改会导致卡片无法渲染。',
+      reason: '业务侧按此结构取 motionCard.tsx 并做 lint + Remotion 渲染校验；修改会导致卡片无法生成。',
     },
   },
   'cards.animation': {
     kind: 'cards.animation',
-    label: '动画指导生成',
-    description: '为单个 motion 段落生成逐拍动画脚本（自然语言），供 cards.segment 出卡时遵循其节拍与形变意图',
+    label: '视觉论证分镜',
+    description: '为单个 motion 段落设计结构化 JSON 分镜（论点 / 载体 / 逐拍状态演进 / 焦点），机器校验后交给 cards.segment 实现',
     group: 'ai-analysis',
     variables: [
       { name: 'globalPrompt', description: '整期创作提示词（为空填"无"）' },
@@ -277,13 +290,16 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       { name: 'keywords', description: '节目关键词（顿号分隔，无则为"无"）' },
       { name: 'segmentId', description: 'segment id' },
       { name: 'segmentTitle', description: 'segment 标题' },
-      { name: 'segmentStartMs', description: 'segment 起始毫秒' },
-      { name: 'segmentEndMs', description: 'segment 结束毫秒' },
       { name: 'segmentSummary', description: 'segment 摘要' },
       { name: 'segmentTranscriptExcerpt', description: 'segment 原始摘录' },
-      { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 与运行时 cues 对齐）' },
+      { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 即分镜 cue 字段的合法取值）' },
       { name: 'cardPrompt', description: '用户单卡追加提示词（风格/语气参考；无则为"无"）' },
     ],
+    lockedContract: {
+      position: 'user-tail',
+      content: LOCKED_CARDS_ANIMATION,
+      reason: '编排器按此 JSON Schema 解析并机器校验分镜（cue 合法性 / 数字防编造）；修改会导致分镜无法进入出卡流程。',
+    },
   },
   'script.review': {
     kind: 'script.review',

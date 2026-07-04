@@ -74,26 +74,26 @@ describe('fetchProviderModels', () => {
     expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
   });
 
-  it('Anthropic：使用 x-api-key + anthropic-version header', async () => {
+  it('MiniMax：走 Anthropic 兼容端点，使用 x-api-key + anthropic-version header', async () => {
     fetchMock.mockResolvedValue(
       mockResponse({ data: [{ id: 'claude-sonnet-4-6' }, { id: 'claude-haiku-4-5' }] }),
     );
 
     const result = await fetchProviderModels(
-      makeProvider({ type: 'anthropic', baseUrl: 'https://api.anthropic.com', apiKey: 'a-key' }),
+      makeProvider({ type: 'minimax', baseUrl: '', apiKey: 'a-key' }),
     );
 
     expect(result).toEqual(['claude-haiku-4-5', 'claude-sonnet-4-6']);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('https://api.anthropic.com/v1/models');
+    expect(url).toBe('https://api.minimaxi.com/anthropic/v1/models');
     const headers = init.headers as Record<string, string>;
     expect(headers['x-api-key']).toBe('a-key');
     expect(headers['anthropic-version']).toBe('2023-06-01');
   });
 
-  it('Anthropic：缺少 apiKey 直接抛错', async () => {
+  it('MiniMax：缺少 apiKey 直接抛错', async () => {
     await expect(
-      fetchProviderModels(makeProvider({ type: 'anthropic', apiKey: '' })),
+      fetchProviderModels(makeProvider({ type: 'minimax', apiKey: '' })),
     ).rejects.toThrow(/API Key/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -117,15 +117,6 @@ describe('fetchProviderModels', () => {
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url.startsWith('https://generativelanguage.googleapis.com/v1beta/models?key=')).toBe(true);
     expect(url).toContain('g-key');
-  });
-
-  it('Claude Code ACP：无 Electron runtime 时返回默认模型', async () => {
-    const result = await fetchProviderModels(
-      makeProvider({ type: 'claude_code_acp', baseUrl: '', apiKey: '' }),
-    );
-
-    expect(result).toEqual(['claude-code-default']);
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('HTTP 失败时抛出携带状态码的错误', async () => {

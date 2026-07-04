@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveBundledEntry, buildBundledNodeSpawn } from '../../electron/agent-runtime/bundled-runtime';
+import { resolveBundledEntry } from '../../electron/agent-runtime/bundled-runtime';
 
 describe('resolveBundledEntry', () => {
   it('prefers app.asar.unpacked when appPath is inside app.asar', () => {
@@ -24,17 +24,5 @@ describe('resolveBundledEntry', () => {
     expect(resolveBundledEntry('resources/pi/dist/cli.js', {
       appPath: '/repo', resourcesPath: '', cwd: '/repo', existsSync: () => false,
     })).toBeNull();
-  });
-});
-
-describe('buildBundledNodeSpawn', () => {
-  it('runs entry via process.execPath with ELECTRON_RUN_AS_NODE=1', () => {
-    const out = buildBundledNodeSpawn('/abs/cli.js', ['--mode', 'rpc'], {
-      execPath: '/abs/electron', baseEnv: { PATH: '/usr/bin' },
-    });
-    expect(out.command).toBe('/abs/electron');
-    expect(out.args).toEqual(['/abs/cli.js', '--mode', 'rpc']);
-    expect(out.env.ELECTRON_RUN_AS_NODE).toBe('1');
-    expect(out.env.PATH).toBe('/usr/bin');
   });
 });

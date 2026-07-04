@@ -33,14 +33,35 @@ export function resolveStylePresetId(scope: StylePresetScope): string {
 /**
  * 取某风格某 facet 的提示词块；缺失 facet（空串 / undefined）回退到内置默认风格的同 facet。
  * 注入到提示词的 {{styleSystemBlock}}。
+ * motion facet 已结构化为 tokens：此处对 motion 的请求返回 tokens JSON，
+ * 保证旧自定义模板里的 {{styleSystemBlock}} 仍有内容。
  */
 export function getStyleFacetBlock(
   presetId: string | undefined | null,
   facet: VisualStyleFacetKind,
 ): string {
+  if (facet === 'motion') return getMotionTokensBlock(presetId);
   const preset = getStylePresetById(presetId);
   const block = preset.facets[facet];
   if (block && block.trim().length > 0) return block;
   const fallback = getStylePresetById(DEFAULT_STYLE_PRESET_ID).facets[facet];
   return fallback ?? '';
+}
+
+/**
+ * 取某风格的 Motion tokens JSON（注入 {{presetMotionTokens}}，卡片里原样定义为 TOKENS 常量）。
+ * 预设未定义 motionTokens 时回退默认风格的 tokens。
+ */
+export function getMotionTokensBlock(presetId: string | undefined | null): string {
+  const preset = getStylePresetById(presetId);
+  const tokens =
+    preset.motionTokens ?? getStylePresetById(DEFAULT_STYLE_PRESET_ID).motionTokens ?? null;
+  if (!tokens) return '{}';
+  return JSON.stringify(tokens, null, 2);
+}
+
+/** 取某风格的少量专属提示（注入 {{presetStyleNotes}}）；无则空串。 */
+export function getMotionStyleNotes(presetId: string | undefined | null): string {
+  const notes = getStylePresetById(presetId).motionStyleNotes?.trim();
+  return notes ? `风格专属提示：${notes}` : '';
 }

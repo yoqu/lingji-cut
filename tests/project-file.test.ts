@@ -45,7 +45,7 @@ describe('loadProjectFile', () => {
     expect(data.timeline?.podcast?.audioPath).toBe('/test.mp3');
   });
 
-  it('读入旧 project.json 时会剥离已废弃的 motionCards / storyboardPlan 字段', async () => {
+  it('读入旧 project.json 时内存态剥离已废弃的 motionCards / storyboardPlan 字段（不回写磁盘）', async () => {
     const existing = {
       version: 1,
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -72,41 +72,27 @@ describe('loadProjectFile', () => {
       analysisResult: null,
       coverCandidates: [],
     });
-    // 回写后的磁盘内容同样不再包含这些字段
+    // 不再 rewrite-on-open：磁盘原文保持不变
     const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'project.json'), 'utf-8'));
-    expect(raw.aiAnalysis.motionCards).toBeUndefined();
-    expect(raw.aiAnalysis.storyboardPlan).toBeUndefined();
+    expect(raw.updatedAt).toBe('2026-01-01T00:00:00.000Z');
   });
 
-  it('从旧文件迁移：timeline.json + script-state.json', async () => {
-    const timeline = {
-      podcast: { audioPath: '/old.mp3', srtPath: '/old.srt', durationMs: 5000 },
-      overlays: [],
-      subtitleConfig: {},
-      globalBackground: '',
-    };
-    const scriptState = {
-      version: 2,
-      templateId: 'news',
-      annotations: [],
-      reviewState: 'clean',
-      lastReviewedDocVersion: 1,
-      createdAt: '2026-01-01',
-      updatedAt: '2026-01-01',
-    };
-
-    await fs.writeFile(path.join(tmpDir, 'timeline.json'), JSON.stringify(timeline));
-    await fs.writeFile(path.join(tmpDir, 'script-state.json'), JSON.stringify(scriptState));
+  it('不再迁移旧 sidecar 文件：只有 timeline.json 时按空目录处理', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'timeline.json'),
+      JSON.stringify({
+        podcast: { audioPath: '/old.mp3', srtPath: '/old.srt', durationMs: 5000 },
+        overlays: [],
+      }),
+    );
 
     const data = await loadProjectFile(tmpDir);
-    expect(data.timeline?.podcast?.audioPath).toBe('/old.mp3');
-    expect(data.aiAnalysis.analysisResult).toBeNull();
-    expect(data.script.templateId).toBe('news');
+    expect(data.timeline).toBeNull();
 
     const files = await fs.readdir(tmpDir);
     expect(files).toContain('project.json');
-    expect(files).not.toContain('timeline.json');
-    expect(files).not.toContain('script-state.json');
+    // 旧文件不再被读取或删除
+    expect(files).toContain('timeline.json');
   });
 });
 

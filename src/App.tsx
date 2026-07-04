@@ -7,7 +7,6 @@ import { Toolbar } from './components/Toolbar';
 import type { AppPage, MenuAction, MenuEvent, RecentProjectEntry } from './lib/electron-api';
 import { getAISettingsIssue } from './lib/ai-settings';
 import { useAgentStore } from './store/agent';
-import { createPersistedAIState } from './lib/ai-persistence';
 import { hydrateSettingsStorage } from './lib/settings-storage';
 import { useViewportSize } from './hooks/useViewportSize';
 import { getAppShortcutCommand, isTextEditingTarget } from './lib/native-shortcuts';
@@ -40,19 +39,19 @@ import { handleExternalEdit } from './lib/external-edit-sync';
 import { useAiEditStore } from './store/ai-edit';
 import { useScriptStore } from './store/script';
 import { useTaskProgressStore } from './store/task-progress';
+import { useAgentFeedStore } from './store/agent-feed';
 import {
   createPipelineProgressBridge,
   type PipelineTaskSnapshot,
 } from './lib/pipeline-progress-bridge';
 import { attachTaskNotificationBridge } from './lib/task-notification-bridge';
-import { getRoleById } from './lib/script-templates';
-import { SCRIPT_TEMPLATE_SEEDS } from './lib/prompts/script-template-defaults';
+import { registerMcpReadonlyHandlers } from './lib/mcp-readonly-handlers';
 import { userPromptBindingKey } from './lib/prompts';
 import {
   clearCurrentProject,
   getCurrentProjectDir,
   getCurrentSaveStatus,
-  type SaveStatus,
+  mergeSaveStatus,
   setProjectDir,
   subscribeToSaveStatus,
   useTimelineStore,
@@ -122,12 +121,7 @@ export default function App() {
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>([]);
   const [saveStatus, setSaveStatus] = useState(() => getCurrentSaveStatus());
   const [aiSaveStatus, setAISaveStatus] = useState(() => getCurrentAISaveStatus());
-  const aggregatedSaveStatus: SaveStatus = (() => {
-    if (saveStatus === 'error' || aiSaveStatus === 'error') return 'error';
-    if (saveStatus === 'saving' || aiSaveStatus === 'saving') return 'saving';
-    if (saveStatus === 'saved' || aiSaveStatus === 'saved') return 'saved';
-    return saveStatus;
-  })();
+  const aggregatedSaveStatus = mergeSaveStatus(saveStatus, aiSaveStatus);
   const [exportRequestToken, setExportRequestToken] = useState(0);
   const {
     addAsset,
@@ -156,225 +150,16 @@ export default function App() {
   // 耗时任务完成 / 失败时弹系统通知，提醒用户回到软件继续下一步
   useEffect(() => attachTaskNotificationBridge(), []);
 
-  // --- MCP 只读型 Handler（全局注册，独立于 ScriptWorkbench 页面生命周期）---
-  // 这些 handler 只依赖 Zustand store，不依赖 ScriptWorkbench 的 ref/回调，
-  // 必须在 App 层注册，避免用户在 settings 等页面时 ScriptWorkbench 未挂载导致 MCP 工具调用卡死。
-  useEffect(() => {
-    if (!window.mcpAPI) return;
-    const unsubs: Array<() => void> = [];
+  // MCP 只读型 handler 全局注册一次（实现见 lib/mcp-readonly-handlers.ts）
+  useEffect(() => registerMcpReadonlyHandlers(), []);
 
-    // 获取编辑器状态
-    unsubs.push(
-      window.mcpAPI.onGetEditorState((payload: any) => {
-        const state = useScriptStore.getState();
-        window.mcpAPI!.reply(payload._replyChannel, {
-          projectDir: state.projectDir,
-          openFiles: state.fileEntries.map((f) => f.name),
-          activeFile: state.openedFile,
-          cursorPosition: null,
-        });
-      }),
-    );
-
-    // 读取脚本文件内容
-    unsubs.push(
-      window.mcpAPI.onReadScript((payload: any) => {
-        const state = useScriptStore.getState();
-        let filePath = payload.filePath || state.openedFile || 'script.md';
-        // 标准化：将绝对路径转为项目目录下的相对路径
-        if (state.projectDir && filePath.startsWith(state.projectDir)) {
-          filePath = filePath.slice(state.projectDir.length).replace(/^\//, '');
-        }
-        let content = '';
-        if (filePath === 'script.md') {
-          content = state.scriptText;
-        } else if (filePath === 'original.md') {
-          content = state.originalText;
-        } else {
-          content = state.extraFileContents[filePath] ?? '';
-        }
-        const lineCount = content ? content.split('\n').length : 0;
-        window.mcpAPI!.reply(payload._replyChannel, { filePath, content, lineCount });
-      }),
-    );
-
-    // 提交审查批注
-    unsubs.push(
-      window.mcpAPI.onSubmitReview((payload: any) => {
-        const state = useScriptStore.getState();
-        const annotationsInput: Array<{
-          quotedText?: string;
-          line?: number;
-          endLine?: number;
-          text: string;
-          suggestion?: string;
-          severity?: string;
-        }> = payload.annotations ?? [];
-        const scriptContent = state.scriptText;
-        const scriptLines = scriptContent.split('\n');
-
-        // 预计算行偏移表（仅在需要行号定位时使用）
-        const lineOffsets: number[] = [0];
-        for (let i = 0; i < scriptLines.length; i++) {
-          lineOffsets.push(lineOffsets[i] + scriptLines[i].length + 1);
-        }
-
-        const newAnnotations: typeof state.annotations = [];
-        let skipped = 0;
-
-        for (let idx = 0; idx < annotationsInput.length; idx++) {
-          const a = annotationsInput[idx];
-          let startOffset: number;
-          let endOffset: number;
-          let originalText: string;
-
-          if (a.quotedText) {
-            // 优先使用 quotedText 精确匹配
-            const matchIdx = scriptContent.indexOf(a.quotedText);
-            if (matchIdx === -1) {
-              skipped++;
-              continue;
-            }
-            startOffset = matchIdx;
-            endOffset = matchIdx + a.quotedText.length;
-            originalText = a.quotedText;
-          } else if (a.line != null) {
-            // 降级到行号定位
-            const startLine = Math.max(1, Math.min(a.line, scriptLines.length));
-            const endLine = Math.max(startLine, Math.min(a.endLine ?? startLine, scriptLines.length));
-            startOffset = lineOffsets[startLine - 1];
-            endOffset = lineOffsets[endLine] - 1;
-            originalText = scriptLines.slice(startLine - 1, endLine).join('\n');
-          } else {
-            skipped++;
-            continue;
-          }
-
-          newAnnotations.push({
-            id: `mcp-review-${Date.now()}-${idx}`,
-            startOffset,
-            endOffset,
-            originalText,
-            quotedText: originalText,
-            docVersion: state.scriptDocVersion,
-            issue: a.text,
-            suggestion: a.suggestion ?? '',
-            severity: (['error', 'warning', 'info'].includes(a.severity ?? '') ? a.severity as 'error' | 'warning' | 'info' : 'info'),
-            status: 'pending' as const,
-          });
-        }
-
-        state.setAnnotations(newAnnotations);
-        state.setReviewState(newAnnotations.length > 0 ? 'issues' : 'clean');
-
-        window.mcpAPI!.reply(payload._replyChannel, {
-          success: true,
-          filePath: 'script.md',
-          annotationCount: newAnnotations.length,
-          skipped,
-        });
-      }),
-    );
-
-    // 列出项目文件
-    unsubs.push(
-      window.mcpAPI.onListProjectFiles((payload: any) => {
-        const state = useScriptStore.getState();
-        window.mcpAPI!.reply(payload._replyChannel, {
-          projectDir: state.projectDir,
-          files: state.fileEntries.map((f) => ({
-            path: f.name,
-            name: f.name,
-            isDirectory: f.type === 'directory',
-          })),
-        });
-      }),
-    );
-
-    // 获取项目上下文
-    unsubs.push(
-      window.mcpAPI.onGetProjectContext((payload: any) => {
-        const state = useScriptStore.getState();
-        // 直接从 AIStore 读口播模板条目，避免耦合 script-templates.ts
-        const userTemplates = useAIStore.getState().userPromptEntries['script-template'] ?? [];
-        // 极早期（App hydrate 尚未完成 loadUserPrompts）时用内置种子兜底
-        const effectiveTemplates = userTemplates.length > 0
-          ? userTemplates.map((entry) => ({
-              id: entry.id,
-              name: entry.name,
-              description: entry.description,
-              systemPrompt: entry.system,
-            }))
-          : SCRIPT_TEMPLATE_SEEDS.map((seed) => ({
-              id: seed.id,
-              name: seed.name,
-              description: seed.description,
-              systemPrompt: seed.system,
-            }));
-        const selectedTpl = effectiveTemplates.find((t) => t.id === state.selectedTemplate);
-        const selectedRole = getRoleById(state.selectedRole);
-        window.mcpAPI!.reply(payload._replyChannel, {
-          projectName: state.projectDir?.split('/').pop() ?? null,
-          projectDir: state.projectDir,
-          selectedTemplate: state.selectedTemplate,
-          selectedTemplatePrompt: selectedTpl?.systemPrompt ?? null,
-          selectedRole: selectedRole ? {
-            id: selectedRole.id,
-            name: selectedRole.name,
-            description: selectedRole.description,
-            rolePrompt: selectedRole.rolePrompt,
-          } : null,
-          roleInstruction: selectedRole && selectedRole.id !== 'none'
-            ? `【重要】用户已选择「${selectedRole.name}」作为口播角色。写稿时请严格遵循以下角色设定：\n${selectedRole.rolePrompt}\n请将此角色风格融入模板要求中生成口播稿。`
-            : null,
-          templates: effectiveTemplates,
-          hasOriginalFile: state.workspaceFiles.hasOriginalFile,
-          hasScriptFile: state.workspaceFiles.hasScriptFile,
-        });
-      }),
-    );
-
-    return () => {
-      for (const unsub of unsubs) {
-        unsub();
-      }
-    };
-  }, []);
-
-  const invalidateAIAnalysis = useCallback(async (projectDir?: string) => {
-    clearAIAnalysis();
-
-    if (!projectDir) {
-      return;
-    }
-
-    await window.electronAPI.saveAIAnalysis(
-      projectDir,
-      JSON.stringify(createPersistedAIState(null, []), null, 2),
-    );
-  }, [clearAIAnalysis]);
-
-  const persistAIAnalysis = useCallback(
-    async (analysisResult: AIAnalysisResult | null) => {
-      if (!currentProjectDir) {
-        return;
-      }
-
-      await window.electronAPI.saveAIAnalysis(
-        currentProjectDir,
-        JSON.stringify(createPersistedAIState(analysisResult, []), null, 2),
-      );
-    },
-    [currentProjectDir],
-  );
-
+  // aiAnalysis 落盘统一走 store/ai.ts 的订阅自动保存，这里只改内存态。
   const rerunAiAnalysisForEntries = useCallback(
     async (entries: ReturnType<typeof useTimelineStore.getState>['srtEntries']) => {
       const settings = await loadAISettings();
       const settingsIssue = getAISettingsIssue(settings);
 
       clearAIAnalysis();
-      await persistAIAnalysis(null);
 
       if (settingsIssue || !settings) {
         window.alert(settingsIssue ?? '请先完成 AI 配置后再重新分析');
@@ -390,13 +175,12 @@ export default function App() {
         })) as AIAnalysisResult;
         setAIAnalysisResult(result);
         setCoverCandidates([]);
-        await persistAIAnalysis(result);
       } catch (error) {
         console.error('重新分析字幕失败:', error);
         window.alert(error instanceof Error ? error.message : '重新分析字幕失败，请稍后重试。');
       }
     },
-    [clearAIAnalysis, currentProjectDir, persistAIAnalysis, setAIAnalysisResult, setCoverCandidates],
+    [clearAIAnalysis, currentProjectDir, setAIAnalysisResult, setCoverCandidates],
   );
 
   const resolveAudioDuration = useCallback(
@@ -624,6 +408,19 @@ export default function App() {
     return () => bridge.dispose();
   }, []);
 
+  // AI 卡片多 agent 生成的观测事件 → agent-feed store（观测面板数据源）。
+  useEffect(() => {
+    if (!window.electronAPI?.onAgentFeedEvent) return;
+    return window.electronAPI.onAgentFeedEvent((ev) =>
+      useAgentFeedStore.getState().applyEvent(ev),
+    );
+  }, []);
+
+  // 换项目时清空观测记录（记录只在项目会话内有意义）。
+  useEffect(() => {
+    useAgentFeedStore.getState().clearAll();
+  }, [currentProjectDir]);
+
   // AI file-first：订阅外部文件变更（file-changed）与会话锁态（ai-edit-lock-changed）。
   // - project.json 变更 → 重载并替换 timeline
   // - motionCard.tsx 变更 → 替换该卡内存源码触发预览重编译
@@ -753,6 +550,49 @@ export default function App() {
   }, [setPage]);
 
   /**
+   * 导入类入口（文稿 / 媒体）共用的空白工程引导：
+   * 先清旧项目会话（避免自动保存订阅拿陈旧 projectDir 写脏旧工程），
+   * 建空白脚本态 → 重置时间线 / 字幕 / AI → 切到新目录 → 记入最近项目。
+   */
+  const bootstrapImportedProject = useCallback(
+    async (projectDir: string) => {
+      clearCurrentProject();
+      useScriptStore.getState().clearProjectSession();
+      useScriptStore.getState().restoreState(createBlankScriptProjectState(projectDir));
+      setTimeline(createDefaultTimeline());
+      setSrtEntries([]);
+      clearAIAnalysis();
+      setProjectDir(projectDir);
+      await window.electronAPI.addRecentProject(projectDir);
+      void syncWorkspaceState();
+      setSetupError(null);
+    },
+    [clearAIAnalysis, setSrtEntries, setTimeline, syncWorkspaceState],
+  );
+
+  /** auto-run：把导入弹窗选择的写稿模型写入项目绑定，供起跑时 generateScriptDraft 解析。 */
+  const applyAutoRunModelBinding = useCallback(
+    async (
+      projectDir: string,
+      autoParams: AutoWorkflowParams,
+      modelBinding: { providerId: string; model: string } | null,
+    ) => {
+      if (!modelBinding) return;
+      await useAIStore.getState().loadProjectBindings(projectDir);
+      await useAIStore.getState().setProjectBinding(
+        userPromptBindingKey('script-template', autoParams.templateId),
+        {
+          providerId: modelBinding.providerId,
+          model: modelBinding.model,
+          imageProviderId: null,
+          imageModel: null,
+        },
+      );
+    },
+    [],
+  );
+
+  /**
    * 导入文稿回调：在指定父目录下创建以项目名命名的文件夹，
    * 初始化空白脚本项目状态，将原稿暂存到 store，
    * 导航到脚本工作台后自动写入 original.md 并触发 AI 写稿。
@@ -772,37 +612,14 @@ export default function App() {
       }
       const projectDir = `${parentDir}/${trimmedName}`;
 
-      clearCurrentProject();
-      useScriptStore.getState().clearProjectSession();
-      useScriptStore.getState().restoreState(createBlankScriptProjectState(projectDir));
+      await bootstrapImportedProject(projectDir);
       // 暂存原稿，进入工作台后由 useEffect 落盘并起飞 AI 写稿
       useScriptStore.getState().setPendingImportedScript({ content });
-
-      setTimeline(createDefaultTimeline());
-      setSrtEntries([]);
-      clearAIAnalysis();
-      setProjectDir(projectDir);
-      await window.electronAPI.addRecentProject(projectDir);
-      void syncWorkspaceState();
-      setSetupError(null);
 
       if (autoMode) {
         // 先把原稿落盘——失败时直接抛出，pendingAutoParams 不会被污染
         await window.electronAPI.saveScriptFile(projectDir, 'original.md', content);
-        // 把用户在导入弹窗选择的写稿模型写入项目绑定，
-        // 供 auto-run 起跑时 generateScriptDraft 解析使用。
-        if (modelBinding) {
-          await useAIStore.getState().loadProjectBindings(projectDir);
-          await useAIStore.getState().setProjectBinding(
-            userPromptBindingKey('script-template', autoParams.templateId),
-            {
-              providerId: modelBinding.providerId,
-              model: modelBinding.model,
-              imageProviderId: null,
-              imageModel: null,
-            },
-          );
-        }
+        await applyAutoRunModelBinding(projectDir, autoParams, modelBinding);
         useAIStore.getState().setPendingAutoParams(autoParams);
         // 同时清掉 pending，否则进 ScriptWorkbench 时会被原写稿流程消费
         useScriptStore.getState().setPendingImportedScript(null);
@@ -812,7 +629,7 @@ export default function App() {
 
       setPage('script-workbench');
     },
-    [clearAIAnalysis, setPage, setSrtEntries, setTimeline, syncWorkspaceState],
+    [applyAutoRunModelBinding, bootstrapImportedProject, setPage],
   );
 
   /**
@@ -830,33 +647,12 @@ export default function App() {
   ) => {
     const projectDir = `${parentDir}/${title}`;
 
-    clearCurrentProject();
-    useScriptStore.getState().clearProjectSession();
-    useScriptStore.getState().restoreState(createBlankScriptProjectState(projectDir));
+    await bootstrapImportedProject(projectDir);
     // 设置待处理导入源，进入工作台后自动触发导入
     useScriptStore.getState().setPendingMediaImport(source);
 
-    setTimeline(createDefaultTimeline());
-    setSrtEntries([]);
-    clearAIAnalysis();
-    setProjectDir(projectDir);
-    await window.electronAPI.addRecentProject(projectDir);
-    void syncWorkspaceState();
-    setSetupError(null);
-
     if (autoMode) {
-      if (modelBinding) {
-        await useAIStore.getState().loadProjectBindings(projectDir);
-        await useAIStore.getState().setProjectBinding(
-          userPromptBindingKey('script-template', autoParams.templateId),
-          {
-            providerId: modelBinding.providerId,
-            model: modelBinding.model,
-            imageProviderId: null,
-            imageModel: null,
-          },
-        );
-      }
+      await applyAutoRunModelBinding(projectDir, autoParams, modelBinding);
       useAIStore.getState().setPendingAutoParams(autoParams);
       // 注意：pendingMediaImport 不在这里清理，由 AutoRunController（Task 10/11）
       // 在导入启动后自行清掉，避免 ScriptWorkbench 后续误消费
@@ -864,7 +660,7 @@ export default function App() {
       return;
     }
     setPage('script-workbench');
-  }, [clearAIAnalysis, setPage, setSrtEntries, setTimeline, syncWorkspaceState]);
+  }, [applyAutoRunModelBinding, bootstrapImportedProject, setPage]);
 
   const handleCloseProject = useCallback(() => {
     clearCurrentProject();

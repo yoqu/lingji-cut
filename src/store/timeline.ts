@@ -42,6 +42,14 @@ type OverlayClipboardItem = OverlayDraft & { mode: OverlayClipboardMode };
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
+/** 聚合多路保存状态：error > saving > saved > 首路状态。状态栏用。 */
+export function mergeSaveStatus(a: SaveStatus, b: SaveStatus): SaveStatus {
+  if (a === 'error' || b === 'error') return 'error';
+  if (a === 'saving' || b === 'saving') return 'saving';
+  if (a === 'saved' || b === 'saved') return 'saved';
+  return a;
+}
+
 export interface TimelineStore {
   timeline: TimelineData;
   srtEntries: SrtEntry[];

@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
+import { readTextIfExists, readTextIfExistsSync } from './fs-utils';
 import {
   DEFAULT_PROMPT_YAML,
   PROMPT_KINDS,
@@ -28,23 +28,33 @@ function projectPromptFilePath(projectDir: string, kind: PromptKind): string {
   return path.join(projectDir, PROJECT_SUBDIR, kindToRelativePath(kind));
 }
 
-async function readFileIfExists(filePath: string): Promise<string | null> {
+/**
+ * 解析覆盖文件并做版本门槛：覆盖的 version 低于内置模板 version 视为过旧（占位符
+ * 集合可能已不兼容，如 cards.segment v19 的 {{presetMotionTokens}}），跳过该层。
+ * 无 version 的手写覆盖不参与比较，保持生效。
+ */
+function parseUsableOverride(raw: string, kind: PromptKind, scopeLabel: string): PromptTemplate | null {
+  let template: PromptTemplate;
   try {
-    return await fs.readFile(filePath, 'utf-8');
+    template = parsePromptYaml(raw, kind).template;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
+    console.warn(`[prompts] ${scopeLabel} ${kind} YAML 解析失败，跳过该覆盖：`, err);
+    return null;
   }
+  const builtinVersion = getBuiltinPromptTemplate(kind).version;
+  if (
+    typeof template.version === 'number' &&
+    typeof builtinVersion === 'number' &&
+    template.version < builtinVersion
+  ) {
+    console.warn(
+      `[prompts] ${scopeLabel} ${kind} 覆盖版本过旧（v${template.version} < 内置 v${builtinVersion}），跳过该覆盖；如需继续自定义，请在设置页基于新版重新保存`,
+    );
+    return null;
+  }
+  return template;
 }
 
-function readFileIfExistsSync(filePath: string): string | null {
-  try {
-    return fsSync.readFileSync(filePath, 'utf-8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-}
 
 export async function readRawPromptYaml(
   scope: PromptScope,
@@ -52,10 +62,10 @@ export async function readRawPromptYaml(
   ctx: { userDataPath: string; projectDir?: string },
 ): Promise<string | null> {
   if (scope === 'builtin') return DEFAULT_PROMPT_YAML[kind];
-  if (scope === 'global') return readFileIfExists(globalPromptFilePath(ctx.userDataPath, kind));
+  if (scope === 'global') return readTextIfExists(globalPromptFilePath(ctx.userDataPath, kind));
   if (scope === 'project') {
     if (!ctx.projectDir) return null;
-    return readFileIfExists(projectPromptFilePath(ctx.projectDir, kind));
+    return readTextIfExists(projectPromptFilePath(ctx.projectDir, kind));
   }
   return null;
 }
@@ -104,13 +114,22 @@ export async function writePromptUserText(
   ctx: { userDataPath: string; projectDir?: string },
 ): Promise<string> {
   const currentRaw = await readRawPromptYaml(scope, kind, ctx);
-  let base = getBuiltinPromptTemplate(kind);
+  const builtin = getBuiltinPromptTemplate(kind);
+  let base = builtin;
   if (currentRaw && currentRaw.trim()) {
     try {
       base = parsePromptYaml(currentRaw, kind).template;
     } catch {
       // 覆盖文件可能是用户过去手写坏的 YAML；纯文本保存时用内置元数据重建。
     }
+  }
+  // 主动保存视为基于当前内置版本的选择：version 至少提到内置版本，
+  // 否则旧覆盖（version 过旧被 loader 跳过）重新保存后仍不生效。
+  if (
+    typeof builtin.version === 'number' &&
+    (typeof base.version !== 'number' || base.version < builtin.version)
+  ) {
+    base = { ...base, version: builtin.version };
   }
   const content = createPromptYamlFromUserText(base, userText);
   return writePromptYaml(scope, kind, content, ctx);
@@ -142,30 +161,36 @@ export async function loadEffectivePromptTemplate(
   kind: PromptKind,
   ctx: { userDataPath: string; projectDir?: string },
 ): Promise<EffectivePromptTemplate> {
-  // project > global > builtin
+  // project > global > builtin；解析失败或版本过旧的覆盖跳过该层
   if (ctx.projectDir) {
-    const projectRaw = await readFileIfExists(projectPromptFilePath(ctx.projectDir, kind));
+    const projectRaw = await readTextIfExists(projectPromptFilePath(ctx.projectDir, kind));
     if (projectRaw && projectRaw.trim()) {
-      try {
-        const { template } = parsePromptYaml(projectRaw, kind);
-        return { ...template, sourceScope: 'project' };
-      } catch (err) {
-        console.warn(`[prompts] 项目级 ${kind} YAML 解析失败，回退到全局：`, err);
-      }
+      const template = parseUsableOverride(projectRaw, kind, '项目级');
+      if (template) return { ...template, sourceScope: 'project' };
     }
   }
 
-  const globalRaw = await readFileIfExists(globalPromptFilePath(ctx.userDataPath, kind));
+  const globalRaw = await readTextIfExists(globalPromptFilePath(ctx.userDataPath, kind));
   if (globalRaw && globalRaw.trim()) {
-    try {
-      const { template } = parsePromptYaml(globalRaw, kind);
-      return { ...template, sourceScope: 'global' };
-    } catch (err) {
-      console.warn(`[prompts] 全局 ${kind} YAML 解析失败，回退到内置：`, err);
-    }
+    const template = parseUsableOverride(globalRaw, kind, '全局');
+    if (template) return { ...template, sourceScope: 'global' };
   }
 
   return { ...getBuiltinPromptTemplate(kind), sourceScope: 'builtin' };
+}
+
+/** 卡片生成各入口共用的 cards.segment + card.image + cards.animation 三模板装载。 */
+export async function loadCardTemplates(ctx: { userDataPath: string; projectDir?: string }): Promise<{
+  cardTemplate: EffectivePromptTemplate;
+  imageTemplate: EffectivePromptTemplate;
+  animationTemplate: EffectivePromptTemplate;
+}> {
+  const [cardTemplate, imageTemplate, animationTemplate] = await Promise.all([
+    loadEffectivePromptTemplate('cards.segment', ctx),
+    loadEffectivePromptTemplate('card.image', ctx),
+    loadEffectivePromptTemplate('cards.animation', ctx),
+  ]);
+  return { cardTemplate, imageTemplate, animationTemplate };
 }
 
 export function loadEffectivePromptTemplateSync(
@@ -173,24 +198,16 @@ export function loadEffectivePromptTemplateSync(
   ctx: { userDataPath: string; projectDir?: string },
 ): EffectivePromptTemplate {
   if (ctx.projectDir) {
-    const projectRaw = readFileIfExistsSync(projectPromptFilePath(ctx.projectDir, kind));
+    const projectRaw = readTextIfExistsSync(projectPromptFilePath(ctx.projectDir, kind));
     if (projectRaw && projectRaw.trim()) {
-      try {
-        const { template } = parsePromptYaml(projectRaw, kind);
-        return { ...template, sourceScope: 'project' };
-      } catch {
-        /* fallthrough */
-      }
+      const template = parseUsableOverride(projectRaw, kind, '项目级');
+      if (template) return { ...template, sourceScope: 'project' };
     }
   }
-  const globalRaw = readFileIfExistsSync(globalPromptFilePath(ctx.userDataPath, kind));
+  const globalRaw = readTextIfExistsSync(globalPromptFilePath(ctx.userDataPath, kind));
   if (globalRaw && globalRaw.trim()) {
-    try {
-      const { template } = parsePromptYaml(globalRaw, kind);
-      return { ...template, sourceScope: 'global' };
-    } catch {
-      /* fallthrough */
-    }
+    const template = parseUsableOverride(globalRaw, kind, '全局');
+    if (template) return { ...template, sourceScope: 'global' };
   }
   return { ...getBuiltinPromptTemplate(kind), sourceScope: 'builtin' };
 }
@@ -207,11 +224,19 @@ export async function listPromptOverview(
 ): Promise<PromptKindOverview[]> {
   const result: PromptKindOverview[] = [];
   for (const kind of PROMPT_KINDS) {
-    const hasGlobal = Boolean(await readFileIfExists(globalPromptFilePath(ctx.userDataPath, kind)));
-    const hasProject = ctx.projectDir
-      ? Boolean(await readFileIfExists(projectPromptFilePath(ctx.projectDir, kind)))
-      : false;
-    const effectiveScope: PromptScope = hasProject ? 'project' : hasGlobal ? 'global' : 'builtin';
+    const globalRaw = await readTextIfExists(globalPromptFilePath(ctx.userDataPath, kind));
+    const projectRaw = ctx.projectDir
+      ? await readTextIfExists(projectPromptFilePath(ctx.projectDir, kind))
+      : null;
+    const hasGlobal = Boolean(globalRaw);
+    const hasProject = Boolean(projectRaw);
+    // effectiveScope 与 loadEffectivePromptTemplate 同判据（解析失败/版本过旧的覆盖不算生效）
+    const effectiveScope: PromptScope =
+      projectRaw?.trim() && parseUsableOverride(projectRaw, kind, '项目级')
+        ? 'project'
+        : globalRaw?.trim() && parseUsableOverride(globalRaw, kind, '全局')
+          ? 'global'
+          : 'builtin';
     result.push({ kind, effectiveScope, hasGlobal, hasProject });
   }
   return result;

@@ -1,11 +1,32 @@
 import { AbsoluteFill, Img, OffthreadVideo, Video } from 'remotion';
 import type { CSSProperties } from 'react';
 import type { OverlayItem } from '../../types';
-import { LegacyCard } from './LegacyCard';
 import { CardHost } from '../card-host';
 import { resolveAssetSrc } from '../asset-src';
 import { useIsRendering } from '../use-is-rendering';
 import { resolveAICardRenderPlan } from '../ai-card-render-plan';
+
+/** 卡片内容不可用（媒体未生成 / 缺编译产物）时的通用降级占位。 */
+function CardPlaceholder({ title }: { title?: string }) {
+  return (
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        display: 'grid',
+        placeItems: 'center',
+        background: '#101827',
+        color: '#f6f8fb',
+        textAlign: 'center',
+        padding: 40,
+        gap: 12,
+      }}
+    >
+      <div style={{ fontSize: 28, fontWeight: 700 }}>{title || '卡片'}</div>
+      <div style={{ fontSize: 20, opacity: 0.7 }}>卡片内容不可用，请重新生成</div>
+    </div>
+  );
+}
 
 export function AICardOverlay({
   overlay,
@@ -63,11 +84,11 @@ export function AICardOverlay({
     );
   }
 
-  // 旧 HTML 卡 / 未编译 motion 卡 / 媒体未生成 → 降级占位，提示用户重新生成。
+  // 未编译 motion 卡 / 媒体未生成 → 降级占位，提示用户重新生成。
   if (plan.kind === 'placeholder') {
     return (
       <AbsoluteFill style={wrapper}>
-        <LegacyCard title={card.title} />
+        <CardPlaceholder title={card.title} />
       </AbsoluteFill>
     );
   }

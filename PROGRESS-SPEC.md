@@ -34,6 +34,18 @@
 | `cover` | `#c084fc` 浅紫 | 🖼️ |
 | `io` | `#9ca3af` 灰色 | 📁 |
 
+## 观测面板（AI 生成过程）
+
+统一进度系统的过程观测扩展（非独立进度弹窗）：AI 卡片多 agent 生成（导演→雕刻→审查）
+的流式输出、工具调用与编排里程碑，经 `agent-feed:event` 通道进入 `src/store/agent-feed.ts`，
+由 `AgentObservationPanel`（状态栏上方浮层）以对话流呈现。
+
+- 关联约定：观测会话的 `feedId` = 任务在 task-progress store 的 id
+  （渲染端触发经 IPC args 透传；MCP/CLI headless 为 `pipeline:<taskId>`）。
+- 入口：进度面板任务行「查看过程」按钮 + 状态栏观测图标。
+- 记录独立于任务生命周期（任务消失后仍可回看），手动清除或切换项目时释放。
+- 新的多 agent 生成链路接入观测时复用本通道，禁止另建独立事件通道或弹窗。
+
 ## 废弃组件
 
 - `AgentProgressBar`（编辑器上方）→ 由统一底部系统替代

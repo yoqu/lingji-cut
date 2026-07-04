@@ -7,6 +7,7 @@ export const PIPELINE_TASK_KINDS = [
   'generate_storyboard',
   'generate_cards',
   'generate_motion',
+  'sculpt_card',
   'export_video',
   'import_video_source',
 ] as const;

@@ -5,10 +5,16 @@
  *   get_ks_cookie    → login  (快手 APP 扫码，有头)
  *   KSVideo.upload   → uploadVideo / uploadKuaishouVideo
  */
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import type { Page } from 'playwright';
 import { withContext } from '../engine';
+import {
+  formatScheduleDate,
+  qrcodePngPath,
+  runLoginPoll,
+  runUploadWithContext,
+  saveQrcodeFromDataUrl,
+  sleep,
+} from '../platform-shared';
 import type { LoginOptions, PlatformModule, UploadVideoOptions } from '../types';
 
 // ─── URLs ─────────────────────────────────────────────────────────────────────
@@ -27,21 +33,6 @@ const KUAISHOU_MANAGE_URL_PATTERN = '**/article/manage/video?status=2&from=publi
 
 const KUAISHOU_COOKIE_INVALID_SELECTOR =
   "div.names div.container div.name:text('机构服务')";
-
-// ─── Utilities ────────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/** port of publish_date.strftime("%Y-%m-%d %H:%M:%S") */
-function formatDateKs(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
-}
 
 // ─── Cookie-validity helpers ──────────────────────────────────────────────────
 
@@ -72,14 +63,13 @@ async function _extractKsQrcodeSrc(page: Page): Promise<string> {
   await loginForm.waitFor({ state: 'visible', timeout: 30_000 });
 
   const qrcodeImg = loginForm.locator('div.qr-login img[alt="qrcode"]').first();
+  let needSwitch: boolean;
   try {
-    if (!(await qrcodeImg.count()) || !(await qrcodeImg.isVisible())) {
-      const platformSwitch = loginForm.locator('div.platform-switch').first();
-      await platformSwitch.waitFor({ state: 'visible', timeout: 10_000 });
-      await platformSwitch.click();
-      await sleep(1000);
-    }
+    needSwitch = !(await qrcodeImg.count()) || !(await qrcodeImg.isVisible());
   } catch {
+    needSwitch = true;
+  }
+  if (needSwitch) {
     const platformSwitch = loginForm.locator('div.platform-switch').first();
     await platformSwitch.waitFor({ state: 'visible', timeout: 10_000 });
     await platformSwitch.click();
@@ -132,12 +122,7 @@ async function _saveKsQrcode(
 ): Promise<void> {
   try {
     const src = await _extractKsQrcodeSrc(page);
-    const pngPath = path.join(path.dirname(storagePath), 'ks_login_qrcode.png');
-    const match = src.match(/^data:image\/[^;]+;base64,(.+)$/s);
-    if (match) {
-      await fs.writeFile(pngPath, Buffer.from(match[1], 'base64'));
-      if (onQrcode) onQrcode(pngPath);
-    }
+    await saveQrcodeFromDataUrl(src, qrcodePngPath(storagePath, 'ks_login_qrcode.png'), onQrcode);
   } catch {
     /* silent: best-effort */
   }
@@ -207,7 +192,7 @@ async function _setKsThumbnail(page: Page, thumbnailPath: string): Promise<void>
  * Uses Ant Design DatePicker React native-setter trick to set the scheduled publish time.
  */
 async function _setKsScheduleTime(page: Page, publishDate: Date): Promise<void> {
-  const publishDateStr = formatDateKs(publishDate);
+  const publishDateStr = formatScheduleDate(publishDate, { withSeconds: true });
 
   // 1. Switch to "定时发布" radio (text match is more stable than position)
   await page.locator('label.ant-radio-wrapper').filter({ hasText: '定时发布' }).click();
@@ -365,32 +350,30 @@ export const kuaishou: PlatformModule = {
 
         await _saveKsQrcode(page, opts.storageStatePath, opts.onQrcode);
 
-        const POLL_INTERVAL = 3000;
-        const MAX_CHECKS = 100;
-        for (let i = 0; i < MAX_CHECKS; i++) {
+        const result = await runLoginPoll({
           // port of: if page.url.startswith(KUAISHOU_UPLOAD_URL) or await _is_ks_login_page_gone(page):
-          if (
-            page.url().startsWith(KUAISHOU_UPLOAD_URL) ||
-            (await _isKsLoginPageGone(page))
-          ) {
-            await ctx.storageState({ path: opts.storageStatePath });
-            return { success: true, message: '快手扫码登录成功' };
-          }
-
-          if (await _isKsQrcodeExpired(page)) {
-            // port of: refresh_button = page.locator("p.qrcode-refresh").first
-            const refreshButton = page.locator('p.qrcode-refresh').first();
-            if (await refreshButton.count()) {
-              await refreshButton.click();
-              await sleep(1000);
+          isCompleted: async () =>
+            page.url().startsWith(KUAISHOU_UPLOAD_URL) || (await _isKsLoginPageGone(page)),
+          handleExpired: async () => {
+            if (await _isKsQrcodeExpired(page)) {
+              // port of: refresh_button = page.locator("p.qrcode-refresh").first
+              const refreshButton = page.locator('p.qrcode-refresh').first();
+              if (await refreshButton.count()) {
+                await refreshButton.click();
+                await sleep(1000);
+              }
+              await _saveKsQrcode(page, opts.storageStatePath, opts.onQrcode);
             }
-            await _saveKsQrcode(page, opts.storageStatePath, opts.onQrcode);
-          }
+          },
+          successMessage: '快手扫码登录成功',
+          timeoutMessage: '等待快手扫码登录超时',
+        });
 
-          await sleep(POLL_INTERVAL);
+        if (result.success) {
+          await ctx.storageState({ path: opts.storageStatePath });
         }
 
-        return { success: false, message: '等待快手扫码登录超时' };
+        return result;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         return { success: false, message };
@@ -420,14 +403,6 @@ export const kuaishou: PlatformModule = {
    * context 由 engine.withContext 管理；上传成功后更新 storageState
    */
   async uploadVideo(opts: UploadVideoOptions): Promise<void> {
-    await withContext(
-      { storageStatePath: opts.storageStatePath, headless: opts.headless },
-      async (ctx) => {
-        const page = await ctx.newPage();
-        await uploadKuaishouVideo(page, opts);
-        // port of: await context.storage_state(path=self.account_file)
-        await ctx.storageState({ path: opts.storageStatePath });
-      },
-    );
+    await runUploadWithContext(opts, (page) => uploadKuaishouVideo(page, opts));
   },
 };

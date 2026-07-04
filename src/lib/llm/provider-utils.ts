@@ -55,11 +55,59 @@ function backfillProviderThinking(settings: AISettings): AISettings {
   return { ...settings, llmProviders: nextProviders };
 }
 
+/**
+ * 清洗已下线的 provider 类型：
+ * - `anthropic` → `minimax`（同为 Anthropic Messages 协议，配置无损迁移）
+ * - `claude_code_acp` 已随 ACP 运行时移除，直接剔除；默认指向被剔除项时回退到首个可用 provider。
+ */
+function sanitizeRemovedProviderTypes(settings: AISettings): AISettings {
+  const providers = settings.llmProviders ?? [];
+  let mutated = false;
+  const nextProviders: LLMProvider[] = [];
+  for (const provider of providers) {
+    const rawType = provider.type as string;
+    if (rawType === 'claude_code_acp') {
+      mutated = true;
+      continue;
+    }
+    if (rawType === 'anthropic') {
+      mutated = true;
+      nextProviders.push({ ...provider, type: 'minimax' });
+      continue;
+    }
+    nextProviders.push(provider);
+  }
+  if (!mutated) return settings;
+  const defaultStillValid = nextProviders.some((p) => p.id === settings.defaultProviderId);
+  return {
+    ...settings,
+    llmProviders: nextProviders,
+    defaultProviderId: defaultStillValid
+      ? settings.defaultProviderId
+      : (nextProviders[0]?.id ?? null),
+  };
+}
+
+/** 迁移完成后剥离旧的单 provider 字段，避免双真源继续存活。 */
+function stripLegacyLlmFields(settings: AISettings): AISettings {
+  if (!settings.llmBaseUrl && !settings.llmApiKey && !settings.llmModel) {
+    return settings;
+  }
+  return { ...settings, llmBaseUrl: '', llmApiKey: '', llmModel: '' };
+}
+
 export function migrateToProviders(settings: AISettings): AISettings {
   if (settings.llmProviders && settings.llmProviders.length > 0) {
-    return backfillProviderThinking(settings);
+    return stripLegacyLlmFields(sanitizeRemovedProviderTypes(backfillProviderThinking(settings)));
   }
   if (!settings.llmBaseUrl) {
+    if (
+      Array.isArray(settings.llmProviders) &&
+      settings.defaultProviderId === null &&
+      settings.defaultModel === null
+    ) {
+      return settings;
+    }
     return { ...settings, llmProviders: [], defaultProviderId: null, defaultModel: null };
   }
   const provider: LLMProvider = {
@@ -67,25 +115,14 @@ export function migrateToProviders(settings: AISettings): AISettings {
     name: inferProviderName(settings.llmBaseUrl),
     type: inferProviderType(settings.llmBaseUrl),
     baseUrl: settings.llmBaseUrl,
-    apiKey: settings.llmApiKey,
+    apiKey: settings.llmApiKey ?? '',
     models: settings.llmModel ? [settings.llmModel] : [],
     enableThinking: settings.enableThinking ?? true,
   };
-  return {
+  return stripLegacyLlmFields({
     ...settings,
     llmProviders: [provider],
     defaultProviderId: provider.id,
     defaultModel: settings.llmModel || null,
-  };
-}
-
-export function resolveProvider(
-  providers: LLMProvider[],
-  providerId: string | null,
-  defaultProviderId: string | null,
-): LLMProvider | null {
-  if (providers.length === 0) return null;
-  if (providerId) return providers.find((p) => p.id === providerId) ?? null;
-  if (defaultProviderId) return providers.find((p) => p.id === defaultProviderId) ?? null;
-  return providers[0];
+  });
 }

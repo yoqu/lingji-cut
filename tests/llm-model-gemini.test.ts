@@ -10,7 +10,6 @@ vi.mock('@langchain/openai', () => ({ ChatOpenAI: chatOpenAIMock }));
 vi.mock('@langchain/google-genai', () => ({ ChatGoogleGenerativeAI: chatGoogleMock }));
 
 import { createChatModelFromProvider } from '../src/lib/llm/model';
-import { ClaudeCodeAcpChatModel } from '../src/lib/llm/claude-code-acp-model';
 
 function makeProvider(overrides: Partial<LLMProvider> = {}): LLMProvider {
   return {
@@ -125,24 +124,5 @@ describe('createChatModelFromProvider', () => {
 
     const config = chatOpenAIMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(config.modelKwargs).toEqual({ enable_thinking: false });
-  });
-
-  it('dispatches to Claude Code ACP adapter without constructing HTTP chat models', () => {
-    const model = createChatModelFromProvider(
-      makeProvider({
-        type: 'claude_code_acp',
-        baseUrl: '',
-        apiKey: '',
-        models: ['claude-code-default'],
-      }),
-      'claude-code-default',
-    );
-
-    expect(model).toBeInstanceOf(ClaudeCodeAcpChatModel);
-    expect(chatOpenAIMock).not.toHaveBeenCalled();
-    expect(chatGoogleMock).not.toHaveBeenCalled();
-    expect(typeof (model as unknown as { invoke: unknown }).invoke).toBe('function');
-    expect(typeof (model as unknown as { stream: unknown }).stream).toBe('function');
-    expect(typeof (model as unknown as { bind: unknown }).bind).toBe('function');
   });
 });

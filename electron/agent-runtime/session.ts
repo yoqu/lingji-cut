@@ -30,20 +30,9 @@ export interface PiDriverLike {
   dispose(): void;
 }
 
-/**
- * @deprecated 旧子进程探测依赖。in-process 后不再使用，保留类型以兼容旧调用方
- * （runtime-registry 仍按旧签名 `new AgentSession({ binaryManager })` 构造）。
- */
-export interface SessionBinaryManager {
-  resolveBinary: (name: string) => Promise<string | null>;
-  ensureNodeInPath?: () => void;
-}
-
 export interface AgentSessionDeps {
   /** 可注入 driver 工厂；默认 () => new PiInProcessSession()。 */
   createDriver?: () => PiDriverLike;
-  /** @deprecated 旧子进程依赖，已忽略。 */
-  binaryManager?: SessionBinaryManager;
 }
 
 export interface AgentSessionStartInput {
@@ -55,8 +44,6 @@ export interface AgentSessionStartInput {
   reasoning?: string;
   /** 额外环境变量；其中 PI_CODING_AGENT_DIR 用作 pi 配置目录（agentDir）。 */
   env?: Record<string, string>;
-  /** @deprecated 旧 pi RPC 派生会话参数，in-process 不使用。 */
-  parentSession?: string | null;
   /** resume 已存在会话（pi 会话 externalId）。 */
   resumeSessionId?: string | null;
   isResuming?: boolean;

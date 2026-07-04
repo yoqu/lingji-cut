@@ -8,7 +8,7 @@ import {
 } from '../electron/pipeline/types';
 
 describe('pipeline types', () => {
-  it('exports the 10 task kinds from spec', () => {
+  it('exports the 11 task kinds from spec', () => {
     expect(PIPELINE_TASK_KINDS).toEqual([
       'tts',
       'write_script',
@@ -18,6 +18,7 @@ describe('pipeline types', () => {
       'generate_storyboard',
       'generate_cards',
       'generate_motion',
+      'sculpt_card',
       'export_video',
       'import_video_source',
     ]);

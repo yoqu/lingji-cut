@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { readTextIfExists } from './fs-utils';
 import {
   PROMPT_CATEGORIES,
   SCRIPT_TEMPLATE_SEEDS,
@@ -33,15 +34,6 @@ function sanitizeId(id: string): string {
     throw new Error(`user-prompt id 非法：${id}（仅允许字母数字与 . _ - 且必须以字母数字开头）`);
   }
   return id;
-}
-
-async function readFileIfExists(filePath: string): Promise<string | null> {
-  try {
-    return await fs.readFile(filePath, 'utf-8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
 }
 
 async function listYamlFileIds(dir: string): Promise<string[]> {
@@ -93,7 +85,7 @@ export async function listUserPromptEntries(
       result.push(seedToEntry(seed));
       continue;
     }
-    const raw = await readFileIfExists(entryFilePath(ctx.userDataPath, category, seed.id));
+    const raw = await readTextIfExists(entryFilePath(ctx.userDataPath, category, seed.id));
     if (!raw) {
       result.push(seedToEntry(seed));
       continue;
@@ -109,7 +101,7 @@ export async function listUserPromptEntries(
 
   for (const id of fileIds) {
     if (seedMap.has(id)) continue;
-    const raw = await readFileIfExists(entryFilePath(ctx.userDataPath, category, id));
+    const raw = await readTextIfExists(entryFilePath(ctx.userDataPath, category, id));
     if (!raw) continue;
     try {
       const parsed = parseUserPromptYaml(raw, { id, category });
@@ -129,7 +121,7 @@ export async function readUserPromptEntry(
 ): Promise<UserPromptEntry | null> {
   const safeId = sanitizeId(id);
   const seed = seedsOfCategory(category).find((s) => s.id === safeId);
-  const raw = await readFileIfExists(entryFilePath(ctx.userDataPath, category, safeId));
+  const raw = await readTextIfExists(entryFilePath(ctx.userDataPath, category, safeId));
   if (raw) {
     try {
       const parsed = parseUserPromptYaml(raw, { id: safeId, category });
@@ -165,7 +157,7 @@ export async function writeUserPromptEntry(
   const safeId = sanitizeId(input.id);
   const filePath = entryFilePath(ctx.userDataPath, input.category, safeId);
   const now = new Date().toISOString();
-  const existingRaw = await readFileIfExists(filePath);
+  const existingRaw = await readTextIfExists(filePath);
   const createdAt = (() => {
     if (input.createdAt) return input.createdAt;
     if (!existingRaw) return now;
@@ -290,7 +282,7 @@ export async function migrateLegacyScriptTemplates(
       continue;
     }
     const targetPath = entryFilePath(ctx.userDataPath, 'script-template', safeId);
-    const existing = await readFileIfExists(targetPath);
+    const existing = await readTextIfExists(targetPath);
     if (existing) continue;
 
     const yaml = serializeUserPromptYaml({

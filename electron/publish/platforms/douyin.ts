@@ -5,10 +5,16 @@
  *   douyin_cookie_gen → login  (QR 扫码，有头)
  *   DouYinVideo.upload → uploadVideo / uploadDouyinVideo
  */
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import type { Page } from 'playwright';
 import { withContext } from '../engine';
+import {
+  formatScheduleDate,
+  qrcodePngPath,
+  runLoginPoll,
+  runUploadWithContext,
+  saveQrcodeFromDataUrl,
+  sleep,
+} from '../platform-shared';
 import type { LoginOptions, PlatformModule, UploadVideoOptions } from '../types';
 
 // ─── URLs ────────────────────────────────────────────────────────────────────
@@ -22,18 +28,6 @@ const PUBLISH_V1_URL =
 const PUBLISH_V2_URL =
   'https://creator.douyin.com/creator-micro/content/post/video?enter_from=publish_page';
 const MANAGE_URL_GLOB = 'https://creator.douyin.com/creator-micro/content/manage**';
-
-// ─── Utilities ───────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/** Port of Python's publish_date.strftime("%Y-%m-%d %H:%M") */
-function formatScheduleDate(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 // ─── DouYinBaseUploader helpers ───────────────────────────────────────────────
 
@@ -263,12 +257,7 @@ async function _tryExtractAndSaveQrcode(
 ): Promise<void> {
   try {
     const src = await _extractQrcodeSrc(page);
-    const pngPath = path.join(path.dirname(storagePath), 'douyin_qrcode.png');
-    const match = src.match(/^data:image\/[^;]+;base64,(.+)$/s);
-    if (match) {
-      await fs.writeFile(pngPath, Buffer.from(match[1], 'base64'));
-      onQrcode(pngPath);
-    }
+    await saveQrcodeFromDataUrl(src, qrcodePngPath(storagePath, 'douyin_qrcode.png'), onQrcode);
   } catch {
     // 没定位到二维码元素——请直接在弹出的浏览器里扫码，继续等登录跳转
   }
@@ -281,27 +270,23 @@ async function _waitForLogin(
   page: Page,
   storagePath: string,
   onQrcode?: (pngPath: string) => void,
-  pollInterval = 3000,
-  maxChecks = 100,
 ): Promise<{ success: boolean; message: string }> {
-  for (let i = 0; i < maxChecks; i++) {
-    if (await _isLoginCompleted(page)) {
-      return { success: true, message: '抖音扫码登录成功' };
-    }
-
+  return runLoginPoll({
+    isCompleted: () => _isLoginCompleted(page),
     // 二维码失效 → 点击刷新
-    const expiredBox = page.getByText('二维码失效', { exact: true }).locator('..').first();
-    if ((await expiredBox.count()) && (await expiredBox.isVisible())) {
-      await expiredBox.click();
-      await sleep(1000);
-      if (onQrcode) {
-        await _tryExtractAndSaveQrcode(page, storagePath, onQrcode);
+    handleExpired: async () => {
+      const expiredBox = page.getByText('二维码失效', { exact: true }).locator('..').first();
+      if ((await expiredBox.count()) && (await expiredBox.isVisible())) {
+        await expiredBox.click();
+        await sleep(1000);
+        if (onQrcode) {
+          await _tryExtractAndSaveQrcode(page, storagePath, onQrcode);
+        }
       }
-    }
-
-    await sleep(pollInterval);
-  }
-  return { success: false, message: '等待抖音扫码登录超时' };
+    },
+    successMessage: '抖音扫码登录成功',
+    timeoutMessage: '等待抖音扫码登录超时',
+  });
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -461,13 +446,6 @@ export const douyin: PlatformModule = {
    * context 由 engine.withContext 管理；上传完成后刷新 storageState
    */
   async uploadVideo(opts: UploadVideoOptions): Promise<void> {
-    await withContext(
-      { storageStatePath: opts.storageStatePath, headless: opts.headless },
-      async (ctx) => {
-        const page = await ctx.newPage();
-        await uploadDouyinVideo(page, opts);
-        await ctx.storageState({ path: opts.storageStatePath });
-      },
-    );
+    await runUploadWithContext(opts, (page) => uploadDouyinVideo(page, opts));
   },
 };

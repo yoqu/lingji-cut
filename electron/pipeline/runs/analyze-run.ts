@@ -5,10 +5,13 @@ import { parseSrt } from '../../../src/lib/srt-parser';
 import { createPersistedAIState } from '../../../src/lib/ai-persistence';
 import { handleGenerateCardImage } from '../../card-media-handlers';
 import { assertCardRenders } from '../../remotion/smoke-render';
+import { createMotionCardAgentProvider } from '../motion-agent-run';
+import { makeAgentFeedCallback } from '../agent-feed';
+import type { MotionCardAgentProvider } from '../../../src/lib/ai-analysis';
 import { loadFullHeadlessAISettings, loadHeadlessProjectBindings } from '../headless-settings';
 import { GenerationError } from '../generation-error';
 import { HeadlessProjectContext } from '../context';
-import { loadEffectivePromptTemplate } from '../../prompts-io';
+import { loadCardTemplates, loadEffectivePromptTemplate } from '../../prompts-io';
 import { loadProjectFile } from '../../project-file';
 import type { GenerationRunCtx } from '../headless-generation';
 import type { SrtEntry } from '../../../src/types';
@@ -25,11 +28,11 @@ interface AnalyzeDeps {
 /**
  * 主进程 headless：分析字幕 → segments+cards → 写 project.json aiAnalysis 节。
  *
- * 默认 analyze 装配与 electron/main.ts 的 `analyze-srt` IPC 处理体保持一致的
- * LLM 注入（generateStructuredData/generateText/generateMotionSource 由 lib 层
- * 默认实现注入，main 也不显式传；本运行复刻 main 显式注入的 validateMotionSource
- * = assertCardRenders 与 generateCardImage = handleGenerateCardImage）。deps.analyze
- * 仅用于单测，跳过真实 LLM/网络。
+ * 默认 analyze 装配与 electron/main.ts 的 `analyze-srt` IPC 处理体保持一致的注入：
+ * generateStructuredData/generateText 由 lib 层默认实现；motion TSX 走
+ * generateMotionCard = pi 多 agent provider（唯一路径，无直连 LLM 回退）；
+ * validateMotionSource = assertCardRenders；generateCardImage = handleGenerateCardImage。
+ * deps.analyze 仅用于单测，跳过真实 LLM/网络。
  */
 export async function runAnalyzeHeadless(
   ctx: GenerationRunCtx,
@@ -53,13 +56,28 @@ export async function runAnalyzeHeadless(
   }
 
   // 模板与样式（mirror electron/main.ts 的 analyze-srt 处理体；kind 以源码为准）
-  const [planningTemplate, cardTemplate, imageTemplate, coverTemplate] = await Promise.all([
-    loadEffectivePromptTemplate('planning.segment', { userDataPath, projectDir: projectPath }),
-    loadEffectivePromptTemplate('cards.segment', { userDataPath, projectDir: projectPath }),
-    loadEffectivePromptTemplate('card.image', { userDataPath, projectDir: projectPath }),
-    loadEffectivePromptTemplate('cover.regeneration', { userDataPath, projectDir: projectPath }),
-  ]);
+  const [planningTemplate, { cardTemplate, imageTemplate, animationTemplate }, coverTemplate] =
+    await Promise.all([
+      loadEffectivePromptTemplate('planning.segment', { userDataPath, projectDir: projectPath }),
+      loadCardTemplates({ userDataPath, projectDir: projectPath }),
+      loadEffectivePromptTemplate('cover.regeneration', { userDataPath, projectDir: projectPath }),
+    ]);
   const projectStylePresetId = (await loadProjectFile(projectPath)).stylePresetId;
+
+  // Motion TSX 多 agent provider（懒构造 electron 依赖，vitest 下 deps.analyze mock 不触达）。
+  const generateMotionCard: MotionCardAgentProvider = async (mctx) => {
+    const { app } = await import('electron');
+    const provider = createMotionCardAgentProvider({
+      userDataPath,
+      projectPath,
+      rolesSeedDir: join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
+      signal: handle.signal,
+      onPhase: (phase) => handle.update({ phase: `卡片:${phase}` }),
+      // 观测面板关联键与统一进度条的 bridgeId 同值（pipeline:<taskId>）。
+      onAgentEvent: makeAgentFeedCallback(`pipeline:${handle.taskId}`),
+    });
+    return provider(mctx);
+  };
 
   // 默认 analyzeSrt 装配：复刻 main.ts analyze-srt 的 LLM 注入。
   // generateCardImage 复用主进程 handleGenerateCardImage（与 UI 行为一致，即时 materialize 图片卡）。
@@ -85,6 +103,7 @@ export async function runAnalyzeHeadless(
               signal: handle.signal,
             },
           ),
+        generateMotionCard,
         validateMotionSource: assertCardRenders,
       }));
 
@@ -95,6 +114,7 @@ export async function runAnalyzeHeadless(
     planningTemplate,
     cardTemplate,
     imageTemplate,
+    animationTemplate,
     coverTemplate,
     projectBindings,
     onProgress: (p: { phase?: string; percent?: number }) =>

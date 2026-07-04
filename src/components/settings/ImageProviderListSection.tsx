@@ -9,7 +9,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  EmptyState,
   Field,
   Input,
   ModalFooter,
@@ -21,13 +20,8 @@ import {
   validateImageProviderDraft,
 } from './ai-config-utils';
 import { useTaskProgressStore } from '../../store/task-progress';
-import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
+import { genProviderId, MediaProviderListSection } from './MediaProviderListSection';
 import styles from './ImageProviderListSection.module.css';
-
-/** 生成唯一 ID */
-function genId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 // ─── Capabilities 摘要（硬编码，避免拉入主进程依赖）───────────────────────
 
@@ -129,7 +123,7 @@ function getTypeLabel(type: ImageProviderType): string {
 /** 空白 ImageProvider 表单 */
 function emptyImageProvider(): ImageProvider {
   return {
-    id: genId(),
+    id: genProviderId(),
     name: '',
     type: 'jimeng',
     baseUrl: '',
@@ -470,138 +464,22 @@ export function ImageProviderListSection({
   defaultImageProviderId,
   onChange,
 }: Props) {
-  const [editTarget, setEditTarget] = useState<ImageProvider | null>(null);
-  const [isAdding, setIsAdding] = useState(false);
-
-  const handleSave = (updated: ImageProvider, setAsDefault: boolean) => {
-    let next: ImageProvider[];
-    if (isAdding) {
-      next = [...imageProviders, updated];
-    } else {
-      next = imageProviders.map((p) => (p.id === updated.id ? updated : p));
-    }
-    const newDefaultId = setAsDefault ? updated.id : (defaultImageProviderId ?? null);
-    onChange(next, newDefaultId);
-    setEditTarget(null);
-    setIsAdding(false);
-  };
-
-  const handleDelete = (id: string) => {
-    const next = imageProviders.filter((p) => p.id !== id);
-    const newDefaultId =
-      defaultImageProviderId === id ? (next[0]?.id ?? null) : (defaultImageProviderId ?? null);
-    onChange(next, newDefaultId);
-  };
-
-  const openAdd = () => {
-    setEditTarget(emptyImageProvider());
-    setIsAdding(true);
-  };
-
-  const openEdit = (p: ImageProvider) => {
-    setEditTarget({ ...p });
-    setIsAdding(false);
-  };
-
-  const closeDialog = () => {
-    setEditTarget(null);
-    setIsAdding(false);
-  };
-
   return (
-    <div className={styles.root}>
-      {imageProviders.length === 0 ? (
-        <EmptyState
-          eyebrow="Image Provider"
-          title="暂无图像 Provider"
-          description="点击下方按钮添加你的第一个图像 Provider。"
-          actions={
-            <Button type="button" variant="secondary" onClick={openAdd}>
-              + 添加图像 Provider
-            </Button>
-          }
-        />
-      ) : (
-        <>
-          <div className={styles.providerList}>
-            {imageProviders.map((p) => (
-              <div key={p.id} className={styles.providerCard}>
-                <div className={styles.providerHeader}>
-                  <div className={styles.providerTitleGroup}>
-                    <span className={styles.providerName}>{p.name || '未命名 Provider'}</span>
-                    {p.id === defaultImageProviderId ? (
-                      <Badge variant="info" size="xs">
-                        默认
-                      </Badge>
-                    ) : null}
-                    <span className={styles.providerTypeLabel}>
-                      {getTypeLabel(p.type)}
-                    </span>
-                  </div>
-                  <div className={styles.providerActions}>
-                    <TestButton provider={p} />
-                    {isLingjiManagedProviderId(p.id) ? (
-                      <Badge variant="secondary" size="xs">
-                        服务端托管
-                      </Badge>
-                    ) : (
-                      <>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleDelete(p.id)}
-                        >
-                          删除
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <span className={styles.providerCapsSummary}>
-                  {buildCapabilitiesSummaryText(p.type)}
-                </span>
-
-                {p.baseUrl ? <span className={styles.providerBaseUrl}>{p.baseUrl}</span> : null}
-
-                {p.models.length > 0 ? (
-                  <div className={styles.providerModels}>
-                    {p.models.map((m) => (
-                      <Badge key={m} variant="secondary" size="xs">
-                        {m}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <span className={styles.providerHint}>未配置模型</span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <Button
-            type="button"
-            variant="secondary"
-            className={styles.addProviderButton}
-            onClick={openAdd}
-          >
-            + 添加图像 Provider
-          </Button>
-        </>
-      )}
-
-      {editTarget && (
-        <ImageProviderDialog
-          initial={editTarget}
-          isDefault={isAdding ? false : editTarget.id === defaultImageProviderId}
-          onSave={handleSave}
-          onCancel={closeDialog}
-        />
-      )}
-    </div>
+    <MediaProviderListSection
+      providers={imageProviders}
+      defaultProviderId={defaultImageProviderId}
+      onChange={onChange}
+      createEmptyProvider={emptyImageProvider}
+      getTypeLabel={(p) => getTypeLabel(p.type)}
+      getCapsSummary={(p) => buildCapabilitiesSummaryText(p.type)}
+      emptyState={{
+        eyebrow: 'Image Provider',
+        title: '暂无图像 Provider',
+        description: '点击下方按钮添加你的第一个图像 Provider。',
+      }}
+      addLabel="+ 添加图像 Provider"
+      renderCardExtras={(p) => <TestButton provider={p} />}
+      renderDialog={(dialogProps) => <ImageProviderDialog {...dialogProps} />}
+    />
   );
 }

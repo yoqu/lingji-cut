@@ -73,6 +73,11 @@ export async function runCardsCommand(
     }
     case 'regenerate':
       return runGenerationCommand({ toolName: 'lingji_regenerate_card', flags, client, extraArgs: { cardId: requireId(positionals) } });
+    case 'sculpt': {
+      const extraArgs: Record<string, unknown> = { cardId: requireId(positionals) };
+      if (typeof flags.notes === 'string' && flags.notes.trim()) extraArgs.notes = flags.notes.trim();
+      return runGenerationCommand({ toolName: 'lingji_sculpt_card', flags, client, extraArgs });
+    }
     case 'regen-media':
       return runGenerationCommand({ toolName: 'lingji_regenerate_card_media', flags, client, extraArgs: { cardId: requireId(positionals) } });
     case 'convert': {
@@ -81,6 +86,6 @@ export async function runCardsCommand(
       return runGenerationCommand({ toolName: 'lingji_convert_card', flags, client, extraArgs: { cardId: requireId(positionals), to } });
     }
     default:
-      throw new CliError(`未知 cards 子命令: ${action ?? '(空)'}（支持 context/gen/list/show/update/validate/regenerate/regen-media/convert/delete）`, 'bad_args', 2);
+      throw new CliError(`未知 cards 子命令: ${action ?? '(空)'}（支持 context/gen/list/show/update/validate/regenerate/sculpt/regen-media/convert/delete）`, 'bad_args', 2);
   }
 }

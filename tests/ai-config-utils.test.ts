@@ -253,20 +253,6 @@ describe('ai-config-utils', () => {
     ).toEqual({});
   });
 
-  it('treats Claude Code ACP providers as not requiring base URL or API key', () => {
-    expect(
-      validateProviderDraft(
-        createProvider({
-          type: 'claude_code_acp',
-          name: 'Claude Code ACP',
-          baseUrl: '',
-          apiKey: '',
-          models: ['claude-code-default'],
-        }),
-      ),
-    ).toEqual({});
-  });
-
   it('wires an unsaved-change guard into AIConfigTab and settings navigation', () => {
     const aiConfigSource = readFileSync(
       new URL('../src/components/settings/AIConfigTab.tsx', import.meta.url),

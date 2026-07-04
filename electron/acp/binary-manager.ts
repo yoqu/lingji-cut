@@ -1,26 +1,20 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import fs from 'node:fs/promises';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { acpLog } from './acp-log';
 
 const execFileAsync = promisify(execFile);
 
-const AGENT_NPM_PACKAGE = '@agentclientprotocol/claude-agent-acp';
-const AGENT_BIN_NAME = 'claude-agent-acp';
-const NPM_OFFICIAL_REGISTRY = 'https://registry.npmjs.org';
-const LOG_SCOPE = 'acp-binary';
-
+/**
+ * Node 环境探测助手：确保打包后的 .app 能在 PATH 上找到用户的 node/npx
+ * （nvm/fnm/volta/Homebrew 安装均可），供 preflight 与 lingji CLI 子进程使用。
+ */
 export class BinaryManager {
-  private cachePath: string;
   private userNpmPrefix: string;
 
-  constructor(cacheBase?: string) {
-    const homeDir = getHomeDir();
-    this.cachePath = cacheBase ?? path.join(homeDir, '.lingji', 'acp-binaries', 'claude-acp');
-    this.userNpmPrefix = path.join(homeDir, '.lingji', 'npm-global');
+  constructor() {
+    this.userNpmPrefix = path.join(getHomeDir(), '.lingji', 'npm-global');
   }
 
   /**
@@ -48,18 +42,6 @@ export class BinaryManager {
     for (const userBinDir of this.getUserPrefixBinDirs()) {
       this.prependToPathIfMissing(userBinDir);
     }
-  }
-
-  /**
-   * 在所有 nvm/fnm/volta 管理的 node 版本 bin 目录中查找指定二进制。
-   * 用于解决 “default node 版本没装 X，但其他版本装了 X” 的场景。
-   */
-  findBinaryInNodeVersions(binName: string): string | null {
-    for (const binDir of this.collectNodeVersionBinDirs()) {
-      const candidate = path.join(binDir, binName);
-      if (existsSync(candidate)) return candidate;
-    }
-    return null;
   }
 
   /** 移除 npm_* 环境变量，避免 npm run dev 时继承的 npm 内部配置干扰子进程 */
@@ -93,180 +75,11 @@ export class BinaryManager {
     }
   }
 
-  async getInstalledVersion(): Promise<string | null> {
-    try {
-      const versionFile = path.join(this.cachePath, 'version.txt');
-      return (await fs.readFile(versionFile, 'utf-8')).trim();
-    } catch {
-      return null;
-    }
-  }
-
-  async getLatestVersion(): Promise<string | null> {
-    try {
-      const { stdout } = await execFileAsync(
-        'npm',
-        ['view', AGENT_NPM_PACKAGE, 'version', `--registry=${NPM_OFFICIAL_REGISTRY}`],
-        { timeout: 15_000, env: this.getCleanEnv() },
-      );
-      return stdout.trim();
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 通过 npm install -g 安装 agent 二进制。
-   * 参考 codeg 实现：使用官方 registry、EACCES 回退到用户本地 prefix。
-   */
-  async install(version: string): Promise<void> {
-    await fs.mkdir(this.cachePath, { recursive: true });
-
-    const pkg = `${AGENT_NPM_PACKAGE}@${version}`;
-    const registryArg = `--registry=${NPM_OFFICIAL_REGISTRY}`;
-    const env = this.getCleanEnv();
-
-    try {
-      await this.npmInstallGlobal(pkg, registryArg, env);
-    } catch (err) {
-      const stderr = (err as { stderr?: string }).stderr ?? String(err);
-      // EACCES: 权限不足 → 回退到用户本地 prefix
-      if (stderr.includes('EACCES')) {
-        await this.installToUserPrefix(pkg, registryArg, env);
-      } else if (stderr.includes('EEXIST')) {
-        // EEXIST: 文件冲突 → --force 重试
-        try {
-          await this.npmInstallGlobal(pkg, registryArg, env, true);
-        } catch (retryErr) {
-          const retryStderr = (retryErr as { stderr?: string }).stderr ?? String(retryErr);
-          if (retryStderr.includes('EACCES')) {
-            await this.installToUserPrefix(pkg, registryArg, env);
-          } else {
-            throw new Error(`npm install -g --force 失败: ${retryStderr}`);
-          }
-        }
-      } else {
-        throw new Error(`npm install -g 失败: ${stderr}`);
-      }
-    }
-
-    await fs.writeFile(path.join(this.cachePath, 'version.txt'), version, 'utf-8');
-  }
-
-  async uninstall(): Promise<void> {
-    try {
-      await fs.rm(this.cachePath, { recursive: true, force: true });
-    } catch {
-      // 目录不存在
-    }
-  }
-
-  /**
-   * 返回 spawn 命令：直接使用全局安装的二进制名称，而非 npx 包装。
-   * 调用方应在 spawn 时传入 getCleanEnv() 的环境变量。
-   *
-   * 查找顺序：
-   * 1. PATH 上的 `which claude-agent-acp`
-   * 2. 扫描所有 nvm/fnm/volta 管理的 node 版本 bin 目录
-   * 3. 用户本地 npm prefix (`~/.lingji/npm-global/bin`)
-   * 4. 回退到裸二进制名（由 spawn 自行解析 PATH；通常会 ENOENT）
-   */
-  getSpawnCommand(_version: string): { command: string; args: string[] } {
-    const resolved = this.whichSync(AGENT_BIN_NAME);
-    if (resolved) {
-      acpLog('info', LOG_SCOPE, 'getSpawnCommand: 命中 PATH (which)', { command: resolved });
-      return { command: resolved, args: [] };
-    }
-
-    const scanned = this.findBinaryInNodeVersions(AGENT_BIN_NAME);
-    if (scanned) {
-      // 将该版本 bin 目录加入 PATH，方便子进程内部再次 spawn 同目录工具
-      this.prependToPathIfMissing(path.dirname(scanned));
-      acpLog('info', LOG_SCOPE, 'getSpawnCommand: 命中 nvm/fnm/volta 版本目录', { command: scanned });
-      return { command: scanned, args: [] };
-    }
-
-    const userPrefixCandidate = this.findExistingExecutable(
-      this.getUserPrefixBinDirs(),
-      AGENT_BIN_NAME,
-    );
-    if (userPrefixCandidate) {
-      acpLog('info', LOG_SCOPE, 'getSpawnCommand: 命中用户本地 npm prefix', { command: userPrefixCandidate });
-      return { command: userPrefixCandidate, args: [] };
-    }
-
-    acpLog('error', LOG_SCOPE, 'getSpawnCommand: 未找到二进制，回退裸名（极可能 ENOENT）', {
-      binName: AGENT_BIN_NAME,
-      triedUserPrefix: `${this.userNpmPrefix}/bin`,
-    });
-    console.warn(
-      `[ACP] 未找到 ${AGENT_BIN_NAME} 二进制；spawn 将依赖 PATH 解析，可能触发 ENOENT。` +
-        ` 已尝试路径：which、nvm/fnm/volta 全部版本、${this.userNpmPrefix}/bin`,
-    );
-    return { command: AGENT_BIN_NAME, args: [] };
-  }
-
-  /** 公开：在 nvm 版本目录 / PATH 解析某依赖二进制（供 preflight 查 pi）。返回绝对路径或 null。 */
-  async resolveBinary(name: string): Promise<string | null> {
-    const inVersions = this.findBinaryInNodeVersions(name);
-    if (inVersions) return inVersions;
-    return this.findBinaryPath(name);
-  }
-
-  // ── 内部方法 ──────────────────────────────────────────────────────────
-
-  private async npmInstallGlobal(
-    pkg: string,
-    registryArg: string,
-    env: NodeJS.ProcessEnv,
-    force = false,
-  ): Promise<void> {
-    const args = ['install', '-g', registryArg, pkg];
-    if (force) args.splice(2, 0, '--force');
-
-    const { stderr } = await execFileAsync('npm', args, {
-      timeout: 120_000,
-      env,
-    });
-    // execFileAsync 在非零退出码时自动 throw，这里处理 stderr 中有警告但退出码为 0 的情况
-    if (stderr && (stderr.includes('ERR!') || stderr.includes('EACCES') || stderr.includes('EEXIST'))) {
-      const err = new Error(`npm install failed: ${stderr}`);
-      (err as Error & { stderr?: string }).stderr = stderr;
-      throw err;
-    }
-  }
-
-  /** 回退：安装到用户本地 prefix (~/.lingji/npm-global/) */
-  private async installToUserPrefix(
-    pkg: string,
-    registryArg: string,
-    env: NodeJS.ProcessEnv,
-  ): Promise<void> {
-    await fs.mkdir(this.userNpmPrefix, { recursive: true });
-    const prefixArg = `--prefix=${this.userNpmPrefix}`;
-
-    const { stderr } = await execFileAsync(
-      'npm',
-      ['install', '-g', prefixArg, registryArg, pkg],
-      { timeout: 120_000, env },
-    );
-    if (stderr && stderr.includes('ERR!')) {
-      // EEXIST in user prefix: --force 重试
-      if (stderr.includes('EEXIST')) {
-        await execFileAsync(
-          'npm',
-          ['install', '-g', '--force', prefixArg, registryArg, pkg],
-          { timeout: 120_000, env },
-        );
-        return;
-      }
-      throw new Error(`npm install to user prefix 失败: ${stderr}`);
-    }
-  }
-
   async findBinaryPath(name: string): Promise<string | null> {
     return this.whichSync(name);
   }
+
+  // ── 内部方法 ──────────────────────────────────────────────────────────
 
   private whichSync(name: string): string | null {
     const pathValue = this.getCleanEnv().PATH ?? this.getCleanEnv().Path ?? '';

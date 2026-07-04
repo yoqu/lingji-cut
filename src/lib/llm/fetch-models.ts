@@ -1,5 +1,4 @@
 import { LMSTUDIO_DEFAULT_BASE_URL, type LLMProvider } from '../../types/ai';
-import { CLAUDE_CODE_ACP_DEFAULT_MODEL } from './claude-code-acp-model';
 
 const GEMINI_DEFAULT_LIST_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const ANTHROPIC_DEFAULT_BASE = 'https://api.anthropic.com';
@@ -146,9 +145,6 @@ export async function fetchProviderModels(provider: LLMProvider): Promise<string
       if (!baseUrl) throw new Error('请先填写 Base URL');
       models = await fetchOpenAICompatibleModels(baseUrl, apiKey);
       break;
-    case 'anthropic':
-      models = await fetchAnthropicModels(baseUrl, apiKey);
-      break;
     case 'minimax':
       // MiniMax 走 Anthropic 兼容端点；模型列表也按 Anthropic /models 拉取，
       // 端点不支持时调用方会拿到报错、用户手动填模型名即可。
@@ -156,14 +152,6 @@ export async function fetchProviderModels(provider: LLMProvider): Promise<string
       break;
     case 'gemini':
       models = await fetchGeminiModels(baseUrl, apiKey);
-      break;
-    case 'claude_code_acp':
-      if (typeof window !== 'undefined' && window.electronAPI?.listClaudeCodeAcpModels) {
-        const acpModels = await window.electronAPI.listClaudeCodeAcpModels();
-        models = acpModels.map((item) => item.modelId || item.name).filter(Boolean);
-      } else {
-        models = [CLAUDE_CODE_ACP_DEFAULT_MODEL];
-      }
       break;
     default: {
       const exhaustive: never = provider.type;

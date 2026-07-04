@@ -15,6 +15,7 @@ import {
   runRegenerateCard,
   runRegenerateCardMedia,
   runConvertCard,
+  runSculptCard,
 } from './runs/card-run';
 
 const PROJECT_UPDATED_CHANNEL = 'pipeline:project-updated';
@@ -181,6 +182,20 @@ export function registerGenerationTools(
     sections: ['aiAnalysis'],
     extraInput: { cardId: z.string().describe('卡片 id') },
     run: (ctx) => runRegenerateCardMedia(ctx),
+  });
+
+  registerGenerationTool(server, getMainWindow, getUserDataPath, {
+    name: 'lingji_sculpt_card',
+    title: '精雕 Motion 卡片',
+    description:
+      '对现有 motion 卡做多 agent 精雕（导演诊断现有实现→雕刻修改→渲染验证→审查回炉），可用 notes 附加精雕要求；耗时分钟级。返回 taskId（fire-and-poll）。',
+    kind: 'sculpt_card',
+    sections: ['aiAnalysis'],
+    extraInput: {
+      cardId: z.string().describe('卡片 id'),
+      notes: z.string().optional().describe('精雕要求（可选，如"数字更有冲击力""装饰层太抢戏"）'),
+    },
+    run: (ctx) => runSculptCard(ctx),
   });
 
   registerGenerationTool(server, getMainWindow, getUserDataPath, {

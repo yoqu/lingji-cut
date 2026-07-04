@@ -1,5 +1,6 @@
 ---
 name: lingji-video-workflow
+version: 2
 description: >-
   用于灵机剪影/Lingji 视频制作协作：从稿件、素材目录或已有项目开始，打开或创建
   灵机项目，整理 original.md，撰写或修改 script.md，通过内置 `lingji` CLI 驱动
@@ -42,7 +43,7 @@ node "$LINGJI_CLI" <command> [flags]
 | Generate口播音频 (TTS) | `node "$LINGJI_CLI" audio gen --wait` |
 | 字幕分析 + 内容卡片 | `node "$LINGJI_CLI" subtitle analyze --wait` |
 | 封面（提示词 / 图片 / 全流程） | `node "$LINGJI_CLI" cover gen --wait` |
-| 卡片（list/show/update/regenerate/regen-media/convert/delete） | `node "$LINGJI_CLI" cards <action> [<cardId>] [--to <type>] [--wait]` |
+| 卡片（list/show/update/regenerate/sculpt/regen-media/convert/delete） | `node "$LINGJI_CLI" cards <action> [<cardId>] [--to <type>] [--notes <要求>] [--wait]` |
 | **导出 MP4** | `node "$LINGJI_CLI" export --wait [--out <file>]` |
 | 任务状态 / 等待 / 取消 | `node "$LINGJI_CLI" task status\|wait\|cancel <taskId>` |
 

@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
+import { Activity } from 'lucide-react';
 import { useAgentStore } from '../store/agent';
+import { useAgentFeedStore } from '../store/agent-feed';
 import { useAiEditStore } from '../store/ai-edit';
 import { useScriptStore } from '../store/script';
 import { getOriginalStats, getGeneratedScriptStats, getAnnotationSummary } from '../lib/script-utils';
@@ -8,6 +10,7 @@ import styles from './AppStatusBar.module.css';
 import { StatusBarProgressLine } from './StatusBarProgressLine';
 import { StatusBarTaskSummary } from './StatusBarTaskSummary';
 import { TaskProgressPanel } from './TaskProgressPanel';
+import { AgentObservationPanel } from './AgentObservationPanel';
 
 // ─── 圆形进度图标常量 ──────────────────────────────────────
 const ICON_RADIUS = 6;
@@ -118,6 +121,34 @@ function ContextWindowIndicator() {
   );
 }
 
+// ─── AI 生成过程观测入口 ─────────────────────────────────────
+function ObservationIndicator() {
+  const hasSessions = useAgentFeedStore((s) => s.sessions.size > 0);
+  const hasActive = useAgentFeedStore((s) => s.hasActive);
+  const panelOpen = useAgentFeedStore((s) => s.panelOpen);
+  const openPanel = useAgentFeedStore((s) => s.openPanel);
+  const closePanel = useAgentFeedStore((s) => s.closePanel);
+
+  if (!hasSessions) return null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button.Ghost
+          size="xs"
+          aria-label="AI 生成过程观测"
+          onClick={() => (panelOpen ? closePanel() : openPanel())}
+        >
+          <Activity size={13} className={hasActive ? 'animate-pulse' : undefined} />
+        </Button.Ghost>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="end">
+        {hasActive ? 'AI 生成进行中 · 查看过程' : '查看 AI 生成过程记录'}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // ─── 连接状态指示器 ─────────────────────────────────────────
 function ConnectionIndicator() {
   const status = useAgentStore((s) => s.status);
@@ -192,12 +223,14 @@ export function AppStatusBar() {
     <div className={styles.statusBar}>
       <StatusBarProgressLine />
       <TaskProgressPanel />
+      <AgentObservationPanel />
       <div className={styles.left}>
         <AiEditLockIndicator />
         <WorkbenchStatsIndicator />
         <StatusBarTaskSummary />
       </div>
       <div className={styles.right}>
+        <ObservationIndicator />
         <ContextWindowIndicator />
         <ConnectionIndicator />
       </div>

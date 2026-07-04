@@ -158,7 +158,7 @@ export function softenBashError(
 }
 
 /** 把 tool_execution_end 的 result（任意形状）抽成文本：content[] → output → JSON。 */
-function stringifyToolResult(result: unknown): string {
+export function stringifyToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   const r = result as { content?: unknown; output?: unknown } | null | undefined;
   if (r && Array.isArray(r.content)) {
@@ -181,6 +181,21 @@ function extractUsage(message: unknown): AgentStreamEvent | null {
   const outputTokens = num(usage.output);
   if (inputTokens === undefined && outputTokens === undefined) return null;
   return { type: 'usage', inputTokens, outputTokens };
+}
+
+export function extractFinalAssistantError(messages: unknown): string | null {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as
+      | { role?: unknown; stopReason?: unknown; errorMessage?: unknown }
+      | undefined;
+    if (message?.role !== 'assistant') continue;
+    const errorMessage = typeof message.errorMessage === 'string' ? message.errorMessage.trim() : '';
+    if (errorMessage) return errorMessage;
+    if (message.stopReason === 'error') return 'pi agent returned an error without details';
+    return null;
+  }
+  return null;
 }
 
 /**
@@ -418,6 +433,11 @@ export class PiInProcessSession {
       case 'agent_end': {
         // 整轮 prompt 结束。willRetry=true 表示将自动重试，尚未终态。
         if (!ev.willRetry) {
+          const errorMessage = extractFinalAssistantError(ev.messages);
+          if (errorMessage) {
+            this.onEvent({ type: 'error', message: errorMessage });
+            break;
+          }
           this.onEvent({ type: 'turn_end' });
         }
         break;

@@ -31,26 +31,3 @@ export function resolveBundledEntry(
   }
   return null;
 }
-
-export interface BuildBundledNodeSpawnOptions {
-  execPath: string;
-  baseEnv: NodeJS.ProcessEnv;
-}
-export interface BundledNodeSpawn {
-  command: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-}
-
-/** 用 Electron 自带 Node 跑一个 JS 入口（ELECTRON_RUN_AS_NODE=1）。 */
-export function buildBundledNodeSpawn(
-  entryPath: string,
-  agentArgs: string[],
-  options: BuildBundledNodeSpawnOptions,
-): BundledNodeSpawn {
-  return {
-    command: options.execPath,
-    args: [entryPath, ...agentArgs],
-    env: { ...options.baseEnv, ELECTRON_RUN_AS_NODE: '1' },
-  };
-}

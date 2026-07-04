@@ -16,6 +16,7 @@ import type { ConversationAPI } from '../src/types/conversation';
 import type { VideoImportRequest } from '../src/lib/video-import-types';
 import type { VideoImportTaskSnapshot } from './video-import/types';
 import type { PipelineTask } from './pipeline/types';
+import type { AgentFeedEvent } from './pipeline/agent-feed';
 
 type PipelineTaskUpdate = PipelineTask & { bridgeId: string };
 
@@ -33,6 +34,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     projectBindings?: PromptBindingMap | null;
     /** 一键流水线观测 runId；用于把内部耗时事件写进 auto-run jsonl */
     telemetryRunId?: string | null;
+    /** 观测面板关联键（渲染端任务 id）；缺省不上报 agent 观测事件。 */
+    feedId?: string;
   }) =>
     ipcRenderer.invoke('analyze-srt', args),
   onAnalyzePlanningDone: (
@@ -84,6 +87,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     keywords?: string[];
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
+    feedId?: string;
   }) => ipcRenderer.invoke('regenerate-ai-card', args),
   generateAnimationDirection: (args: {
     entries: SrtEntry[];
@@ -107,6 +111,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     keywords?: string[];
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
+    feedId?: string;
   }) => ipcRenderer.invoke('generate-card-from-subtitles', args),
   compileMotionCards: (args: {
     cards: { overlayId: string; tsx: string }[];
@@ -174,12 +179,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('list-system-fonts') as Promise<
       import('../src/lib/cover-editor/contracts').ListSystemFontsResult
     >,
-  saveTimeline: (projectDir: string, data: string) =>
-    ipcRenderer.invoke('save-timeline', projectDir, data),
-  loadTimeline: (projectDir: string) => ipcRenderer.invoke('load-timeline', projectDir),
-  saveAIAnalysis: (projectDir: string, data: string) =>
-    ipcRenderer.invoke('save-ai-analysis', projectDir, data),
-  loadAIAnalysis: (projectDir: string) => ipcRenderer.invoke('load-ai-analysis', projectDir),
   loadProject: (projectDir: string) =>
     ipcRenderer.invoke('load-project', projectDir),
   saveProjectSection: (projectDir: string, section: string, data: string) =>
@@ -219,7 +218,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProjectMetadata: (projectDir: string) =>
     ipcRenderer.invoke('get-project-metadata', projectDir) as Promise<ProjectMetadata>,
   selectProjectDirectory: () => ipcRenderer.invoke('select-project-directory'),
-  selectSetupFile: (kind: 'audio' | 'srt') => ipcRenderer.invoke('select-setup-file', kind),
   selectMediaFile: (kind: 'audio' | 'video' | 'srt' | 'image') => ipcRenderer.invoke('select-media-file', kind),
   findLatestExport: (projectDir: string) => ipcRenderer.invoke('find-latest-export', projectDir),
   scanCoverImages: (projectDir: string) => ipcRenderer.invoke('scan-cover-images', projectDir),
@@ -229,11 +227,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('scan-project-assets', projectDir) as Promise<
       { path: string; type: 'video' | 'image' | 'audio' | 'srt'; durationMs: number }[]
     >,
-  scanImportDirectory: (dir: string) =>
-    ipcRenderer.invoke('scan-import-directory', dir) as Promise<{
-      audioFiles: string[];
-      srtFiles: string[];
-    }>,
   renderVideo: (args: {
     timeline: string;
     outputPath: string;
@@ -260,8 +253,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('pipeline:task-update', handler);
     return () => ipcRenderer.removeListener('pipeline:task-update', handler);
   },
+  onAgentFeedEvent: (callback: (ev: AgentFeedEvent) => void) => {
+    const handler = (_event: unknown, ev: AgentFeedEvent) => callback(ev);
+    ipcRenderer.on('agent-feed:event', handler);
+    return () => ipcRenderer.removeListener('agent-feed:event', handler);
+  },
   cancelPipelineTask: (taskId: string) =>
     ipcRenderer.invoke('pipeline:cancel-task', taskId) as Promise<void>,
+  sculptCard: (args: { projectPath: string; cardId: string; notes?: string }) =>
+    ipcRenderer.invoke('pipeline:sculpt-card', args) as Promise<{ taskId: string }>,
   onMenuAction: (callback: (event: MenuEvent) => void) => {
     const handler = (_event: unknown, event: MenuEvent) => callback(event);
     ipcRenderer.on('menu-action', handler);
@@ -302,10 +302,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getFileMtime: (filePath: string) =>
     ipcRenderer.invoke('get-file-mtime', filePath) as Promise<number | null>,
-  saveScriptState: (projectDir: string, state: string) =>
-    ipcRenderer.invoke('save-script-state', projectDir, state),
-  loadScriptState: (projectDir: string) =>
-    ipcRenderer.invoke('load-script-state', projectDir),
   selectTextFile: () =>
     ipcRenderer.invoke('select-text-file') as Promise<{ path: string; content: string } | null>,
   // 轻量级抖音链接解析：仅返回标题和视频 ID
@@ -450,30 +446,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('card-media-progress', handler);
     return () => ipcRenderer.removeListener('card-media-progress', handler);
   },
-  runClaudeCodeAcpLLM: (args: import('../src/lib/electron-api').ClaudeCodeAcpLLMRunRequest) =>
-    ipcRenderer.invoke('llm:claude-code-acp-run', args),
-  cancelClaudeCodeAcpLLM: (requestId: string) =>
-    ipcRenderer.invoke('llm:claude-code-acp-cancel', requestId),
-  listClaudeCodeAcpModels: () =>
-    ipcRenderer.invoke('llm:claude-code-acp-list-models') as Promise<
-      import('../src/lib/electron-api').ClaudeCodeAcpModelInfo[]
-    >,
-  onClaudeCodeAcpLLMEvent: (
-    callback: (payload: {
-      requestId: string;
-      event: import('../src/lib/electron-api').ClaudeCodeAcpLLMEvent;
-    }) => void,
-  ) => {
-    const handler = (
-      _event: unknown,
-      payload: {
-        requestId: string;
-        event: import('../src/lib/electron-api').ClaudeCodeAcpLLMEvent;
-      },
-    ) => callback(payload);
-    ipcRenderer.on('llm:claude-code-acp-event', handler);
-    return () => ipcRenderer.removeListener('llm:claude-code-acp-event', handler);
-  },
   cancelTTS: (requestId: string) => ipcRenderer.invoke('cancel-tts', requestId),
   selectOutputPath: (defaultPath?: string) =>
     ipcRenderer.invoke('select-output-path', defaultPath),
@@ -572,9 +544,6 @@ contextBridge.exposeInMainWorld('agentAPI', {
 
   runPreflight: (agentId?: string) => ipcRenderer.invoke('agent:run-preflight', agentId),
   listModels: (agentId: string) => ipcRenderer.invoke('agent:list-models', agentId),
-  installAgent: (version: string) => ipcRenderer.invoke('agent:install', version),
-  uninstallAgent: () => ipcRenderer.invoke('agent:uninstall'),
-  getLatestVersion: () => ipcRenderer.invoke('agent:get-latest-version'),
 
   connectRuntime: (input: { conversationId: number; projectDir: string; sessionId?: string | null; agentType?: string }) =>
     ipcRenderer.invoke('agent:connect-runtime', input),

@@ -3,7 +3,6 @@ import type { CoverCandidate, ImageAspectRatio } from '../../types/ai';
 import { coverAspectRatio } from '../../types/ai';
 import { loadAISettings, useAIStore } from '../../store/ai';
 import { getProjectDir } from '../../store/timeline';
-import { createPersistedAIState, parsePersistedAIState } from '../../lib/ai-persistence';
 
 export interface DiskCover {
   path: string;
@@ -185,19 +184,9 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
     [groups],
   );
 
+  // 落盘由 store/ai.ts 订阅自动完成，这里只更新内存态。
   const persist = useCallback(async (nextCandidates: CoverCandidate[]) => {
-    const { setCoverCandidates, analysisResult: ar } = useAIStore.getState();
-    setCoverCandidates(nextCandidates);
-    const projectDir = getProjectDir();
-    if (!projectDir) return;
-    const json = JSON.stringify(createPersistedAIState(ar, nextCandidates), null, 2);
-    try {
-      const saved = await window.electronAPI.saveAIAnalysis(projectDir, json);
-      const parsed = parsePersistedAIState(JSON.parse(saved));
-      if (parsed) setCoverCandidates(parsed.coverCandidates);
-    } catch {
-      // 落盘失败不回滚内存态：用户仍可看到已生成的封面
-    }
+    useAIStore.getState().setCoverCandidates(nextCandidates);
   }, []);
 
   const runGeneration = useCallback(

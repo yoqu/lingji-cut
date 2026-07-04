@@ -4,7 +4,7 @@
 
 ## 1. 仓库定位
 
-这是一个 `Electron + React + HyperFrames` 的本地优先桌面视频创作工具，产品名为 `灵机剪影`。
+这是一个 `Electron + React + Remotion` 的本地优先桌面视频创作工具，产品名为 `灵机剪影`。
 
 当前核心目标不是“导入 MP3 + SRT 后导出视频”这么单一，而是覆盖完整创作链路：
 
@@ -15,7 +15,7 @@
   → MiniMax TTS + SRT
   → AI 分析 / 封面 / 信息卡 / Motion Card
   → 时间线编辑
-  → HyperFrames MP4 导出
+  → Remotion H.264 MP4 导出
 ```
 
 ## 2. 默认工作方式
@@ -83,13 +83,9 @@
 - `imports/douyin/<videoId>/`
 - `configs/prompts/`
 
-旧格式兼容：
+格式约束：
 
-- `timeline.json`
-- `ai-analysis.json`
-- `script-state.json`
-
-这些旧文件会在旧工程加载时迁移。新功能优先写入 `project.json` 或明确的业务资源目录，不要新增分散状态文件，除非有兼容理由。
+`project.json` 是唯一工程文件；旧分散文件（`timeline.json` / `ai-analysis.json` / `script-state.json`）的迁移链已删除，pre-project.json 旧工程不再支持。新功能一律写入 `project.json` 段或明确的业务资源目录，不要新增分散状态文件。
 
 ## 5. Electron IPC 契约
 
@@ -133,26 +129,25 @@ Renderer 不能直接使用 Node API。
 - `src/lib/srt-resegment.ts`
 - `src/components/Timeline.tsx`
 - `src/components/EditorInspector.tsx`
-- `src/hyperframes/composition.ts`
-- `src/components/HyperframesPreviewPlayer.tsx`
+- `src/remotion/MainComposition.tsx`
+- `src/remotion/timeline-to-sequences.ts`
+- `src/components/RemotionPreviewPlayer.tsx`
 
-## 7. HyperFrames 导出契约
+## 7. Remotion 导出契约
 
-导出入口固定：
+渲染链路固定：
 
-- `src/hyperframes/composition.ts`
-- `src/hyperframes/assets.ts`
-- `electron/main.ts`
+- `src/remotion/`（`MainComposition` / `Root` / `timeline-to-sequences` / `overlays/*` / `card-host` / `asset-src`）
+- `electron/remotion/`（`compile-card-node` / `bundle` / `render`）
+- `electron/main.ts` 的 `render-video` IPC（materialize → 编译卡片 → bundle → renderMedia）
 
-Composition ID 固定为 `lingji-composition`。
+修改导出前要确认：
 
-主进程导出逻辑在 `electron/main.ts`，素材映射在 `src/hyperframes/assets.ts`。修改导出前要确认：
-
-- 本地绝对路径素材是否可被映射到临时 public 目录。
-- `exportConfig` 是否正确影响 fps、quality、workers 与输出格式。
-- 音频、字幕、图片 / 视频 / 文字 overlay、AI Card、Motion Card 是否在预览和导出中一致。
-- 打包后 `node_modules/hyperframes/dist/cli.js`、Chrome / Puppeteer 运行时、FFmpeg / FFprobe 相关二进制必须可被主进程定位。
-- 不允许重新引入 Remotion 作为 fallback。
+- 本地绝对路径素材是否可被 `asset-src` 正确映射。
+- `exportConfig` 是否正确影响 fps、quality、分辨率与输出格式。
+- 音频、字幕、图片 / 视频 / 文字 overlay、AI Card、Motion Card 是否在预览和导出中一致（同一份 `buildRenderPlan` 与编译产物）。
+- 打包后 Remotion 自带的 Chrome Headless Shell 与 ffmpeg 必须可被主进程定位。
+- 不允许重新引入 HyperFrames 或 GSAP 运行时作为渲染路径。
 
 ## 8. AI 与提示词契约
 
@@ -176,11 +171,12 @@ Prompt Kind 列表：
 - `planning.segment`
 - `cover.regeneration`
 - `cards.segment`
+- `cards.animation`
 - `script.review`
-- `motion.system`
-- `motion.generate`
-- `motion.modify`
-- `motion.autofix`
+- `card.image`
+- `card.video`
+- `publish.metadata`
+- `publish.partition`
 
 修改 AI 相关功能时，至少检查：
 
@@ -295,7 +291,7 @@ AI 操作视觉反馈必须复用：
 - 修改 `TimelineData`、`OverlayItem`、`AICard`、`AISettings`、`ProjectData`。
 - 修改项目目录落盘格式。
 - 修改 IPC 名称、参数结构或返回值。
-- 修改 HyperFrames composition ID 或输入结构。
+- 修改 Remotion composition 输入结构或导出入口。
 - 修改 AI Provider、图片 Provider、Prompt Binding。
 - 修改 Agent 权限策略、密钥存储、MCP 注册逻辑。
 - 修改 Electron 安全边界、preload 暴露范围。
@@ -311,7 +307,7 @@ AI 操作视觉反馈必须复用：
 - 脚本工作台：跑 script、conversation、history、MCP 相关测试。
 - AI：跑 ai、prompts、provider、image-gen、motion 相关测试。
 - IPC：跑对应 Electron API / main 测试，并检查 main / preload / renderer 类型同步。
-- 导出：跑 HyperFrames / export 相关测试，必要时跑 `npm run build`。
+- 导出：跑 remotion / export 相关测试，必要时跑 `npm run build`。
 
 常用命令：
 

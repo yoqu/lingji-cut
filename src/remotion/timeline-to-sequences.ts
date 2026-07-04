@@ -7,6 +7,11 @@ const VISUAL_BASE_Z_INDEX = 10;
 const BACKGROUND_Z_INDEX = 1;
 export const SUBTITLE_Z_INDEX = 1000;
 
+/** 相邻全屏卡吸附阈值：空隙不超过该毫秒数时吞掉空隙做交叉溶解，避免闪露底图。 */
+export const CARD_SNAP_MAX_GAP_MS = 500;
+/** 交叉溶解重叠帧数：与 motion-kit CardStage 的出场淡出窗口（14 帧）对齐。 */
+export const CARD_CROSSFADE_FRAMES = 14;
+
 export type RenderableClipKind = 'video' | 'image' | 'text' | 'ai-card';
 
 export interface RenderableClip {
@@ -68,6 +73,40 @@ export interface RenderPlan {
   subtitles: RenderableSubtitle[];
 }
 
+/**
+ * 相邻全屏 AI 卡的吸附 + 交叉溶解（只改渲染计划，不动时间线数据）：
+ * 空隙 ≤ CARD_SNAP_MAX_GAP_MS 时，把前卡延长到后卡开始后 CARD_CROSSFADE_FRAMES 帧——
+ * CardStage 的出场淡出用尾部 14 帧，延长后淡出窗口恰好落在重叠区，形成溶解而不漏底图。
+ * 同 zIndex 下叠放顺序由 DOM 顺序决定，因此把全屏卡按 startFrame 倒序写回原槽位，
+ * 保证先出的卡叠在后进的卡上方淡出（真溶解，而不是被后卡硬切覆盖）。
+ */
+function applyCardCrossfade(visual: RenderableClip[], fps: number): void {
+  const slots: number[] = [];
+  visual.forEach((c, i) => {
+    if (c.kind === 'ai-card' && c.overlay.aiCardData?.displayMode === 'fullscreen') slots.push(i);
+  });
+  if (slots.length < 2) return;
+
+  const cards = slots.map((i) => visual[i]).sort((a, b) => a.startFrame - b.startFrame);
+  const maxGapFrames = msToFrames(CARD_SNAP_MAX_GAP_MS, fps);
+  for (let i = 0; i < cards.length - 1; i += 1) {
+    const prev = cards[i];
+    const next = cards[i + 1];
+    const gap = next.startFrame - (prev.startFrame + prev.durationFrames);
+    if (gap < 0 || gap > maxGapFrames) continue;
+    const overlapEnd = Math.min(
+      next.startFrame + CARD_CROSSFADE_FRAMES,
+      next.startFrame + next.durationFrames,
+    );
+    prev.durationFrames = overlapEnd - prev.startFrame;
+  }
+
+  cards.sort((a, b) => b.startFrame - a.startFrame);
+  slots.forEach((slot, j) => {
+    visual[slot] = cards[j];
+  });
+}
+
 function trackZIndex(timeline: TimelineData, overlay: OverlayItem): number {
   if (overlay.overlayRole === 'default-background') return BACKGROUND_Z_INDEX;
   const map = new Map(getRenderableVisualTracks(timeline.tracks).map((t) => [t.id, t.order]));
@@ -116,6 +155,8 @@ export function buildRenderPlan(timeline: TimelineData, srt: SrtEntry[], fpsArg?
       volume: 1,
     });
   }
+
+  applyCardCrossfade(visual, fps);
 
   const subtitles: RenderableSubtitle[] = srt.map((e, index) => ({
     index,

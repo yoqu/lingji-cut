@@ -7,6 +7,7 @@ import {
   updateCardInResult,
 } from '../lib/ai-persistence';
 import { migrateToProviders } from '../lib/llm/provider-utils';
+import { isLingjiManagedProviderId } from '../lib/llm/lingji-gateway';
 import { migrateImageProviders } from '../lib/llm/migrate-image-providers';
 import { normalizeTTSSettings } from '../lib/tts-settings';
 import { loadGlobalSettingsFile, updateGlobalSettingsFile } from '../lib/global-settings-client';
@@ -16,6 +17,7 @@ import {
   DEFAULT_STYLE_PRESET_ID,
   getDefaultTemplate,
   buildAICardTimelineDraft,
+  normalizeCardGenerationConcurrency,
   type AIAnalysisResult,
   type AICard,
   type AICardDisplayMode,
@@ -161,23 +163,11 @@ function appendCardToStore(
 }
 
 
-/**
- * 规范化卡片生成并发数：必须为 >= 1 的整数；非法值回退到默认 2。
- */
-function normalizeConcurrency(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 2;
-  const n = Math.floor(value);
-  return n >= 1 ? n : 2;
-}
-
 export function buildDefaultAISettings(): AISettings {
   return {
     llmProviders: [],
     defaultProviderId: null,
     defaultModel: null,
-    llmBaseUrl: '',
-    llmApiKey: '',
-    llmModel: '',
     enableThinking: true,
     jimengApiUrl: '',
     jimengSessionId: '',
@@ -201,7 +191,7 @@ export function buildDefaultAISettings(): AISettings {
     defaultVideoProviderId: null,
     defaultVideoModel: null,
     promptBindings: {},
-    cardGenerationConcurrency: 2,
+    cardGenerationConcurrency: normalizeCardGenerationConcurrency(undefined),
     defaultStylePresetId: DEFAULT_STYLE_PRESET_ID,
   };
 }
@@ -658,6 +648,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
           keywords: result.keywords,
           projectDir,
           projectBindings,
+          feedId: taskId,
         });
       } else {
         generated = await window.electronAPI.generateCardFromSubtitles({
@@ -669,6 +660,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
           keywords: result.keywords,
           projectDir,
           projectBindings,
+          feedId: taskId,
         });
       }
 
@@ -1011,64 +1003,88 @@ export const useAIStore = create<AIStore>((set, get) => ({
   },
 }));
 
+/**
+ * 清洗已下线的视频 / TTS provider 类型：
+ * - 网关托管视频（lingji-fallback-video，历史下发过 'custom'）归一为 'vidu'；
+ * - 其余无运行时实现的类型（kling/runway/minimax_video/custom_openai_audio）直接剔除。
+ */
+function sanitizeRemovedMediaProviders(raw: AISettings): Pick<
+  AISettings,
+  'videoProviders' | 'defaultVideoProviderId' | 'ttsProviders' | 'defaultTtsProviderId'
+> {
+  const videoProviders = (raw.videoProviders ?? [])
+    .map((p) =>
+      (p.type as string) !== 'vidu' && isLingjiManagedProviderId(p.id)
+        ? { ...p, type: 'vidu' as const }
+        : p,
+    )
+    .filter((p) => (p.type as string) === 'vidu');
+  const ttsProviders = (raw.ttsProviders ?? []).filter(
+    (p) => (p.type as string) !== 'custom_openai_audio',
+  );
+  return {
+    videoProviders,
+    defaultVideoProviderId: videoProviders.some((p) => p.id === raw.defaultVideoProviderId)
+      ? (raw.defaultVideoProviderId ?? null)
+      : (videoProviders[0]?.id ?? null),
+    ttsProviders,
+    defaultTtsProviderId: ttsProviders.some((p) => p.id === raw.defaultTtsProviderId)
+      ? (raw.defaultTtsProviderId ?? null)
+      : (ttsProviders[0]?.id ?? null),
+  };
+}
+
+/** 补默认值 + 跑迁移链，Electron 文件与 localStorage 两条加载路径共用。 */
+function normalizeRawAISettings(raw: AISettings): AISettings {
+  const media = sanitizeRemovedMediaProviders(raw);
+  const filled: AISettings = {
+    ...raw,
+    llmProviders: raw.llmProviders ?? [],
+    defaultProviderId: raw.defaultProviderId ?? null,
+    defaultModel: raw.defaultModel ?? null,
+    enableThinking: raw.enableThinking ?? true,
+    jimengModel: raw.jimengModel?.trim() || DEFAULT_JIMENG_MODEL,
+    minimaxApiKey: raw.minimaxApiKey ?? '',
+    minimaxVoiceId: raw.minimaxVoiceId ?? 'male-qn-qingse',
+    minimaxSpeed: raw.minimaxSpeed ?? 1.0,
+    minimaxVol: raw.minimaxVol ?? 1.0,
+    minimaxPitch: raw.minimaxPitch ?? 0,
+    minimaxEmotion: raw.minimaxEmotion ?? '',
+    minimaxModel: raw.minimaxModel ?? 'speech-2.8-hd',
+    ttsProviders: media.ttsProviders,
+    defaultTtsProviderId: media.defaultTtsProviderId,
+    defaultTtsVoiceId: raw.defaultTtsVoiceId ?? null,
+    ttsVoices: raw.ttsVoices ?? [],
+    imageProviders: raw.imageProviders ?? [],
+    defaultImageProviderId: raw.defaultImageProviderId ?? null,
+    defaultImageModel: raw.defaultImageModel ?? null,
+    globalCoverImagePrompt: raw.globalCoverImagePrompt ?? '',
+    videoProviders: media.videoProviders,
+    defaultVideoProviderId: media.defaultVideoProviderId,
+    defaultVideoModel: raw.defaultVideoModel ?? null,
+    promptBindings: raw.promptBindings ?? {},
+    cardGenerationConcurrency: normalizeCardGenerationConcurrency(raw.cardGenerationConcurrency),
+    defaultStylePresetId:
+      typeof raw.defaultStylePresetId === 'string' && raw.defaultStylePresetId.trim()
+        ? raw.defaultStylePresetId
+        : DEFAULT_STYLE_PRESET_ID,
+  };
+  return normalizeTTSSettings(migrateImageProviders(migrateToProviders(filled)));
+}
+
 export async function loadAISettings(): Promise<AISettings | null> {
   // 优先从 Electron 全局存储读取
   if (typeof window !== 'undefined' && window.electronAPI) {
     try {
       const file = await loadGlobalSettingsFile();
       if (file?.aiSettings) {
-        const hadProviders =
-          Array.isArray(file.aiSettings.llmProviders) &&
-          file.aiSettings.llmProviders.length > 0;
-        const settings: AISettings = {
-          ...file.aiSettings,
-          llmProviders: file.aiSettings.llmProviders ?? [],
-          defaultProviderId: file.aiSettings.defaultProviderId ?? null,
-          defaultModel: file.aiSettings.defaultModel ?? null,
-          enableThinking: file.aiSettings.enableThinking ?? true,
-          jimengModel: file.aiSettings.jimengModel?.trim() || DEFAULT_JIMENG_MODEL,
-          minimaxApiKey: file.aiSettings.minimaxApiKey ?? '',
-          minimaxVoiceId: file.aiSettings.minimaxVoiceId ?? 'male-qn-qingse',
-          minimaxSpeed: file.aiSettings.minimaxSpeed ?? 1.0,
-          minimaxVol: file.aiSettings.minimaxVol ?? 1.0,
-          minimaxPitch: file.aiSettings.minimaxPitch ?? 0,
-          minimaxEmotion: file.aiSettings.minimaxEmotion ?? '',
-          minimaxModel: file.aiSettings.minimaxModel ?? 'speech-2.8-hd',
-          ttsProviders: file.aiSettings.ttsProviders ?? [],
-          defaultTtsProviderId: file.aiSettings.defaultTtsProviderId ?? null,
-          defaultTtsVoiceId: file.aiSettings.defaultTtsVoiceId ?? null,
-          ttsVoices: file.aiSettings.ttsVoices ?? [],
-          imageProviders: file.aiSettings.imageProviders ?? [],
-          defaultImageProviderId: file.aiSettings.defaultImageProviderId ?? null,
-          defaultImageModel: file.aiSettings.defaultImageModel ?? null,
-          globalCoverImagePrompt: file.aiSettings.globalCoverImagePrompt ?? '',
-          videoProviders: file.aiSettings.videoProviders ?? [],
-          defaultVideoProviderId: file.aiSettings.defaultVideoProviderId ?? null,
-          defaultVideoModel: file.aiSettings.defaultVideoModel ?? null,
-          promptBindings: file.aiSettings.promptBindings ?? {},
-          cardGenerationConcurrency: normalizeConcurrency(
-            file.aiSettings.cardGenerationConcurrency,
-          ),
-          defaultStylePresetId:
-            typeof file.aiSettings.defaultStylePresetId === 'string' &&
-            file.aiSettings.defaultStylePresetId.trim()
-              ? file.aiSettings.defaultStylePresetId
-              : DEFAULT_STYLE_PRESET_ID,
-        };
-        const providerMigrated = migrateToProviders(settings);
-        const imageMigrated = migrateImageProviders(providerMigrated);
-        const ttsMigrated = normalizeTTSSettings(imageMigrated);
-        const llmChanged = !hadProviders && providerMigrated.llmProviders.length > 0;
-        const imageChanged = imageMigrated !== providerMigrated;
-        const ttsChanged =
-          !Array.isArray(file.aiSettings.ttsProviders) ||
-          file.aiSettings.ttsProviders.length === 0 ||
-          file.aiSettings.defaultTtsProviderId !== ttsMigrated.defaultTtsProviderId ||
-          file.aiSettings.defaultTtsVoiceId !== ttsMigrated.defaultTtsVoiceId;
-        if (llmChanged || imageChanged || ttsChanged) {
-          void saveAISettings(ttsMigrated);
+        const settings = normalizeRawAISettings(file.aiSettings);
+        // 迁移链改变了持久化形态时回写一次。归一化会新建数组，引用比较永真，
+        // 这里用结构比较；加载每次仅一回，序列化开销可忽略。
+        if (JSON.stringify(settings) !== JSON.stringify(file.aiSettings)) {
+          void saveAISettings(settings);
         }
-        return ttsMigrated;
+        return settings;
       }
     } catch {
       // fallthrough to legacy
@@ -1080,41 +1096,7 @@ export async function loadAISettings(): Promise<AISettings | null> {
     const rawValue = window.localStorage.getItem(AI_SETTINGS_LEGACY_KEY);
     if (rawValue) {
       try {
-        const parsed = JSON.parse(rawValue) as AISettings;
-        const raw: AISettings = {
-          ...parsed,
-          llmProviders: parsed.llmProviders ?? [],
-          defaultProviderId: parsed.defaultProviderId ?? null,
-          defaultModel: parsed.defaultModel ?? null,
-          enableThinking: parsed.enableThinking ?? true,
-          jimengModel: parsed.jimengModel?.trim() || DEFAULT_JIMENG_MODEL,
-          minimaxApiKey: parsed.minimaxApiKey ?? '',
-          minimaxVoiceId: parsed.minimaxVoiceId ?? 'male-qn-qingse',
-          minimaxSpeed: parsed.minimaxSpeed ?? 1.0,
-          minimaxVol: parsed.minimaxVol ?? 1.0,
-          minimaxPitch: parsed.minimaxPitch ?? 0,
-          minimaxEmotion: parsed.minimaxEmotion ?? '',
-          minimaxModel: parsed.minimaxModel ?? 'speech-2.8-hd',
-          ttsProviders: parsed.ttsProviders ?? [],
-          defaultTtsProviderId: parsed.defaultTtsProviderId ?? null,
-          defaultTtsVoiceId: parsed.defaultTtsVoiceId ?? null,
-          ttsVoices: parsed.ttsVoices ?? [],
-          imageProviders: parsed.imageProviders ?? [],
-          defaultImageProviderId: parsed.defaultImageProviderId ?? null,
-          defaultImageModel: parsed.defaultImageModel ?? null,
-          globalCoverImagePrompt: parsed.globalCoverImagePrompt ?? '',
-          videoProviders: parsed.videoProviders ?? [],
-          defaultVideoProviderId: parsed.defaultVideoProviderId ?? null,
-          defaultVideoModel: parsed.defaultVideoModel ?? null,
-          promptBindings: parsed.promptBindings ?? {},
-          cardGenerationConcurrency: normalizeConcurrency(parsed.cardGenerationConcurrency),
-          defaultStylePresetId:
-            typeof parsed.defaultStylePresetId === 'string' && parsed.defaultStylePresetId.trim()
-              ? parsed.defaultStylePresetId
-              : DEFAULT_STYLE_PRESET_ID,
-        };
-        const providerMigrated = migrateToProviders(raw);
-        const settings = normalizeTTSSettings(migrateImageProviders(providerMigrated));
+        const settings = normalizeRawAISettings(JSON.parse(rawValue) as AISettings);
         // 自动迁移到 Electron 全局存储（saveAISettings 会刷新缓存）
         await saveAISettings(settings);
         window.localStorage.removeItem(AI_SETTINGS_LEGACY_KEY);

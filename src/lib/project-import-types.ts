@@ -1,12 +1,9 @@
 /** 共享契约：项目导入功能的 Renderer / Main 对齐点。锁定后请勿随意修改。 */
 
-export type ImportProjectScenario = 'complete' | 'legacy' | 'mediaOnly' | 'unrecognized';
+export type ImportProjectScenario = 'complete' | 'mediaOnly' | 'unrecognized';
 
 export type DetectedFileKind =
   | 'projectJson'
-  | 'legacyTimeline'
-  | 'legacyAIAnalysis'
-  | 'legacyScriptState'
   | 'scriptMd'
   | 'originalMd'
   | 'audioMp3'
@@ -74,7 +71,6 @@ export interface ImportProjectResult {
   projectName: string;
   scenario: Exclude<ImportProjectScenario, 'unrecognized'>;
   fixReport: AssetFixReport;
-  migratedFromLegacy: boolean;
 }
 
 export interface ImportProjectArgs {

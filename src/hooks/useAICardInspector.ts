@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from 'react';
 import { getAISettingsIssue } from '../lib/ai-settings';
 import {
   createPersistedAIState,
-  parsePersistedAIState,
   removeCardInResult,
   updateCardInResult,
 } from '../lib/ai-persistence';
@@ -44,25 +43,10 @@ export function useAICardInspector(cardId: string | null) {
     [analysisResult?.cards, cardId],
   );
 
+  // 落盘由 store/ai.ts 订阅自动完成；这里仅返回规范化快照供调用方回灌。
   const persistAIState = useCallback(
-    async (result: typeof analysisResult, candidates: CoverCandidate[]) => {
-      const fallbackState = createPersistedAIState(result, candidates);
-      const projectDir = getProjectDir();
-      if (!projectDir) {
-        return fallbackState;
-      }
-
-      const savedState = await window.electronAPI.saveAIAnalysis(
-        projectDir,
-        JSON.stringify(fallbackState, null, 2),
-      );
-
-      try {
-        return parsePersistedAIState(JSON.parse(savedState)) ?? fallbackState;
-      } catch {
-        return fallbackState;
-      }
-    },
+    async (result: typeof analysisResult, candidates: CoverCandidate[]) =>
+      createPersistedAIState(result, candidates),
     [],
   );
 
@@ -159,6 +143,7 @@ export function useAICardInspector(cardId: string | null) {
           keywords: analysisResult.keywords,
           projectDir: getProjectDir() ?? undefined,
           projectBindings: useAIStore.getState().projectBindings,
+          feedId: regenerateTaskId,
         });
 
         const nextResult = updateCardInResult(analysisResult, card.id, {

@@ -1,8 +1,7 @@
 import type { AICard, AICardDisplayMode, AICardMediaType, AIAnalysisResult } from '../types/ai';
 import { buildAICardTimelineDraft } from '../types/ai';
-import { createPersistedAIState } from './ai-persistence';
 import { useAIStore } from '../store/ai';
-import { getProjectDir, useTimelineStore } from '../store/timeline';
+import { useTimelineStore } from '../store/timeline';
 
 export interface ManualMediaCardInput {
   mediaType: AICardMediaType;
@@ -14,7 +13,6 @@ export interface ManualMediaCardInput {
   displayDurationMs?: number;
   displayMode?: AICardDisplayMode;
   insertToTimeline?: boolean;
-  persistProject?: boolean;
 }
 
 function clampMs(value: number | undefined, fallback: number): number {
@@ -80,15 +78,6 @@ export async function createManualMediaCard(input: ManualMediaCardInput): Promis
     useAIStore.getState().setAnalysisResult(
       replaceCard(useAIStore.getState().analysisResult, patchedCard),
     );
-  }
-
-  if (input.persistProject ?? true) {
-    const projectDir = getProjectDir();
-    const state = useAIStore.getState();
-    if (projectDir && typeof window !== 'undefined' && window.electronAPI?.saveAIAnalysis) {
-      const persisted = createPersistedAIState(state.analysisResult, state.coverCandidates);
-      await window.electronAPI.saveAIAnalysis(projectDir, JSON.stringify(persisted, null, 2));
-    }
   }
 
   if (input.insertToTimeline ?? true) {

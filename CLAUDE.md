@@ -79,15 +79,14 @@ npm run dist:mac     # 构建并打包 macOS .app
 
 主进程读写入口：
 
-- `electron/project-file.ts`：统一加载、保存、旧文件迁移与写锁。
+- `electron/project-file.ts`：统一加载、保存、原子写与损坏备份。
 - `electron/main.ts`：暴露 `load-project`、`save-project-section` 等 IPC。
-- `src/lib/script-persistence.ts`：脚本工作台状态兼容读取。
+- `src/lib/script-persistence.ts`：脚本工作台状态从 project.json script 段读取。
 
-旧工程兼容：
+格式约束：
 
-- 旧的 `timeline.json`、`ai-analysis.json`、`script-state.json` 会迁移到 `project.json`。
-- `save-timeline`、`load-timeline`、`save-ai-analysis`、`load-ai-analysis` 仍存在兼容路径。
-- 新开发不要优先新增旧式分散文件，除非明确为了兼容。
+- `project.json` 是唯一工程文件；旧分散文件（`timeline.json`、`ai-analysis.json`、`script-state.json`）的迁移链与兼容 IPC 已删除。
+- 不要新增分散状态文件；所有段落经 `save-project-section` 落盘，落盘由各 store 的订阅自动完成，不要在调用方手动重复写。
 
 常见项目产物：
 
@@ -173,7 +172,7 @@ Renderer 不直接使用 Node API。任何文件系统、系统菜单、Remotion
 - 渲染引擎已从 HyperFrames 切换为 Remotion；不要再引入 HyperFrames 或 GSAP 运行时作为渲染路径。
 - `TimelineData` 仍是编辑器数据源，导出/预览前由 `buildRenderPlan` 编译为 Remotion 组件树（`<Sequence>` + overlay 组件）。
 - AI Motion Card 是 LLM 生成的**自由 Remotion TSX**（`motionCard.tsx`，default export 函数组件）；主进程用 esbuild 编译为 CJS，经 `inputProps.compiledCards` 注入，由 `CardHost` 在 Remotion 上下文内求值（预览与导出同一份编译产物）。
-- 旧工程的 `motionCard.html`（HTML+GSAP）加载时降级为占位并标记 `needsRegeneration`，不崩溃。
+- pre-project.json 旧工程与 HTML(GSAP) 旧卡片的兼容链已移除：`project.json` 是唯一工程格式，遗留 `motionCard.html` 卡片不再降级渲染。
 - 自由 TSX 的运行时求值需要渲染面允许 `'unsafe-eval'`；卡片渲染包含错误边界。
 - 导出格式当前是 H.264 MP4。
 
@@ -212,11 +211,12 @@ Prompt Kind：
 - `planning.segment`
 - `cover.regeneration`
 - `cards.segment`
+- `cards.animation`
 - `script.review`
-- `motion.system`
-- `motion.generate`
-- `motion.modify`
-- `motion.autofix`
+- `card.image`
+- `card.video`
+- `publish.metadata`
+- `publish.partition`
 
 修改 AI 结构、提示词或卡片时，至少检查：
 
@@ -229,7 +229,7 @@ Prompt Kind：
 - `electron/prompts-io.ts`
 - `electron/prompt-bindings-io.ts`
 - `src/components/AIPanel.tsx`
-- `src/components/MotionPanel.tsx`
+- `src/components/AICardInspector.tsx`
 - `src/remotion/`
 
 ## 脚本工作台约束

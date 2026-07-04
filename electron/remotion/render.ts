@@ -19,6 +19,8 @@ export interface RemotionRenderParams {
   /** 视频码率，形如 '1800k' / '3000k' / '4500k'；与 crf 互斥，硬件加速路径下必填。 */
   videoBitrate: string;
   audioBitrate: string;
+  /** Chromium 截帧 JPEG 质量（1-100），只影响截帧速度与中间帧画质，不改变输出码率。 */
+  jpegQuality: number;
   concurrency: number;
   /**
    * 硬件加速策略：'if-possible' 表示能用就用、不能就软编回退，零失败风险；
@@ -32,12 +34,15 @@ export interface RemotionRenderParams {
    * 显式指向 unpacked 真实目录绕过 asar；dev 态为 undefined，沿用 Remotion 默认。
    */
   binariesDirectory?: string;
-  onProgress?: (ratio: number) => void;
+  /** renderedFrames/encodedFrames 用于判断瓶颈在截帧端还是编码端（编码追不上时两者差距拉大）。 */
+  onProgress?: (progress: { ratio: number; renderedFrames: number; encodedFrames: number }) => void;
 }
 
 const COMPOSITION_ID = 'lingji-composition';
 
-export async function renderRemotionVideo(params: RemotionRenderParams): Promise<void> {
+export async function renderRemotionVideo(
+  params: RemotionRenderParams,
+): Promise<{ totalFrames: number; fps: number }> {
   const inputProps = {
     timeline: params.timeline,
     srtEntries: params.srtEntries,
@@ -59,6 +64,7 @@ export async function renderRemotionVideo(params: RemotionRenderParams): Promise
     inputProps,
     concurrency: Math.max(1, params.concurrency),
     scale: params.scale,
+    jpegQuality: params.jpegQuality,
     x264Preset: params.x264Preset,
     // buildExportRenderConfig 产出的字符串始终满足 Remotion 的 Bitrate 模板类型（如 '1800k'），
     // 这里 as 收窄一下，TS 才不会因为返回值是普通 string 而拒绝。
@@ -67,6 +73,9 @@ export async function renderRemotionVideo(params: RemotionRenderParams): Promise
     hardwareAcceleration: params.hardwareAcceleration,
     binariesDirectory: params.binariesDirectory ?? null,
     chromiumOptions: { ignoreCertificateErrors: false },
-    onProgress: ({ progress }) => params.onProgress?.(progress),
+    onProgress: ({ progress, renderedFrames, encodedFrames }) =>
+      params.onProgress?.({ ratio: progress, renderedFrames, encodedFrames }),
   });
+
+  return { totalFrames: composition.durationInFrames, fps: composition.fps };
 }

@@ -67,7 +67,8 @@ describe('AI video workflow regressions', () => {
       'utf8',
     );
 
-    expect(appSource).toContain('createPersistedAIState(null, [])');
+    // aiAnalysis 落盘统一走 store 订阅，失效路径只需清内存态
+    expect(appSource).toContain('clearAIAnalysis();');
     expect(appSource).toContain('const shouldReanalyze = window.confirm(');
     expect(appSource).toContain('await rerunAiAnalysisForEntries(entries);');
     expect(editorSource).toContain('open={Boolean(pendingReanalyzeEntries)}');

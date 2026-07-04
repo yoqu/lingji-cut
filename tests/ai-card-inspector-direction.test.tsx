@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// 动画指导编辑区交互测试。
+// 分镜（storyboard）编辑区交互测试。
 //
 // 说明：tests/ai-card-inspector.test.tsx 的 image/video 用例依赖
 // renderToStaticMarkup + Select portal，在 jsdom 环境会触发
@@ -21,8 +21,8 @@ const baseCardStyle = {
   fontSize: 48,
 } as const;
 
-describe('AICardInspector · 动画指导', () => {
-  it('渲染动画指导编辑区并支持单独生成回填', async () => {
+describe('AICardInspector · 分镜', () => {
+  it('渲染分镜编辑区并支持单独生成回填', async () => {
     const motionCard: AICard = {
       id: 'card-direction',
       segmentId: 'segment-1',
@@ -38,7 +38,7 @@ describe('AICardInspector · 动画指导', () => {
       style: baseCardStyle,
     };
 
-    const generated = '视觉母题：折线\n拍1 标题入场';
+    const generated = '{"claim":"AI 改变创作","carrier":"quote","beats":[]}';
     const onGenerateAnimationDirection = vi.fn().mockResolvedValue(generated);
 
     const container = document.createElement('div');
@@ -57,10 +57,10 @@ describe('AICardInspector · 动画指导', () => {
       );
     });
 
-    expect(container.textContent ?? '').toContain('动画指导');
+    expect(container.textContent ?? '').toContain('分镜');
 
     const button = Array.from(container.querySelectorAll('button')).find((el) =>
-      (el.textContent ?? '').includes('生成动画指导'),
+      (el.textContent ?? '').includes('生成分镜'),
     );
     expect(button).toBeTruthy();
 

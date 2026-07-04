@@ -53,13 +53,27 @@ vi.mock('@langchain/openai', () => ({
 import { generateStructuredData, generateText } from '../src/lib/llm';
 import { parseLLMJsonResponse } from '../src/lib/llm/content';
 
-const BASE_SETTINGS: AISettings = {
-  llmBaseUrl: 'https://example.com/v1/',
-  llmApiKey: 'test-key',
-  llmModel: 'qwen3.6-plus',
-  jimengApiUrl: '',
-  jimengSessionId: '',
-};
+function makeSettings(providerOverrides: Record<string, unknown> = {}): AISettings {
+  return {
+    llmProviders: [
+      {
+        id: 'p1',
+        name: 'Test',
+        type: 'openai_compatible',
+        baseUrl: 'https://example.com/v1/',
+        apiKey: 'test-key',
+        models: ['qwen3.6-plus'],
+        ...providerOverrides,
+      },
+    ],
+    defaultProviderId: 'p1',
+    defaultModel: 'qwen3.6-plus',
+    jimengApiUrl: '',
+    jimengSessionId: '',
+  } as AISettings;
+}
+
+const BASE_SETTINGS: AISettings = makeSettings();
 
 describe('llm-client langchain adapter', () => {
   beforeEach(() => {
@@ -71,14 +85,11 @@ describe('llm-client langchain adapter', () => {
     chatOpenAIMock.mockClear();
   });
 
-  it('passes enableThinking=false via modelKwargs and uses json mode binding via stream', async () => {
+  it('passes provider enableThinking=false via modelKwargs and uses json mode binding via stream', async () => {
     bindStreamMock.mockResolvedValue(asAsyncIterable({ content: '{"ok":true}' }));
 
     await generateStructuredData(
-      {
-        ...BASE_SETTINGS,
-        enableThinking: false,
-      },
+      makeSettings({ enableThinking: false }),
       '系统提示',
       '用户输入',
     );
@@ -116,10 +127,7 @@ describe('llm-client langchain adapter', () => {
     });
 
     await generateText(
-      {
-        ...BASE_SETTINGS,
-        enableThinking: true,
-      },
+      makeSettings({ enableThinking: true }),
       '系统提示',
       '用户输入',
     );

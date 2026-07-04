@@ -40,7 +40,7 @@ project open <path>                   validate / show project state
 audio gen [--project <p>] [--wait]    口播音频 (TTS) → podcast-audio + subtitles
 subtitle analyze [--wait]             语义分段 + 卡片 + 封面提示词 → aiAnalysis
 cover prompt|image|gen [--wait]       封面提示词 / 出图 / 一次性
-cards gen|list|show|update|regenerate|regen-media|convert|delete [<cardId>] [--to <type>] [--wait]
+cards gen|list|show|update|regenerate|sculpt|regen-media|convert|delete [<cardId>] [--to <type>] [--notes <要求>] [--wait]
 export [--out <file>] [--wait]        渲染 H.264 MP4
 task status|list|cancel|wait <id>     任务管理
 ```

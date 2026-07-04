@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   MIMO_TTS_CHUNK_CHAR_BUDGET,
   groupSentencesByBudget,
+  buildChunkAlignInputs,
   buildSrtFromChunks,
+  isTruncatedMimoChunk,
 } from '../electron/tts-chunking';
 import { parseSrt } from '../src/lib/srt-parser';
 import type { TtsUnit } from '../src/lib/tts/types';
@@ -49,5 +51,33 @@ describe('buildSrtFromChunks', () => {
     const srt = buildSrtFromChunks(parts);
     expect(srt).toContain('重点来了。');
     expect(srt).not.toContain('(强调)');
+  });
+});
+
+describe('isTruncatedMimoChunk', () => {
+  it('远低于正常语速的块判为截断（实测两次截断 ≈72 / 97ms/字）', () => {
+    expect(isTruncatedMimoChunk(58_000, 800)).toBe(true); // 72ms/字
+    expect(isTruncatedMimoChunk(53_000, 550)).toBe(true); // 97ms/字
+    expect(isTruncatedMimoChunk(160_000, 800)).toBe(false); // 200ms/字 正常
+    expect(isTruncatedMimoChunk(120_000, 800)).toBe(false); // 150ms/字 快语速不误杀
+  });
+
+  it('过短文本不判定，避免误杀', () => {
+    expect(isTruncatedMimoChunk(100, 5)).toBe(false);
+  });
+});
+
+describe('buildChunkAlignInputs', () => {
+  it('每块给出精确窗口，entries 落在窗口内且偏移累加', () => {
+    const parts = [
+      { durMs: 2000, units: [u('第一块的句子。')] },
+      { durMs: 1500, units: [u('第二块的句子。')] },
+    ];
+    const chunks = buildChunkAlignInputs(parts);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatchObject({ startMs: 0, endMs: 2000 });
+    expect(chunks[1]).toMatchObject({ startMs: 2000, endMs: 3500 });
+    expect(chunks[1].entries[0].startMs).toBe(2000);
+    expect(chunks[1].entries.at(-1)!.endMs).toBe(3500);
   });
 });

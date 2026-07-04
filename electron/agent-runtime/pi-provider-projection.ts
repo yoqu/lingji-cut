@@ -9,7 +9,10 @@ import type {
   PiThinkingLevelMap,
 } from '../../src/types/ai';
 import { LMSTUDIO_DEFAULT_BASE_URL } from '../../src/types/ai';
-import { getPiBuiltinProviderId } from '../../src/lib/llm/pi-provider-presets';
+import {
+  findPiProviderPresetByBuiltinId,
+  getPiBuiltinProviderId,
+} from '../../src/lib/llm/pi-provider-presets';
 
 export interface PiModelEntry {
   id: string;
@@ -40,6 +43,12 @@ export interface PiProviderEntry {
   models: PiModelEntry[];
 }
 
+export interface PiBuiltinProviderOverlayEntry {
+  models: Array<{ id: string }>;
+}
+
+export type PiProviderConfigEntry = PiProviderEntry | PiBuiltinProviderOverlayEntry;
+
 export function llmTypeToPiApi(type: LLMProvider['type']): PiProviderApi | null {
   switch (type) {
     case 'openai_compatible':
@@ -48,12 +57,9 @@ export function llmTypeToPiApi(type: LLMProvider['type']): PiProviderApi | null 
     case 'openai_responses':
       return 'openai-responses';
     case 'minimax':
-    case 'anthropic':
       return 'anthropic-messages';
     case 'gemini':
       return 'google-generative-ai';
-    case 'claude_code_acp':
-      return null;
     default:
       return null;
   }
@@ -62,6 +68,9 @@ export function llmTypeToPiApi(type: LLMProvider['type']): PiProviderApi | null 
 const DEFAULT_CONTEXT_WINDOW = 128000;
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_COST: PiModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const DEFAULT_OPENAI_COMPATIBLE_HEADERS: Record<string, string> = {
+  'User-Agent': 'curl/8.7.1',
+};
 const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const MINIMAX_ANTHROPIC_DEFAULT_BASE_URL = 'https://api.minimaxi.com/anthropic';
 
@@ -80,15 +89,24 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   return n > 0 ? n : fallback;
 }
 
-function resolveProviderCompat(provider: LLMProvider, reasoning: boolean): PiModelEntry['compat'] {
+function resolveProviderCompat(provider: LLMProvider): PiModelEntry['compat'] {
   const configured = provider.pi?.compat ?? {};
   return {
     ...configured,
     supportsDeveloperRole: configured.supportsDeveloperRole ?? false,
     supportsStore: configured.supportsStore ?? false,
-    supportsReasoningEffort: configured.supportsReasoningEffort ?? reasoning,
+    supportsReasoningEffort: configured.supportsReasoningEffort ?? false,
     maxTokensField: configured.maxTokensField ?? 'max_tokens',
   };
+}
+
+function resolveProviderHeaders(provider: LLMProvider): Record<string, string> | undefined {
+  const defaults =
+    provider.type === 'openai_compatible' || provider.type === 'lmstudio'
+      ? DEFAULT_OPENAI_COMPATIBLE_HEADERS
+      : {};
+  const headers = { ...defaults, ...(provider.pi?.headers ?? {}) };
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function toModelEntry(
@@ -107,7 +125,7 @@ function toModelEntry(
     contextWindow: normalizePositiveInteger(modelOptions?.contextWindow, DEFAULT_CONTEXT_WINDOW),
     maxTokens: normalizePositiveInteger(modelOptions?.maxTokens, DEFAULT_MAX_TOKENS),
     cost,
-    compat: resolveProviderCompat(provider, reasoning),
+    compat: resolveProviderCompat(provider),
   };
   if (provider.pi?.api && provider.pi.api !== api) {
     entry.api = provider.pi.api;
@@ -121,13 +139,18 @@ function toModelEntry(
 }
 
 export interface PiModelsJson {
-  providers: Record<string, PiProviderEntry>;
+  providers: Record<string, PiProviderConfigEntry>;
 }
 
 export function buildPiModelsJson(ai: AISettings): PiModelsJson {
-  const providers: Record<string, PiProviderEntry> = {};
+  const providers: Record<string, PiProviderConfigEntry> = {};
   for (const provider of ai.llmProviders ?? []) {
-    if (getPiBuiltinProviderId(provider)) continue;
+    const builtinProviderId = getPiBuiltinProviderId(provider);
+    if (builtinProviderId) {
+      const overlay = projectBuiltinProviderOverlay(provider, builtinProviderId);
+      if (overlay) providers[builtinProviderId] = overlay;
+      continue;
+    }
     const projected = projectProviderToPi(provider);
     if (projected) providers[projected.key] = projected.entry;
   }
@@ -188,6 +211,21 @@ export function buildPiModelOptions(ai: AISettings): { id: string; label: string
   return out;
 }
 
+/**
+ * 把「已解析的 provider + 模型名」转成 pi `--model` 可识别的 `${key}/${modelId}` 引用
+ * （key 与 buildPiModelsJson 的 provider key 对齐：内置用 builtinProviderId，其余用
+ * provider.id）。无法投影（缺 baseUrl/models 或非法 api）或模型名为空时返回 null，
+ * 交由调用方回退到 settings.json 默认。
+ */
+export function piModelRef(provider: LLMProvider, model: string): string | null {
+  const modelId = model.trim();
+  if (!modelId) return null;
+  const builtinProviderId = getPiBuiltinProviderId(provider);
+  if (builtinProviderId) return `${builtinProviderId}/${modelId}`;
+  if (!projectProviderToPi(provider)) return null;
+  return `${provider.id}/${modelId}`;
+}
+
 export function projectProviderToPi(
   provider: LLMProvider,
 ): { key: string; entry: PiProviderEntry } | null {
@@ -197,12 +235,13 @@ export function projectProviderToPi(
   const baseUrl = resolvePiBaseUrl(provider);
   if (!baseUrl) return null;
   if (!provider.models || provider.models.length === 0) return null;
-  // pi's per-model `reasoning` is a *capability* flag; we deliberately opt-in
-  // only when the user has explicitly enabled thinking (`=== true`).  Defaulting
-  // to true would cause pi to send `reasoning_effort` to models that don't
-  // support it.  This diverges intentionally from `LLMProvider.enableThinking`'s
-  // "缺省视为 true" runtime-toggle semantics — here absence means "not requested".
-  const reasoning = provider.enableThinking === true;
+  // pi's per-model `reasoning` is a Pi Agent request-shape capability, not the
+  // same thing as the app's normal LLM `enableThinking` chat toggle. Custom
+  // OpenAI-compatible providers vary wildly here, so require an explicit Pi
+  // opt-in to avoid sending agent requests as a thinking-capable model by
+  // accident.
+  const reasoning = provider.pi?.model?.reasoning === true;
+  const headers = resolveProviderHeaders(provider);
   return {
     key: provider.id,
     entry: {
@@ -211,10 +250,32 @@ export function projectProviderToPi(
       api,
       apiKey: provider.apiKey,
       ...(provider.pi?.authHeader !== undefined ? { authHeader: provider.pi.authHeader } : {}),
-      ...(provider.pi?.headers ? { headers: provider.pi.headers } : {}),
+      ...(headers ? { headers } : {}),
       ...(provider.pi?.compat ? { compat: provider.pi.compat } : {}),
       models: provider.models.map((m) => toModelEntry(provider, m, reasoning, api)),
     },
+  };
+}
+
+export function projectBuiltinProviderOverlay(
+  provider: LLMProvider,
+  builtinProviderId = getPiBuiltinProviderId(provider),
+): PiBuiltinProviderOverlayEntry | null {
+  if (!builtinProviderId) return null;
+  const configuredModels = (provider.models ?? [])
+    .map((model) => model.trim())
+    .filter((model, index, list) => model.length > 0 && list.indexOf(model) === index);
+  if (configuredModels.length === 0) return null;
+
+  const preset = findPiProviderPresetByBuiltinId(builtinProviderId);
+  const knownModels = new Set(preset?.models ?? []);
+  const extraModels = preset
+    ? configuredModels.filter((model) => !knownModels.has(model))
+    : configuredModels;
+  if (extraModels.length === 0) return null;
+
+  return {
+    models: extraModels.map((id) => ({ id })),
   };
 }
 

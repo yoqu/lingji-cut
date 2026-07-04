@@ -197,15 +197,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
         llmProviders: normalizedProviders,
         defaultProviderId: selection.defaultProviderId,
         defaultModel: selection.defaultModel,
-        llmBaseUrl:
-          normalizedProviders.find((p) => p.id === selection.defaultProviderId)?.baseUrl ??
-          current?.llmBaseUrl ??
-          '',
-        llmApiKey:
-          normalizedProviders.find((p) => p.id === selection.defaultProviderId)?.apiKey ??
-          current?.llmApiKey ??
-          '',
-        llmModel: selection.defaultModel ?? current?.llmModel ?? '',
         jimengApiUrl: legacyJimengApiUrl,
         jimengSessionId: legacyJimengSessionId,
         jimengModel: legacyJimengModel,

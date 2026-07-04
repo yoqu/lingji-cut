@@ -25,6 +25,7 @@ export type PipelineTaskKind =
   | 'generate_storyboard'
   | 'generate_cards'
   | 'generate_motion'
+  | 'sculpt_card'
   | 'export_video'
   | 'import_video_source';
 
@@ -62,6 +63,7 @@ const KIND_MAP: Record<PipelineTaskKind, { category: PipelineTaskCategory; label
   generate_storyboard: { category: 'ai-analyze', label: '生成分镜' },
   generate_cards: { category: 'ai-analyze', label: '生成卡片' },
   generate_motion: { category: 'ai-analyze', label: 'Motion 卡片' },
+  sculpt_card: { category: 'ai-analyze', label: '精雕卡片' },
   export_video: { category: 'export', label: '导出视频' },
   import_video_source: { category: 'import', label: '导入视频' },
 };

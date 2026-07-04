@@ -6,10 +6,10 @@
  *   TencentVideo.upload  → uploadVideo / uploadTencentVideo
  */
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import type { BrowserContext, Locator, Page } from 'playwright';
 import { withContext } from '../engine';
 import { LoginExpiredError } from '../errors';
+import { qrcodePngPath, runLoginPoll, saveQrcodeFromDataUrl, sleep } from '../platform-shared';
 import type { LoginOptions, PlatformModule, UploadVideoOptions } from '../types';
 
 // ─── URLs ─────────────────────────────────────────────────────────────────────
@@ -28,10 +28,6 @@ const COOKIE_AUTH_MIN_COUNT = 4; // cookie_auth 静态体检阈值（main.py: le
 const PARENT_DOMAIN_URLS = ['https://mp.weixin.qq.com', 'https://www.qq.com'] as const;
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 /**
  * port of format_str_for_short_title
@@ -100,12 +96,7 @@ async function _tryExtractAndSaveQrcode(
 ): Promise<void> {
   try {
     const src = await _extractQrcodeSrc(page);
-    const pngPath = path.join(path.dirname(storagePath), 'tencent_qrcode.png');
-    const match = src.match(/^data:image\/[^;]+;base64,(.+)$/s);
-    if (match) {
-      await fs.writeFile(pngPath, Buffer.from(match[1], 'base64'));
-      onQrcode(pngPath);
-    }
+    await saveQrcodeFromDataUrl(src, qrcodePngPath(storagePath, 'tencent_qrcode.png'), onQrcode);
   } catch {
     /* silent: caller handles */
   }
@@ -229,25 +220,21 @@ async function _waitForTencentLogin(
   page: Page,
   storagePath: string,
   onQrcode?: (pngPath: string) => void,
-  pollInterval = 3000,
-  maxChecks = 100,
 ): Promise<{ success: boolean; message: string }> {
-  for (let i = 0; i < maxChecks; i++) {
-    if (await _isTencentLoginCompleted(page)) {
-      return { success: true, message: '视频号扫码登录成功' };
-    }
-
-    if (await _isTencentQrcodeExpired(page)) {
-      await _refreshTencentQrcode(page);
-      await sleep(1000);
-      if (onQrcode) {
-        await _tryExtractAndSaveQrcode(page, storagePath, onQrcode);
+  return runLoginPoll({
+    isCompleted: () => _isTencentLoginCompleted(page),
+    handleExpired: async () => {
+      if (await _isTencentQrcodeExpired(page)) {
+        await _refreshTencentQrcode(page);
+        await sleep(1000);
+        if (onQrcode) {
+          await _tryExtractAndSaveQrcode(page, storagePath, onQrcode);
+        }
       }
-    }
-
-    await sleep(pollInterval);
-  }
-  return { success: false, message: '等待视频号扫码登录超时' };
+    },
+    successMessage: '视频号扫码登录成功',
+    timeoutMessage: '等待视频号扫码登录超时',
+  });
 }
 
 // ─── Cookie-check helpers ─────────────────────────────────────────────────────

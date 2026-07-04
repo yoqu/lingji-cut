@@ -6,13 +6,11 @@ import { useAIVideoWorkflow } from '../hooks/useAIVideoWorkflow';
 import type { AppPage, FileEntry } from '../lib/electron-api';
 import { AutoRunLauncher } from '../components/AutoRunLauncher';
 import {
-  createPersistedScriptState,
   isSavingFile,
   loadFullScriptState,
   loadPersistedScriptProjectDir,
   markFileSaving,
   saveAllDirtyFiles,
-  saveScriptState,
 } from '../lib/script-persistence';
 import { LiveStreamingEditor } from '../lib/live-streaming-editor';
 import { diffToFrames } from '../lib/diff-to-frames';
@@ -1344,19 +1342,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       return latestState.extraFileContents[file] ?? '';
     });
     clearAllDirty();
-    await saveScriptState(
-      projectDir,
-      createPersistedScriptState(
-        useScriptStore.getState().reviewState,
-        useScriptStore.getState().scriptDocVersion,
-        useScriptStore.getState().selectedTemplate,
-        useScriptStore.getState().annotations,
-        {
-          manualStageOverride: useScriptStore.getState().manualStageOverride,
-          fileTreeView: useScriptStore.getState().fileTreeView,
-        },
-      ),
-    );
+    // 状态段落盘由 store/script.ts 订阅自动写入 project.json script 段。
     await refreshFileTree(projectDir);
   }, [clearAllDirty, projectDir, refreshFileTree]);
 

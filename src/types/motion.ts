@@ -9,15 +9,6 @@ export interface MotionCardPayload {
    * 仅存在于磁盘 project.json；加载时据此读回 tsx。
    */
   tsxPath?: string;
-  /**
-   * @deprecated 旧 HyperFrames 片段（HTML + CSS + GSAP）。仅用于旧项目加载兼容，
-   * 迁移完成后移除。新卡片请使用 tsx。
-   */
-  html?: string;
-  /** 旧项目原始 HTML 备份，便于提示「需重新生成」。 */
-  legacyHtml?: string;
-  /** 旧 HTML 卡片加载后置 true，表示需要重新生成为 Remotion 卡片。 */
-  needsRegeneration?: boolean;
   compiledAt: number;
   compileError?: string;
   prompt: string;
@@ -64,22 +55,10 @@ export interface MotionCompileFailure {
 
 export type MotionCompileResult = MotionCompileSuccess | MotionCompileFailure;
 
-export interface MotionCardResult {
-  success: boolean;
-  html?: string;
-  error?: string;
-  retryCount: number;
-}
-
 export interface MotionGenerateParams {
   prompt: string;
   durationMs?: number;
   displayMode?: 'fullscreen' | 'pip';
   canvasSize?: MotionCanvasSize;
   assets?: MotionAssetInfo[];
-}
-
-export interface MotionModifyParams {
-  html: string;
-  instruction: string;
 }

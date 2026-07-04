@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createPersistedAIState,
-  parsePersistedAIState,
   removeCardsInResult,
   setAllCardsEnabledInResult,
   selectCoverCandidate,
@@ -49,6 +48,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../ui/components/dropdown-menu';
+import { createAutoRunTelemetry } from '../lib/telemetry/auto-run';
 import styles from './AIPanel.module.css';
 
 interface AIPanelProps {
@@ -187,28 +187,12 @@ export function AIPanel({
     setGlobalPromptDraft(analysisResult?.globalPrompt ?? '');
   }, [analysisResult?.globalPrompt]);
 
+  // 落盘由 store/ai.ts 订阅自动完成；这里仅返回规范化快照供调用方回灌。
   const persistAIState = useCallback(
     async (
       result: AIAnalysisResult | null,
       candidates: CoverCandidate[],
-    ) => {
-      const fallbackState = createPersistedAIState(result, candidates);
-      const projectDir = getProjectDir();
-      if (!projectDir) {
-        return fallbackState;
-      }
-
-      const savedState = await window.electronAPI.saveAIAnalysis(
-        projectDir,
-        JSON.stringify(fallbackState, null, 2),
-      );
-
-      try {
-        return parsePersistedAIState(JSON.parse(savedState)) ?? fallbackState;
-      } catch {
-        return fallbackState;
-      }
-    },
+    ) => createPersistedAIState(result, candidates),
     [],
   );
 
@@ -434,13 +418,26 @@ export function AIPanel({
 
     try {
       const projectDir = getProjectDir();
+      // 手动分析同样落 auto-run jsonl（与一键流水线同一套耗时观测），排查"慢/失败"时直接读日志。
+      // run.start 会把 LATEST.txt 指到本次 runId。
+      const tel = createAutoRunTelemetry(`autorun-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
+      tel.event('run.start', { source: 'ai-panel-analyze', entries: srtEntries.length });
+      const runStartedAt = Date.now();
       const result = (await window.electronAPI.analyzeSrt({
         projectDir: projectDir ?? undefined,
         entries: srtEntries,
         settings,
         globalPrompt: globalPromptDraft.trim() || undefined,
         projectBindings: useAIStore.getState().projectBindings,
+        telemetryRunId: tel.runId,
+        feedId: analyzeTaskId,
       })) as AIAnalysisResult;
+      tel.event('run.end', {
+        ok: true,
+        totalDurationMs: Date.now() - runStartedAt,
+        cards: result.cards?.length ?? 0,
+        cardErrors: result.cardErrors?.length ?? 0,
+      });
       const persistedState = await persistAIState(result, []);
       setAnalysisResult(persistedState.analysisResult ?? result);
       setCoverCandidates(persistedState.coverCandidates);
@@ -521,7 +518,7 @@ export function AIPanel({
   );
 
   const handleRetryFailedSegment = useCallback(
-    async (error: AIAnalysisCardError) => {
+    async (error: AIAnalysisCardError, opts?: { skipPersist?: boolean }) => {
       const currentResult = useAIStore.getState().analysisResult ?? analysisResult;
       if (!currentResult) {
         return null;
@@ -592,15 +589,21 @@ export function AIPanel({
             const value = (segment as { visualType?: unknown }).visualType;
             return value === 'image' || value === 'motion' ? value : undefined;
           })(),
+          feedId: retryTaskId,
         });
         const latestResult = useAIStore.getState().analysisResult ?? currentResult;
         const nextResult = buildRetriedResult(latestResult, error, card);
         setAnalysisResult(nextResult);
+        useTaskProgressStore.getState().completeTask(retryTaskId);
+        // 批量重试跳过单卡落盘：多段并行下逐卡 persist 会相互覆盖（后写覆盖先写），
+        // 内存态合并是同步的（单线程累积安全），由调用方在并发池排空后统一落盘一次。
+        if (opts?.skipPersist) {
+          return nextResult;
+        }
         const persistedState = await persistAIState(nextResult, coverCandidates);
         const persistedResult = persistedState.analysisResult ?? nextResult;
         setAnalysisResult(persistedResult);
         setCoverCandidates(persistedState.coverCandidates);
-        useTaskProgressStore.getState().completeTask(retryTaskId);
         return persistedResult;
       } catch (retryError) {
         const message =
@@ -614,12 +617,15 @@ export function AIPanel({
           cardErrors: nextCardErrors.length > 0 ? nextCardErrors : undefined,
         };
         setAnalysisResult(nextResult);
-        void persistAIState(nextResult, coverCandidates).then((persistedState) => {
-          if (persistedState.analysisResult) {
-            setAnalysisResult(persistedState.analysisResult);
-          }
-          setCoverCandidates(persistedState.coverCandidates);
-        });
+        // 批量重试同样跳过单卡落盘，交由并发池排空后统一落盘（含剩余错误态）。
+        if (!opts?.skipPersist) {
+          void persistAIState(nextResult, coverCandidates).then((persistedState) => {
+            if (persistedState.analysisResult) {
+              setAnalysisResult(persistedState.analysisResult);
+            }
+            setCoverCandidates(persistedState.coverCandidates);
+          });
+        }
         setAnalysisError(
           `第 ${(error.segmentIndex ?? segmentIndex) + 1} 段「${
             error.segmentTitle ?? segment.title
@@ -656,17 +662,54 @@ export function AIPanel({
 
     setIsRetryingAllFailedCards(true);
     try {
-      for (const error of currentErrors) {
-        const latestErrors = useAIStore.getState().analysisResult?.cardErrors ?? [];
-        if (!latestErrors.some((item) => item.segmentId === error.segmentId)) {
-          continue;
+      // 并发池：与首次生成一致（shared cursor + Promise.all）。并发数取
+      // settings.cardGenerationConcurrency（默认 4，与 ai-analysis 一致）。逐卡仅做内存态
+      // 累积（同步合并，单线程下不会互相覆盖），落盘推迟到全部完成后统一一次，
+      // 避免并行 persist 后写覆盖先写。
+      const settings = await loadAISettings();
+      const rawConcurrency = settings?.cardGenerationConcurrency;
+      const concurrency =
+        typeof rawConcurrency === 'number' && Number.isFinite(rawConcurrency)
+          ? Math.max(1, Math.floor(rawConcurrency))
+          : 4;
+
+      let cursor = 0;
+      const runOne = async (): Promise<void> => {
+        while (true) {
+          const i = cursor;
+          cursor += 1;
+          if (i >= currentErrors.length) return;
+          const error = currentErrors[i];
+          const latestErrors = useAIStore.getState().analysisResult?.cardErrors ?? [];
+          if (!latestErrors.some((item) => item.segmentId === error.segmentId)) {
+            continue;
+          }
+          await handleRetryFailedSegment(error, { skipPersist: true });
         }
-        await handleRetryFailedSegment(error);
+      };
+      const workerCount = Math.min(concurrency, currentErrors.length);
+      await Promise.all(Array.from({ length: workerCount }, () => runOne()));
+
+      // 并发池排空后统一落盘一次（内存态已累积全部成功卡与剩余错误态）。
+      const finalResult = useAIStore.getState().analysisResult;
+      if (finalResult) {
+        const persistedState = await persistAIState(finalResult, coverCandidates);
+        if (persistedState.analysisResult) {
+          setAnalysisResult(persistedState.analysisResult);
+        }
+        setCoverCandidates(persistedState.coverCandidates);
       }
     } finally {
       setIsRetryingAllFailedCards(false);
     }
-  }, [failedCardErrors, handleRetryFailedSegment]);
+  }, [
+    coverCandidates,
+    failedCardErrors,
+    handleRetryFailedSegment,
+    persistAIState,
+    setAnalysisResult,
+    setCoverCandidates,
+  ]);
 
   const handleApplyToTimeline = useCallback(() => {
     if (!analysisResult) {

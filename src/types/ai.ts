@@ -83,6 +83,20 @@ export interface VisualStylePreview {
   coverImageAsset?: string;
 }
 
+/**
+ * Motion Card 风格 tokens：由 @lingji/motion-kit 的 CardStage 与内容原语消费。
+ * 结构与 src/remotion/motion-kit 的 MotionTokens 一致（此处独立声明避免类型层依赖渲染层）。
+ */
+export interface VisualMotionTokens {
+  palette: VisualStylePalette & { track?: string };
+  fonts: { display: string; body: string; mono: string };
+  typeScale?: { hero?: number; dataHero?: number; lead?: number; body?: number; label?: number };
+  surface?: { kind: 'none' | 'glass' | 'panel'; bg?: string; border?: string; radius?: number };
+  ambient?: { kind: 'none' | 'grid' | 'orbs' | 'hairline' | 'grain'; opacity?: [number, number]; color?: string };
+  camera?: { mode: 'push' | 'pull' | 'pan' | 'still'; range?: [number, number] };
+  persona?: { easing?: 'crisp' | 'calm' | 'bouncy'; emphasis?: 'settle' | 'brighten' | 'underline' | 'none' };
+}
+
 export interface VisualStylePreset {
   id: string;
   name: string;
@@ -93,6 +107,10 @@ export interface VisualStylePreset {
   palette: VisualStylePalette;
   fonts: VisualStyleFonts;
   facets: VisualStyleFacets;
+  /** Motion Card 风格 tokens（motion facet 的结构化替代；缺省回退默认风格） */
+  motionTokens?: VisualMotionTokens;
+  /** 少量预设专属提示（如玻璃拟态面板、渐变标题），注入 {{presetStyleNotes}}；≤3 行 */
+  motionStyleNotes?: string;
   preview: VisualStylePreview;
 }
 
@@ -152,7 +170,7 @@ export interface AICard {
   style: CardStyle;
   renderMode?: AICardRenderMode;
   cardPrompt?: string;
-  /** AI 生成的逐拍动画脚本，由 cards.animation 元提示词产出，注入 cards.segment 指导出卡。仅 motion 卡使用。 */
+  /** AI 生成的 JSON 分镜（storyboard），由 cards.animation 产出，注入 cards.segment 指导出卡。仅 motion 卡使用。 */
   animationDirection?: string;
   motionCard?: MotionCardPayload;
   /** 单卡级风格覆盖；缺省继承项目 / 全局 / 内置默认 */
@@ -258,6 +276,11 @@ export interface PiModelCompat {
 }
 
 export interface PiModelProjectionOptions {
+  /**
+   * 是否把模型声明为 pi extended thinking 模型。
+   * 这是 Pi Agent 请求层能力，不等同于普通 LLM 对话的 enableThinking。
+   */
+  reasoning?: boolean;
   input?: PiModelInputType[];
   contextWindow?: number;
   maxTokens?: number;
@@ -290,11 +313,9 @@ export interface LLMProvider {
   type:
     | 'openai_compatible'
     | 'openai_responses'
-    | 'anthropic'
     | 'minimax'
     | 'gemini'
     | 'lmstudio'
-    | 'claude_code_acp'
     | 'volcengine_ark';
   baseUrl: string;
   apiKey: string;
@@ -332,7 +353,7 @@ export interface VolcengineArkParams {
   serviceTier?: 'fast' | 'auto' | 'default';
 }
 
-export type TTSProviderType = 'minimax' | 'xiaomi_mimo' | 'custom_openai_audio';
+export type TTSProviderType = 'minimax' | 'xiaomi_mimo';
 
 export interface TTSProvider {
   id: string;
@@ -371,13 +392,12 @@ export interface AISettings {
   llmProviders: LLMProvider[];
   defaultProviderId: string | null;
   defaultModel: string | null;
-  // OpenAI / OpenAI-compatible
-  /** @deprecated 迁移后由 llmProviders 替代 */
-  llmBaseUrl: string;
-  /** @deprecated 迁移后由 llmProviders 替代 */
-  llmApiKey: string;
-  /** @deprecated 迁移后由 llmProviders 替代 */
-  llmModel: string;
+  /** @deprecated 仅存于旧配置文件，加载时经 migrateToProviders 一次性迁移并清空 */
+  llmBaseUrl?: string;
+  /** @deprecated 同 llmBaseUrl */
+  llmApiKey?: string;
+  /** @deprecated 同 llmBaseUrl */
+  llmModel?: string;
   /** @deprecated 已迁移到 LLMProvider.enableThinking；保留仅用于旧数据迁移 */
   enableThinking?: boolean;
   // 图片生成
@@ -429,6 +449,18 @@ export interface AISettings {
 }
 
 export const DEFAULT_JIMENG_MODEL = 'jimeng-5.0';
+
+/** cardGenerationConcurrency 缺省值；store 归一化与 analyzeSrt 兜底共用同一真源。 */
+export const DEFAULT_CARD_GENERATION_CONCURRENCY = 2;
+
+/** 归一化卡片生成并发：有限正整数向下取整，否则回落默认值。 */
+export function normalizeCardGenerationConcurrency(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_CARD_GENERATION_CONCURRENCY;
+  }
+  const n = Math.floor(value);
+  return n >= 1 ? n : DEFAULT_CARD_GENERATION_CONCURRENCY;
+}
 
 export interface AICardOverlayData {
   sourceCardId?: string;
@@ -565,13 +597,8 @@ export interface ImageProvider {
   extras?: Record<string, unknown>;
 }
 
-/** 受支持的视频生成 Provider 类型 */
-export type VideoProviderType =
-  | 'vidu'
-  | 'kling'
-  | 'runway'
-  | 'minimax_video'
-  | 'custom';
+/** 受支持的视频生成 Provider 类型（仅保留有运行时适配器的类型） */
+export type VideoProviderType = 'vidu';
 
 /** 视频宽高比公共集（video 卡运行时仅接受该子集） */
 export type VideoAspectRatio = '16:9' | '9:16' | '1:1';

@@ -9,20 +9,14 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  EmptyState,
   Field,
   Input,
   ModalFooter,
   Select,
 } from '../../ui';
 import type { SelectOption } from '../../ui';
-import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
+import { genProviderId, MediaProviderListSection } from './MediaProviderListSection';
 import styles from './ImageProviderListSection.module.css';
-
-/** 生成唯一 ID */
-function genId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 // ─── Capabilities 摘要（硬编码概要，不依赖主进程）───────────────────────
 
@@ -40,48 +34,16 @@ const CAPABILITIES_SUMMARY: Record<VideoProviderType, CapabilitiesSummary> = {
     defaultModels: ['vidu-2.0', 'vidu-1.5'],
     defaultBaseUrl: 'https://api.vidu.com',
   },
-  kling: {
-    ratios: '16:9 / 9:16 / 1:1',
-    durations: '5s / 10s',
-    defaultModels: ['kling-v1', 'kling-v1.5'],
-    defaultBaseUrl: 'https://api.klingai.com',
-  },
-  runway: {
-    ratios: '16:9 / 9:16',
-    durations: '5s / 10s',
-    defaultModels: ['gen3-alpha', 'gen3-alpha-turbo'],
-    defaultBaseUrl: 'https://api.runwayml.com',
-  },
-  minimax_video: {
-    ratios: '16:9',
-    durations: '6s',
-    defaultModels: ['video-01'],
-    defaultBaseUrl: 'https://api.minimax.chat',
-  },
-  custom: {
-    ratios: '取决于端点',
-    durations: '取决于端点',
-    defaultModels: [],
-    defaultBaseUrl: '',
-  },
 };
 
 // ─── Provider Type 选项 ───────────────────────────────────────────────────
 
 const VIDEO_PROVIDER_TYPE_OPTIONS: SelectOption[] = [
   { value: 'vidu', label: 'Vidu' },
-  { value: 'kling', label: 'Kling' },
-  { value: 'runway', label: 'Runway' },
-  { value: 'minimax_video', label: 'MiniMax Video' },
-  { value: 'custom', label: '自定义（OpenAI 兼容）' },
 ];
 
 const TYPE_LABELS: Record<VideoProviderType, string> = {
   vidu: 'Vidu',
-  kling: 'Kling',
-  runway: 'Runway',
-  minimax_video: 'MiniMax Video',
-  custom: '自定义（OpenAI 兼容）',
 };
 
 function getTypeLabel(type: VideoProviderType): string {
@@ -91,7 +53,7 @@ function getTypeLabel(type: VideoProviderType): string {
 /** 空白 VideoProvider 表单 */
 function emptyVideoProvider(): VideoProvider {
   return {
-    id: genId(),
+    id: genProviderId(),
     name: '',
     type: 'vidu',
     baseUrl: '',
@@ -176,17 +138,7 @@ function VideoProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
   };
 
   const handleTypeChange = (nextType: VideoProviderType) => {
-    setForm((f) => {
-      if (f.type === nextType) return f;
-      const prevDefaults = CAPABILITIES_SUMMARY[f.type].defaultModels;
-      const nextDefaults = CAPABILITIES_SUMMARY[nextType].defaultModels;
-      const isUntouched =
-        f.models.length === 0 ||
-        (f.models.length === prevDefaults.length &&
-          f.models.every((m, i) => m === prevDefaults[i]));
-      const nextModels = isUntouched ? [...nextDefaults] : f.models;
-      return { ...f, type: nextType, models: nextModels };
-    });
+    setForm((f) => (f.type === nextType ? f : { ...f, type: nextType }));
     clearFieldError('baseUrl');
     clearFieldError('apiKey');
     clearFieldError('models');
@@ -357,137 +309,21 @@ export function VideoProviderListSection({
   defaultVideoProviderId,
   onChange,
 }: Props) {
-  const [editTarget, setEditTarget] = useState<VideoProvider | null>(null);
-  const [isAdding, setIsAdding] = useState(false);
-
-  const handleSave = (updated: VideoProvider, setAsDefault: boolean) => {
-    let next: VideoProvider[];
-    if (isAdding) {
-      next = [...videoProviders, updated];
-    } else {
-      next = videoProviders.map((p) => (p.id === updated.id ? updated : p));
-    }
-    const newDefaultId = setAsDefault ? updated.id : (defaultVideoProviderId ?? null);
-    onChange(next, newDefaultId);
-    setEditTarget(null);
-    setIsAdding(false);
-  };
-
-  const handleDelete = (id: string) => {
-    const next = videoProviders.filter((p) => p.id !== id);
-    const newDefaultId =
-      defaultVideoProviderId === id ? (next[0]?.id ?? null) : (defaultVideoProviderId ?? null);
-    onChange(next, newDefaultId);
-  };
-
-  const openAdd = () => {
-    setEditTarget(emptyVideoProvider());
-    setIsAdding(true);
-  };
-
-  const openEdit = (p: VideoProvider) => {
-    setEditTarget({ ...p });
-    setIsAdding(false);
-  };
-
-  const closeDialog = () => {
-    setEditTarget(null);
-    setIsAdding(false);
-  };
-
   return (
-    <div className={styles.root}>
-      {videoProviders.length === 0 ? (
-        <EmptyState
-          eyebrow="Video Provider"
-          title="暂无视频 Provider"
-          description="点击下方按钮添加你的第一个视频 Provider（Vidu / Kling / Runway 等）。"
-          actions={
-            <Button type="button" variant="secondary" onClick={openAdd}>
-              + 添加视频 Provider
-            </Button>
-          }
-        />
-      ) : (
-        <>
-          <div className={styles.providerList}>
-            {videoProviders.map((p) => (
-              <div key={p.id} className={styles.providerCard}>
-                <div className={styles.providerHeader}>
-                  <div className={styles.providerTitleGroup}>
-                    <span className={styles.providerName}>{p.name || '未命名 Provider'}</span>
-                    {p.id === defaultVideoProviderId ? (
-                      <Badge variant="info" size="xs">
-                        默认
-                      </Badge>
-                    ) : null}
-                    <span className={styles.providerTypeLabel}>
-                      {getTypeLabel(p.type)}
-                    </span>
-                  </div>
-                  <div className={styles.providerActions}>
-                    {isLingjiManagedProviderId(p.id) ? (
-                      <Badge variant="secondary" size="xs">
-                        服务端托管
-                      </Badge>
-                    ) : (
-                      <>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => handleDelete(p.id)}
-                        >
-                          删除
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                <span className={styles.providerCapsSummary}>
-                  {buildCapabilitiesSummaryText(p.type)}
-                </span>
-
-                {p.baseUrl ? <span className={styles.providerBaseUrl}>{p.baseUrl}</span> : null}
-
-                {p.models.length > 0 ? (
-                  <div className={styles.providerModels}>
-                    {p.models.map((m) => (
-                      <Badge key={m} variant="secondary" size="xs">
-                        {m}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <span className={styles.providerHint}>未配置模型</span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <Button
-            type="button"
-            variant="secondary"
-            className={styles.addProviderButton}
-            onClick={openAdd}
-          >
-            + 添加视频 Provider
-          </Button>
-        </>
-      )}
-
-      {editTarget && (
-        <VideoProviderDialog
-          initial={editTarget}
-          isDefault={isAdding ? false : editTarget.id === defaultVideoProviderId}
-          onSave={handleSave}
-          onCancel={closeDialog}
-        />
-      )}
-    </div>
+    <MediaProviderListSection
+      providers={videoProviders}
+      defaultProviderId={defaultVideoProviderId}
+      onChange={onChange}
+      createEmptyProvider={emptyVideoProvider}
+      getTypeLabel={(p) => getTypeLabel(p.type)}
+      getCapsSummary={(p) => buildCapabilitiesSummaryText(p.type)}
+      emptyState={{
+        eyebrow: 'Video Provider',
+        title: '暂无视频 Provider',
+        description: '点击下方按钮添加你的第一个视频 Provider（Vidu / Kling / Runway 等）。',
+      }}
+      addLabel="+ 添加视频 Provider"
+      renderDialog={(dialogProps) => <VideoProviderDialog {...dialogProps} />}
+    />
   );
 }

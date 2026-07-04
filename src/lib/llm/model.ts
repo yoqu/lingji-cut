@@ -3,7 +3,6 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { ChatOpenAI } from '@langchain/openai';
 import { LMSTUDIO_DEFAULT_BASE_URL, type AISettings, type LLMProvider } from '../../types/ai';
-import { ClaudeCodeAcpChatModel } from './claude-code-acp-model';
 
 /** MiniMax Anthropic 兼容端点默认地址（SDK 会在其后拼 /v1/messages）。 */
 export const MINIMAX_ANTHROPIC_DEFAULT_BASE_URL = 'https://api.minimaxi.com/anthropic';
@@ -54,31 +53,6 @@ function resolveEnableThinking(
     return options.enableThinking;
   }
   return provider.enableThinking ?? true;
-}
-
-function buildModelKwargs(settings: AISettings): Record<string, unknown> | undefined {
-  if (settings.enableThinking === false) {
-    return {
-        enable_thinking: false
-    };
-  }
-
-  return undefined;
-}
-
-export function createChatModel(settings: AISettings): ChatOpenAI {
-  const modelKwargs = buildModelKwargs(settings);
-
-  return new ChatOpenAI({
-    apiKey: settings.llmApiKey,
-    model: settings.llmModel,
-    temperature: 0.3,
-    configuration: {
-      apiKey: settings.llmApiKey,
-      baseURL: normalizeBaseUrl(settings.llmBaseUrl),
-    },
-    ...(modelKwargs ? { modelKwargs } : {}),
-  });
 }
 
 function createGeminiChatModel(
@@ -170,12 +144,6 @@ export function createChatModelFromProvider(
   model: string,
   options?: { enableThinking?: boolean },
 ): BaseChatModel {
-  if (provider.type === 'claude_code_acp') {
-    return new ClaudeCodeAcpChatModel({
-      model,
-    }) as unknown as BaseChatModel;
-  }
-
   if (provider.type === 'gemini') {
     return createGeminiChatModel(provider, model, options);
   }

@@ -65,155 +65,87 @@ user: |-
 `;
 
 const CARDS_SEGMENT = `name: cards.segment
-description: 段落 Motion Card 生成提示词（电子杂志 × 电子墨水 · 深色变体 · 单一焦点 · 逐句同步 · TSX-only 输出）
-version: 16
+description: Motion Card 组件构建（组合 @lingji/motion-kit 实现 JSON 分镜；file-first 写入 motionCard.tsx）
+version: 20
 user: |-
-  任务：为当前 segment 生成 **1 个 Remotion Motion Card 组件**。只输出**一个 \`\`\`tsx 代码块**（单文件 React 函数组件，export default），不要输出 JSON、不要任何解释文字、不要在代码块外写内容。卡片的标题 / 时间 / 类型等元信息由系统从 segment 合成，你只需专注把内容做成漂亮的逐帧动画组件。本提示词不处理 image 段落，image 段在上游直接走 card.image 链路。
+  任务：把下面的分镜（storyboard）实现为一个 Remotion 单文件组件，用 write 工具写入工作目录的 motionCard.tsx。
 
-  ===== 创作理念（专业播客解说视频 · 必须贯彻）=====
-  - 这是跟着口播走的解说画面，不是塞满信息的仪表盘。**单一焦点**：每张卡只表达一个核心，任一时刻屏幕上只有一个视觉焦点。
-  - **逐拍构建**：内容随口播推进一拍一拍地出现，**讲到哪一点、哪一点才亮**（跟随字幕时间，见下方"节奏契约"）；可略微提前，但绝不在内容讲完很久之后才出现。
-  - **大量留白、字大字少**：宁可省略也不塞满；信息少而精，比堆满更专业。
+  ===== 技术契约（机器会逐条校验，违反直接打回）=====
+  - 组件签名固定 \`export default function Card({ cues = [] })\`；cues 可能为空数组。
+  - 根节点用 <CardStage tokens={TOKENS}>：底色、安全区（底部 20% 字幕区）、镜头慢漂、装饰氛围层、退场淡出全部内置——不要自己实现这些，也不要往安全区里放任何内容。
+  - 一切动画必须是 useCurrentFrame() 的纯函数；禁止 Math.random / Date / fetch / 定时器 / DOM API。
+  - 只能 import remotion / react / @lingji/motion-kit 三个模块。
+  - 函数体必须 return 真实 JSX；严禁 TODO / 省略占位 / return null——不完整组件渲染黑屏视为失败。
 
-  上下文：
-  - 全局提示：{{globalPrompt}}
-  - 节目总结：{{programSummary}}
-  - 关键词：{{keywords}}
-  - segment：{{segmentId}}｜{{segmentTitle}}｜{{segmentStartMs}}-{{segmentEndMs}}ms
-  - 摘要：{{segmentSummary}}
-  - 摘录：{{segmentTranscriptExcerpt}}
-  - 逐句字幕节拍（本段口播按时间顺序，索引 k 与运行时 cues 数组一一对应，用于把每个焦点元素锚到讲出它的那一句）：
-  {{segmentCues}}
-  - 单卡提示：{{cardPrompt}}
-  - 动画指导（针对本卡内容编排的逐拍动画脚本，若有则在不违反下方所有铁律的前提下优先遵循其节拍与形变意图；若为"无"则按通用节奏契约处理）：
+  ===== motion-kit API（优先用它，工艺参数已调好）=====
+  {{motionKitApi}}
+
+  ===== 风格 tokens（原样定义为 TOKENS 常量传给 CardStage；不要自配色、不要换字体）=====
+  const TOKENS = {{presetMotionTokens}};
+  {{presetStyleNotes}}
+
+  ===== 实现要领（唯一需要你判断的部分）=====
+  1. 节拍：const beats = useBeats(cues, anchors)，anchors 按分镜每拍的 cue 填（第 0 拍填 null）。揭示帧一律由 useBeats 计算——提前量、单调性、空 cues 兜底它已处理，严禁手写帧窗、严禁按比例均摊。
+  2. 载体：按分镜 carrier 选内容原语——data-hero→StatHero；comparison→CompareRow；trend→TrendLine；list-build→ListBuild；process→ProcessFlow；quote→QuoteBlock；concept→标题 + 释义排版。**能用原语表达的内容必须用原语**（安全区、等比配重、tabular-nums、落地强调都已内置，自写布局极易越界翻车）；自定义 JSX 只用于原语覆盖不了的表达，且只能 import 上面 API 清单里列出的名字。
+  3. 状态演进（决定"MG 感"还是"PPT 感"）：严格执行每拍的 adds / changes——已出现的元素保持终态，不消失、不循环、不再次入场；changes 说"弱化"就把 opacity 降到 0.4~0.6，说"让位"就位移 / 收缩腾出焦点位，说"保持"就不动。整卡是一个连续场景的演进，不是翻页。
+  4. 运动多样：不同元素用不同手法（fadeUp / slideIn / riseIn / popIn / trackIn / drawOn 缓动各不相同），别整卡一招；分镜的 motion 意图优先。
+  5. 焦点：分镜 focus 指到的那一拍是唯一语义焦点——视觉上最大最重，落地强调由原语内置（或对自定义元素用 emphasize()）；其余元素一律让它。
+  6. 字大字少、大量留白：每行上屏文字 ≤ 14 个汉字，口播整句绝不上屏（提炼成关键词 / 短语）；正文字号 ≥ H*0.026，内容放不下就删文案而不是缩字号或往下挤；焦点在安全区内垂直居中（CardStage 已处理），横向用满内容区宽 CW（useStage 提供，=0.8×W；整行元素 / svg / 横向条宽度一律用 CW，写 W 全宽必溢出画布判失败）。
+  7. 文案与数字只能来自分镜和逐字稿，不改写、不编造；不出现 Source / AI Generated / 水印小字。
+
+  ===== 分镜（storyboard，本卡的设计蓝图）=====
   {{animationDirection}}
+
+  ===== 逐句字幕节拍（索引 k 即运行时 cues[k]，与分镜的 cue 字段对应）=====
+  {{segmentCues}}
+
+  ===== 上下文 =====
+  - segment：{{segmentId}}｜{{segmentTitle}}
+  - 摘要：{{segmentSummary}}
+  - 全局提示：{{globalPrompt}}
+  - 单卡提示：{{cardPrompt}}
   {{currentCardSection}}
 
-  时间轴：startMs/endMs/displayDurationMs 必须围绕当前段核心表达；不提前覆盖铺垫、转场或相邻段。
-
-  ===== Motion Card 通用技术约束（不可违反）=====
-  - 输出必须是单文件 Remotion 函数组件，使用 "export default" 导出，**组件签名固定为 \`export default function Card({ cues = [] })\`**；可从 'remotion' 引入 useCurrentFrame、useVideoConfig、interpolate、spring、Easing、AbsoluteFill、Sequence，从 'react' 引入所需 API。
-  - **cues**：宿主注入的逐句字幕节拍 —— 一个 number[]，按时间顺序给出本段**每句口播的相对起始帧**（相对卡片 frame 0）。用它来"逐句揭示"内容（见节奏契约）。cues 可能为空数组，组件必须能在空 cues 下正常工作。
-  - 组件**必须完整可运行**：函数体里必须有 return 返回真实 JSX（至少一个 <AbsoluteFill> 根节点）。严禁只写变量/常量骨架后用 “// ... build out the rest” “// TODO” “…” 之类注释收尾，严禁返回 null / 空；不完整的组件会渲染黑屏，视为生成失败。
-  - 动画必须由 useCurrentFrame() 帧驱动：用 interpolate(frame, [inStart, inEnd], [from, to], { extrapolateLeft:'clamp', extrapolateRight:'clamp' }) 或 spring 计算每帧样式；不要依赖运行时随机或异步逻辑。
-  - 布局必须使用百分比、CSS clamp、flex/grid 或容器尺寸自适应（用 useVideoConfig() 的 width/height），禁止硬编码只适配 1920×1080。
-  - 禁止 fetch / setTimeout / setInterval / Math.random / new Date / requestAnimationFrame 等非确定性或副作用 API；所有动画都必须是 frame 的纯函数，保证逐帧可复现。
-  - 内联 style 即可；不引入外部字体 / 网络资源；不输出 markdown 代码块；不写注释解释画面。
-  - 内容忠于字幕，不编造数字与人名；画面里不要出现 Source / AI Generated / 节目水印之类小字。
-  - 信息密度（单一焦点，硬上限）：整张卡只能是以下二选一 —— ① 1 个主标题 + 1 个主数据/主视觉（一个 hero）；或 ② 1 个标题 + **至多 3 个递进要点**。**禁止并列堆叠**（不要标题 + 副标题 + 数据图 + 列表全都同时上）。最多 1 层 hairline 装饰；禁止粒子雨 / blur 氛围光 / 大量 path / 逐帧随机 / CameraMotionBlur。
-  - **禁止具象实物（铁律）**：严禁用 SVG / path / 矩形拼一个购物袋、瓶子、箱子、货架、房子、人物、硬币堆等具象物品或场景插画——AI 画这些既不准也难看。一切都用**文字、数字、表格、柱状/折线/占比条等图表、列表、色块、分隔线**来表达；要表现"消费/增长/对比"等概念，用增长的数字、生长的柱子、逐行的表格，而不是画一个实物。
-  - 可用运行时：{{sandboxReference}}
-
-  ===== 节奏契约：跟随口播逐句揭示（铁律，违反即重做，这是本卡最重要的规则）=====
-  核心：画面内容必须**跟着口播一句一句出现**——每个焦点元素在它的内容**被讲到的那一刻**揭示，可以略微提前，**绝不允许讲完很久之后才出现**。
-
-  把"出现的焦点元素"按讲述顺序记为 step[0..N-1]（N = 焦点元素个数，1~4 个）。上面"上下文"里的**逐句字幕节拍列表**是本段口播逐句列表，每行形如 \`[k] +秒数 文本\`；**索引 k 与运行时注入组件的 cues 数组一一对应**——即代码里 \`cues[k]\` 就是第 k 句口播的相对起始帧。请用它把每个元素锚到"内容被讲到"的那一句。
-
-  设 D = useVideoConfig().durationInFrames，M = cues.length，entranceEnd = Math.min(18, D*0.12)。揭示规则：
-  - **语义对齐（核心做法）**：对每个 step[i]，先在上文逐句字幕节拍列表里找到**首次讲出该元素内容**的那一句，记其索引 k_i；揭示起点 revealStart_i = cues[k_i]。
-    · 例：柱状图标注"硕士 28842"，而列表有 \`[2] +8.1s 硕士28842人，博士2403人…\`，则该柱子锚到 cues[2]，在第 2 句被讲到时才长出来；严禁让它拖到段尾才出现。
-  - **可提前、不可迟到**：revealStart_i 允许比 cues[k_i] **早至多 12 帧**（≈0.4s 预备出现），但**绝不允许晚于 cues[k_i] 超过 8 帧**（≈0.27s）。宁可早一点，不可"口播都讲完了画面才出来"。
-  - **入场不空屏**：step[0] 固定在 [0, entranceEnd] 入场（serif 主标题，translateY(H*0.04)+opacity 0→1），保证开头不空白；其余 step 按上面语义锚定。
-  - **严格顺序**：k_0 ≤ k_1 ≤ … ≤ k_{N-1}，各 revealStart 随 i **单调不减**，必须与口播顺序一致，禁止乱序——这一条直接决定动画跟不跟得上口播。
-  - **兜底**：当逐句字幕节拍列表为空、或句子数 M 少于焦点数 N、或某元素在口播里实在找不到对应句时，退回均匀铺满 —— contentSpan = D*0.80 - entranceEnd，revealStart_i = entranceEnd + contentSpan*(i/(N-1))。
-  - 所有 revealStart 统一 clamp：Math.max(entranceEnd, Math.min(D-12, revealStart_i))；揭示窗 = [revealStart_i, revealStart_i+12]，用 translateY(H*0.025)+opacity 0→1；禁止 scale>1.04 / rotate / blur 入场。
-  - **照此模式实现，把 cueIndexForStep 换成你的语义映射，不要回退成"按比例平均铺开"**：
-    \`\`\`
-    const D = useVideoConfig().durationInFrames;
-    const entranceEnd = Math.min(18, D * 0.12);
-    const M = cues.length;
-    // 关键：cueIndexForStep[i] = 第 i 个焦点元素的内容在逐句字幕节拍列表里被讲到的那一句的索引
-    const cueIndexForStep = [0, /* 例如 */ 2, 5];
-    const LEAD = 10; // 提前帧数，≤12
-    const revealAt = (i, N) => {
-      if (i <= 0) return 0; // 入场
-      const k = cueIndexForStep[i];
-      const r = (M > 0 && k != null && k < M)
-        ? cues[k] - LEAD
-        : entranceEnd + (D * 0.8 - entranceEnd) * (i / (N - 1)); // 兜底
-      return Math.max(entranceEnd, Math.min(D - 12, r));
-    };
-    \`\`\`
-  - **铁律（违反任意一条即重做）**：① 每个焦点元素的揭示帧必须由"它内容对应的那句 cues[k]"算出，**严禁硬编码固定帧窗 [0,18][25,37]…，严禁把 N 拍按比例平均摊到整段 cues 上（idx=round(i*(M-1)/(N-1)) 之类）**——那会让画面与口播脱节，正是要消除的 bug；② 任何元素都**不得在其内容讲完 8 帧以后才出现**（可提前、不可迟到）；③ revealStart 必须随 i 单调不减，跟随口播顺序。
-  - 若 N==1（单 hero 卡）：hero 在 [0, entranceEnd] 入场后保持即可，无需后续拍。
-  - 已揭示的元素必须保持 opacity:1 与最终 translate 状态直到卡片末尾；**绝对禁止在揭示后再让它消失或再次入场**。
-  - 同一元素内部的小构件（kicker / 单位 / 注释）可在该元素揭示窗内 4-8 帧错峰，错峰**不得超过 12 帧**，不另占一拍。
-
-  退场窗（可选）：
-  - 仅当 D > 90 时启用，窗 = [D - 14, D]，整卡 opacity 1→0.0 单调下降，不允许任何元素反向运动。
-
-  动画反禁忌（**违反任意一条都视为生成失败，必须重做**）：
-  1. 禁止任何 opacity 在同一元素上出现 0→1→0 / 1→0→1 类反复；揭示后就保持。
-  2. 禁止使用 Math.random / noise2D / noise3D / 基于真实时间的 Math.sin/cos 调制 opacity / scale / translate；只能用 interpolate 在固定帧区间内做 tween（可配合 Easing.out(Easing.cubic) 等）。
-  3. 禁止无限循环的物理动画；spring 必须给定 durationInFrames 或仅用于一次性入场，配合 Easing 等确定性缓动。
-  4. 禁止任何元素在不同帧间发生位置 / 尺寸的"瞬移"（即 interpolate 区间外不留出 clamp）。
-  5. 禁止整卡级 scale / rotate / 摄影机抖动 / 翻页效果。
-  6. 禁止循环抖动 / 持续呼吸缩放；唯一允许的"微动"是 hairline 长度从 0→100% 的一次性单调揭示。
-
-  布局（单一焦点 · 大留白 · 杜绝遮挡）：
-  - **底部字幕安全区（铁律 · 最易翻车）**：画面底部约 20%（y ≥ H * 0.80）永远被口播字幕占用，**任何内容都不得落入该区**——footer / 出处 / 编号 meta / 关键结论 / 图表底部刻度标签同样禁止。做法：顶层容器**底部 padding ≥ H * 0.20**（顶部 padding 取 H * 0.07 ~ 0.10，整体上紧下松把焦点上移），并确保所有元素的最低边界 ≤ H * 0.80。**宁可删掉 footer / 出处行，也绝不把它压在底部字幕里。**
-  - **用满 16:9、焦点居于安全区中部**：唯一焦点应在"安全区"（顶部 ~ y≈H * 0.80）内**垂直居中**，而不是在整张 H=1080 里居中——后者会让焦点偏低、上方与中部大片空、底部又被字幕压。横向善用 16:9 宽度（左右对比、横向铺陈），别让内容挤成窄竖排留出大片空旷。
-  - 版式以**居中或竖向堆叠**为主（flex column / 简单 grid 均可），围绕唯一焦点组织；**不要追求填满画面的 Bento 仪表盘**。
-  - **大留白是硬要求**：顶层 padding 左右 ≥ W * 0.10、顶部 ≥ H * 0.07、底部 ≥ H * 0.20（见上"底部字幕安全区"）；元素之间留足空白，画面大部分应是空的，让眼睛聚焦在当前这一拍。
-  - 容器与元素**禁止任何 background / border / borderRadius / boxShadow / filter**；分隔只允许靠 ① 留白 ② 一条 1px hairline（rgba(236,231,218,0.18)）。
-  - 任何 position:'absolute' 的子元素必须显式给出 left/right/top/bottom 四角中至少 2 个，并保证不与其它绝对定位元素相交；hairline 不得压在文字 / 图表上。
-  - 文字行 fontSize 之和 + 间距之和必须 ≤ 可用高度 - 2 * paddingY；内容放不下就**缩短文案**，不要缩字号到不可读、更不要硬塞。
-  - 数据可视化（图 / 表）与文字必须用明确留白或一条 hairline 隔开，绝不相互重叠。
-  - 中文字符不要给 letterSpacing < 0 的负字距；西文标号才允许 -0.01em ~ -0.02em。
-
-  {{styleSystemBlock}}
-
-  节目定位：
   {{programContext}}
 `;
 
 const CARDS_ANIMATION = `name: cards.animation
-description: 内容自适应动画指导生成（只用文字/数字/表格/图表等前端可绘制元素编排动画，供 cards.segment 出卡遵循）
-version: 2
+description: 视觉论证分镜（导演产出结构化 JSON storyboard，供 cards.segment 组件构建遵循）
+version: 5
 user: |-
-  任务：你是信息可视化解说视频的动效导演。给定下面这一段口播内容，为它编排一份**逐拍动画脚本**，供后续生成 Remotion Motion Card。只输出脚本本身，不要代码、不要解释、不要 markdown 代码块。
+  你是知识类解说视频的动效导演。为下面这段口播设计一张 Motion Card 的分镜。
 
-  ===== 第一铁律：只用"前端代码能精确画出来的东西"做动画 =====
-  画面**严禁出现任何具象的物品、人物、动物、场景插画、拟物图标、用 SVG 手绘的实物**（如购物袋、瓶子、箱子、货架、房子、人脸、手、硬币堆等）——AI 画这些既不准也不好看，是当前动画最大的问题。
-  动画的主角永远是**信息本身的载体**，且只能从下面这份"前端友好元素清单"里取：
-  - 文字排版：标题 / 关键词 / 短句，用字号、字重、出现顺序、位置与对齐做戏。
-  - 数字：计数滚动、百分比、金额，从 0 增长到目标值。
-  - 表格：表头 + 数据行逐行揭示，单元格高亮、左右列对比。
-  - 图表（用纯 div/矩形/线条即可画）：柱状（柱子逐根从 0 生长）、折线/趋势（路径逐段描绘）、占比条 / 进度条 / 环形比例、左右对比条。
-  - 列表 / 要点：逐条进入，带序号、项目符号或缩进层级。
-  - 标签 / 徽标 / 色块 / 分隔线(hairline) / 方框 / 下划线：用于强调与分组。
-  - 版面动作：位移、对齐变化、网格重排、两栏拆分 / 合并。
-  这里说的"形变/转化"指**信息形态之间的转化**（例：一个大数字收拢成一根柱子；一句标题拆成左右两栏对比；一行要点展开成一张三行小表），**绝不是**把一个实物变成另一个实物。任何时候你想到"画个东西"，立刻换成"用文字或图表承载同一条信息"。
+  ===== 设计方法（按序思考）=====
+  1. 提炼论点：这段口播到底在证明什么？写成一句 claim。
+  2. 选载体：从 7 种原型里选最能"证明"这个论点的一种——
+     - data-hero：一个核心数字（大数 + 单位 + 等比配重）
+     - comparison：A vs B 对比（双栏 / 对比条）
+     - trend：随时间变化（折线 / 阶梯）
+     - list-build：并列要点（逐条列表）
+     - process：步骤 / 流程 / 因果链（节点依次点亮）
+     - quote：金句定格（大字 + 出处）
+     - concept：术语定义 / 概念拆解（词 + 释义 + 拆解块）
+     画面只能用文字、数字、表格、图表、列表、色块、线条——不画实物、人物、场景插画。
+  3. 编分镜：拆成 1~6 拍，每拍锚到"讲出该内容的那一句"（下方逐句节拍的索引 k，随拍序单调不减）。
+     一张卡是**一个连续场景的状态演进**：每拍写清 adds（新出现什么）与 changes（已有元素如何变化：保持 / 转化 / 让位 / 弱化）——不是每拍飞入一个新东西。关键数字、金句处可加 kind="accent" 的小重音拍（高亮 / 下划线扫过 / 数字跳动）。
+  4. 标焦点：focus 指出唯一语义焦点在哪一拍，emphasis 四选一：countup-settle（数字计数收尾回弹）/ slam（重砸落定）/ underline-sweep（下划线扫过）/ brighten（一次性提亮）。
 
-  ===== 动效方法论 =====
-  1. 单一焦点：任一时刻只有一个视觉焦点，一拍只讲一件事；大量留白。
-  2. 跟口播逐句推进：每个焦点元素锚定到"它的内容被讲到"的那一句（见下方逐句节拍），讲到哪、哪才亮；可略提前，绝不迟到。
-  3. 信息形态递进：拍与拍之间尽量让上一拍的元素自然转化 / 让位给下一拍（数字→柱、标题→表头、要点→对比条），避免硬切闪现。
-  4. 有机缓动：先快后慢（ease-out / 弹性缓出）；数字用计数增长、柱子与折线用长度生长、文字用位移+淡入；转场可加一次轻微高光或下划线扫过。
-  5. 数据忠实：所有数字、名称、占比必须来自口播原文，不臆造；没有数字的段落就用"关键词 + 短句 + 强调"，不硬塞图表。
+  ===== 硬约束（机器逐条校验，违反直接打回）=====
+  - cue 必须是下方逐句节拍里真实存在的索引，随拍序单调不减；只有第 0 拍允许 null（入场）。
+  - adds / changes 里的数字与专有名词必须在逐字稿中原样出现——不得编造、换算、四舍五入。
+  - **屏上文字必须短**：adds 里每条上屏文字 ≤ 14 个汉字（标题 ≤ 10 字，数字与单位除外）。口播原句绝不整句上屏——提炼成关键词 / 短语 / 数字（quote 载体的金句除外，且金句也要截到一句以内）。
+  - motion 只写动作意图（如"柱子从 0 生长""数字计数到 28842"），不写帧数、缓动参数、颜色。
+  - 没有数字的段落不硬塞图表：改用 quote / concept / list-build。
 
-  ===== 输入上下文 =====
+  ===== 输入 =====
   - 全局提示：{{globalPrompt}}
-  - 节目总结：{{programSummary}}
-  - 关键词：{{keywords}}
-  - segment：{{segmentId}}｜{{segmentTitle}}｜{{segmentStartMs}}-{{segmentEndMs}}ms
+  - 节目总结：{{programSummary}}｜关键词：{{keywords}}
+  - segment：{{segmentId}}｜{{segmentTitle}}
   - 摘要：{{segmentSummary}}
   - 摘录：{{segmentTranscriptExcerpt}}
-  - 逐句字幕节拍（索引 k 对应运行时 cues[k]，用于把元素锚到讲出它的那一句）：
+  - 逐句字幕节拍（[k] +秒数 文本；k 即 cue 索引）：
   {{segmentCues}}
-  - 用户风格补充（可选，作为视觉/语气偏好参考，不得与上述方法论冲突）：{{cardPrompt}}
-
-  ===== 输出格式（严格遵守）=====
-  先用一句话给出"信息载体"：这一段用什么前端元素承载（如"标题 + 一张三行对比表""一个增长数字 + 三根占比柱""四条要点列表"），必须取自上面的清单，不得是实物。
-  然后给出 1~4 拍，每拍一行：
-  「拍i ｜ 锚:cues[k]（或 入场/兜底）｜ 元素：<文字/数字/表格/图表/列表/标签 之一及其具体内容> ｜ 动作：<如何揭示与如何转化，如逐行入场 / 柱子生长 / 数字计数 / 下划线扫过 / 两栏拆分> ｜ 缓动：<ease-out/弹性/计数/生长>」
-  最后一行可选「收束：<整卡如何收尾，如保留最终对比表 / 把关键数字放大定格>」。
-
-  ===== 约束 =====
-  - 焦点元素 1~4 个，顺序与口播一致（k 单调不减）。
-  - 元素只能来自"前端友好元素清单"；一旦想到实物 / 人物 / 场景，改成承载同一信息的文字或图表。
-  - 只描述节奏与动作意图，不写颜色十六进制、不写代码、不规定像素坐标。
-  - 全文 ~400 字以内，密度高、可执行，避免空泛形容词。
+  - 用户风格补充（可选）：{{cardPrompt}}
 `;
 
 const SCRIPT_REVIEW = `name: script.review

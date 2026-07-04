@@ -53,8 +53,20 @@ type BcutTaskPayload = {
     transcript?: string;
     start_time?: number;
     end_time?: number;
+    words?: Array<{
+      label?: string;
+      start_time?: number;
+      end_time?: number;
+    }>;
   }>;
 };
+
+const BCUT_FILE_TYPES = new Set(['flac', 'aac', 'm4a', 'mp3', 'wav']);
+
+function resolveBcutFileType(audioPath: string): string {
+  const ext = audioPath.split('.').pop()?.toLowerCase() ?? '';
+  return BCUT_FILE_TYPES.has(ext) ? ext : 'mp3';
+}
 
 function msToSrtTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -67,11 +79,21 @@ function msToSrtTime(ms: number): string {
 
 export function parseBcutResultPayload(payload: BcutTaskPayload): TranscriptResult {
   const segments = (payload.utterances ?? [])
-    .map((item) => ({
-      text: String(item.transcript ?? '').trim(),
-      startMs: Number(item.start_time ?? 0),
-      endMs: Number(item.end_time ?? 0),
-    }))
+    .map((item) => {
+      const words = (item.words ?? [])
+        .map((word) => ({
+          text: String(word.label ?? '').trim(),
+          startMs: Number(word.start_time ?? 0),
+          endMs: Number(word.end_time ?? 0),
+        }))
+        .filter((word) => word.text.length > 0);
+      return {
+        text: String(item.transcript ?? '').trim(),
+        startMs: Number(item.start_time ?? 0),
+        endMs: Number(item.end_time ?? 0),
+        ...(words.length > 0 ? { words } : {}),
+      };
+    })
     .filter((item) => item.text.length > 0)
     .sort((a, b) => a.startMs - b.startMs);
 
@@ -107,15 +129,16 @@ async function requestJson<T>(
 async function uploadAudio(
   fetchImpl: typeof fetch,
   audioBuffer: Buffer,
+  fileType: string,
 ): Promise<string> {
   const initResponse = await requestJson<BcutUploadInitResponse>(fetchImpl, API_REQ_UPLOAD, {
     method: 'POST',
     headers: BCUT_HEADERS,
     body: JSON.stringify({
       type: 2,
-      name: 'audio.mp3',
+      name: `audio.${fileType}`,
       size: audioBuffer.length,
-      ResourceFileType: 'mp3',
+      ResourceFileType: fileType,
       model_id: '8',
     }),
   });
@@ -210,7 +233,7 @@ export async function transcribeWithBcut(
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
 
   const audioBuffer = await fs.readFile(audioPath);
-  const downloadUrl = await uploadAudio(fetchImpl, audioBuffer);
+  const downloadUrl = await uploadAudio(fetchImpl, audioBuffer, resolveBcutFileType(audioPath));
   const taskId = await createTask(fetchImpl, downloadUrl);
 
   for (let attempt = 0; attempt < pollLimit; attempt += 1) {

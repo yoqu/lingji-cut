@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { generateSingleCardFromSubtitles } from '../src/lib/ai-analysis';
+import type { MotionCardAgentProvider } from '../src/lib/ai-analysis';
 import type { SrtEntry } from '../src/types';
 import type { AISettings } from '../src/types/ai';
-import { generateMotionCardSource } from '../src/lib/llm';
 
 const settings: AISettings = {
   llmBaseUrl: 'https://api.openai.com/v1',
@@ -27,8 +27,8 @@ export default function MotionCard() {
 describe('generateSingleCardFromSubtitles', () => {
   it('returns a single compiled motion-card and forces timing from draft', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(`\`\`\`tsx\n${VALID_MOTION_TSX}\n\`\`\``);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const card = await generateSingleCardFromSubtitles(
       entries,
@@ -41,7 +41,7 @@ describe('generateSingleCardFromSubtitles', () => {
         promptHint: '突出核心数字',
       },
       settings,
-      { generateMotionSource: motionCaller },
+      { generateMotionCard: motionCaller },
     );
 
     expect(card.renderMode).toBe('motion-card');
@@ -51,9 +51,9 @@ describe('generateSingleCardFromSubtitles', () => {
     expect(card.motionCard?.tsx).toContain('export default');
     expect(card.motionCard?.tsx).toContain('useCurrentFrame');
     expect(motionCaller).toHaveBeenCalledTimes(1);
-    const systemPrompt = motionCaller.mock.calls[0]?.[1] ?? '';
-    expect(systemPrompt).toContain('突出核心数字');
-    expect(systemPrompt).toContain('motion-card');
+    const cardPrompt = motionCaller.mock.calls[0]?.[0]?.buildCardPrompt(undefined) ?? '';
+    expect(cardPrompt).toContain('突出核心数字');
+    expect(cardPrompt).toContain('motion-card');
   });
 
   it('rejects empty text draft', async () => {
@@ -68,7 +68,7 @@ describe('generateSingleCardFromSubtitles', () => {
           type: 'summary',
         },
         settings,
-        { generateMotionSource: vi.fn() },
+        { generateMotionCard: vi.fn() },
       ),
     ).rejects.toThrow('字幕内容为空');
   });
@@ -85,15 +85,15 @@ describe('generateSingleCardFromSubtitles', () => {
           type: 'summary',
         },
         settings,
-        { generateMotionSource: vi.fn() },
+        { generateMotionCard: vi.fn() },
       ),
     ).rejects.toThrow('时间范围无效');
   });
 
   it('throws a "请重新生成" error when motion tsx has no default export', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue('const Card = 42;');
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: 'const Card = 42;' });
 
     await expect(
       generateSingleCardFromSubtitles(
@@ -106,14 +106,14 @@ describe('generateSingleCardFromSubtitles', () => {
           type: 'insight',
         },
         settings,
-        { generateMotionSource: motionCaller },
+        { generateMotionCard: motionCaller },
       ),
     ).rejects.toThrow(/请重新生成/);
   });
 
-  it('propagates the motion-source error when the model returns no usable component', async () => {
+  it('propagates the provider error when the agent returns no usable component', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
+      .fn<MotionCardAgentProvider>()
       .mockRejectedValue(new Error('LLM 未返回 motionCard.tsx；请重新生成'));
 
     await expect(
@@ -127,9 +127,26 @@ describe('generateSingleCardFromSubtitles', () => {
           type: 'insight',
         },
         settings,
-        { generateMotionSource: motionCaller },
+        { generateMotionCard: motionCaller },
       ),
     ).rejects.toThrow(/motionCard/);
+  });
+
+  it('rejects when no motion agent provider is injected', async () => {
+    await expect(
+      generateSingleCardFromSubtitles(
+        entries,
+        {
+          text: '有效文本',
+          startMs: 0,
+          endMs: 2_000,
+          displayDurationMs: 2_000,
+          type: 'insight',
+        },
+        settings,
+        {},
+      ),
+    ).rejects.toThrow(/generateMotionCard/);
   });
 
   it('rejects invalid card type', async () => {
@@ -145,7 +162,7 @@ describe('generateSingleCardFromSubtitles', () => {
           type: 'nonsense',
         },
         settings,
-        { generateMotionSource: vi.fn() },
+        { generateMotionCard: vi.fn() },
       ),
     ).rejects.toThrow('卡片类型无效');
   });

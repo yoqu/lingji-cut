@@ -27,7 +27,7 @@ export const DEFAULT_LINGJI_GATEWAY_CONFIG: LingjiGatewayConfig = {
   llm: { type: 'openai_compatible', path: '/v1', models: ['gpt-4o-mini', 'gpt-4o'], defaultModel: 'gpt-4o-mini' },
   image: { type: 'openai_image', path: '', models: ['gpt-image-1'], defaultModel: 'gpt-image-1' },
   tts: { type: 'minimax', path: '', models: ['speech-2.8-hd'], defaultModel: 'speech-2.8-hd' },
-  video: { type: 'custom', path: '', models: ['lingji-video'], defaultModel: 'lingji-video' },
+  video: { type: 'vidu', path: '', models: ['lingji-video'], defaultModel: 'lingji-video' },
 };
 
 /** 桌面端授权登录成功后，主进程回传的账户会话。apiKey 为长效网关密钥 lj_。 */
@@ -138,7 +138,8 @@ export function applyLingjiFallbackProviders(
   const video = {
     id: LINGJI_FALLBACK_IDS.video,
     name: '灵机剪影视频',
-    type: cfg.video.type as import('../../types/ai').VideoProviderType,
+    // 服务端历史下发过 'custom'（曾静默回退 vidu 实现）；本地仅剩 vidu 运行时，统一归一。
+    type: 'vidu' as import('../../types/ai').VideoProviderType,
     baseUrl: joinBase(b, cfg.video.path),
     apiKey: key,
     models: cfg.video.models,

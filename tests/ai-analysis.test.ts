@@ -13,9 +13,10 @@ import {
   regenerateAICard,
   regenerateCoverPrompt,
 } from '../src/lib/ai-analysis';
+import type { MotionCardAgentProvider } from '../src/lib/ai-analysis';
 import type { SrtEntry } from '../src/types';
 import type { AICard, AISegment, AISegmentAnalysis, AISettings } from '../src/types/ai';
-import { generateMotionCardSource, generateStructuredData } from '../src/lib/llm';
+import { generateStructuredData } from '../src/lib/llm';
 
 const makeSrtEntry = (index: number, startMs: number, endMs: number, text: string): SrtEntry => ({
   index,
@@ -268,10 +269,10 @@ describe('planTranscriptSegments', () => {
 });
 
 describe('generateCardForSegment', () => {
-  it('builds a motion-card from the LLM TSX source, synthesizing metadata from the segment', async () => {
+  it('builds a motion-card from the agent TSX source, synthesizing metadata from the segment', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(`\`\`\`tsx\n${VALID_MOTION_TSX}\n\`\`\``);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await generateCardForSegment(
       baseEntries,
@@ -285,7 +286,7 @@ describe('generateCardForSegment', () => {
       baseSegment,
       settings,
       {
-        generateMotionSource: motionCaller,
+        generateMotionCard: motionCaller,
         globalPrompt: '整体偏商业分析风',
         cardPrompt: '做成粒子聚合',
       },
@@ -301,15 +302,16 @@ describe('generateCardForSegment', () => {
     expect(result.motionCard?.tsx).toContain('export default');
     expect(result.motionCard?.tsx).toContain('useCurrentFrame');
     expect(motionCaller).toHaveBeenCalledTimes(1);
-    // user message = 段内逐字稿；system prompt = 卡片提示词，提及当前段
-    expect(motionCaller.mock.calls[0]?.[2]).toContain('欢迎收听本期节目');
-    expect(motionCaller.mock.calls[0]?.[1]).toContain('AI 视频生产背景');
+    // ctx.segmentTranscript = 段内逐字稿；buildCardPrompt 渲染 cards.segment 提示词，提及当前段
+    const ctx = motionCaller.mock.calls[0]![0];
+    expect(ctx.segmentTranscript).toContain('欢迎收听本期节目');
+    expect(ctx.buildCardPrompt(undefined)).toContain('AI 视频生产背景');
   });
 
   it('defaults a new card duration to the full segment span so the timeline has no blank gaps', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const wideSegment: AISegment = {
       ...baseSegment,
@@ -323,7 +325,7 @@ describe('generateCardForSegment', () => {
       { segments: [wideSegment], coverPrompts: [], summary: '', keywords: [] },
       wideSegment,
       settings,
-      { generateMotionSource: motionCaller },
+      { generateMotionCard: motionCaller },
     );
 
     // 新卡片（无 currentCard）应铺满所在 segment（45s），而不是固定 5s 默认值
@@ -332,15 +334,15 @@ describe('generateCardForSegment', () => {
 
   it('preserves the existing card type/title/timing on regeneration', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await generateCardForSegment(
       baseEntries,
       { segments: [baseSegment], coverPrompts: [], summary: '', keywords: [] },
       baseSegment,
       settings,
-      { generateMotionSource: motionCaller, currentCard: baseCard },
+      { generateMotionCard: motionCaller, currentCard: baseCard },
     );
 
     expect(result.id).toBe('card-1');
@@ -350,15 +352,15 @@ describe('generateCardForSegment', () => {
 
   it('fills content with the verbatim segment subtitle text', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await generateCardForSegment(
       baseEntries,
       { segments: [baseSegment], coverPrompts: [], summary: '', keywords: [] },
       baseSegment,
       settings,
-      { generateMotionSource: motionCaller },
+      { generateMotionCard: motionCaller },
     );
 
     expect(result.content).toBe('欢迎收听本期节目，我们先聊 AI 视频生产的背景。');
@@ -373,15 +375,15 @@ describe('generateCardForSegment', () => {
       endMs: 9_000,
     };
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await generateCardForSegment(
       baseEntries,
       { segments: [offRangeSegment], coverPrompts: [], summary: '', keywords: [] },
       offRangeSegment,
       settings,
-      { generateMotionSource: motionCaller },
+      { generateMotionCard: motionCaller },
     );
 
     expect(result.content).toBe('段落摘要兜底');
@@ -389,8 +391,8 @@ describe('generateCardForSegment', () => {
 
   it('throws a regenerate-hinted error when the TSX has no default export', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue('const Card = 42;');
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: 'const Card = 42;' });
 
     await expect(
       generateCardForSegment(
@@ -398,14 +400,14 @@ describe('generateCardForSegment', () => {
         { segments: [baseSegment], coverPrompts: [], summary: '', keywords: [] },
         baseSegment,
         settings,
-        { generateMotionSource: motionCaller },
+        { generateMotionCard: motionCaller },
       ),
     ).rejects.toThrow(/请重新生成/);
   });
 
-  it('propagates the motion-source error when the model returns no usable component', async () => {
+  it('propagates the provider error when the agent returns no usable component', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
+      .fn<MotionCardAgentProvider>()
       .mockRejectedValue(new Error('LLM 未返回 motionCard.tsx；请重新生成'));
 
     await expect(
@@ -414,9 +416,21 @@ describe('generateCardForSegment', () => {
         { segments: [baseSegment], coverPrompts: [], summary: '', keywords: [] },
         baseSegment,
         settings,
-        { generateMotionSource: motionCaller },
+        { generateMotionCard: motionCaller },
       ),
     ).rejects.toThrow(/motionCard/);
+  });
+
+  it('rejects motion segments when no agent provider is injected', async () => {
+    await expect(
+      generateCardForSegment(
+        baseEntries,
+        { segments: [baseSegment], coverPrompts: [], summary: '', keywords: [] },
+        baseSegment,
+        settings,
+        {},
+      ),
+    ).rejects.toThrow(/generateMotionCard/);
   });
 });
 
@@ -430,20 +444,20 @@ describe('analyzeSrt', () => {
       globalPrompt: '整体偏商业分析风',
     });
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await analyzeSrt(baseEntries, settings, {
       generateStructuredData: planningCaller,
-      generateMotionSource: motionCaller,
+      generateMotionCard: motionCaller,
       globalPrompt: '整体偏商业分析风',
     });
 
     expect(planningCaller).toHaveBeenCalledTimes(1);
     expect(planningCaller.mock.calls[0]?.[1]).toContain('segments');
     expect(motionCaller).toHaveBeenCalledTimes(2);
-    expect(motionCaller.mock.calls[0]?.[1]).toContain('AI 视频生产背景');
-    expect(motionCaller.mock.calls[1]?.[1]).toContain('工作流拆分');
+    expect(motionCaller.mock.calls[0]?.[0]?.buildCardPrompt(undefined)).toContain('AI 视频生产背景');
+    expect(motionCaller.mock.calls[1]?.[0]?.buildCardPrompt(undefined)).toContain('工作流拆分');
     expect(result.segments).toHaveLength(2);
     expect(result.cards).toHaveLength(2);
     expect(result.cards.map((card) => card.segmentId)).toEqual(['seg-1', 'seg-2']);
@@ -461,18 +475,17 @@ describe('analyzeSrt', () => {
       keywords: ['AI', '播客'],
       globalPrompt: '整体偏商业分析风',
     });
-    const motionCaller = vi.fn<typeof generateMotionCardSource>();
-    motionCaller.mockImplementation(async (_settings, _system, _user, _binding, opts) => {
-      const label = opts?.label;
-      if (typeof label === 'string' && label.includes('seg-1')) {
+    const motionCaller = vi.fn<MotionCardAgentProvider>();
+    motionCaller.mockImplementation(async (ctx) => {
+      if (ctx.segmentId === 'seg-1') {
         throw new Error('LLM Motion 源码请求 空闲超时');
       }
-      return VALID_MOTION_TSX;
+      return { tsx: VALID_MOTION_TSX };
     });
 
     const result = await analyzeSrt(baseEntries, settings, {
       generateStructuredData: planningCaller,
-      generateMotionSource: motionCaller,
+      generateMotionCard: motionCaller,
       globalPrompt: '整体偏商业分析风',
     });
 
@@ -495,13 +508,13 @@ describe('analyzeSrt', () => {
       globalPrompt: '整体偏商业分析风',
     });
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
     const generated: { card: AICard; index: number }[] = [];
 
     const result = await analyzeSrt(baseEntries, settings, {
       generateStructuredData: planningCaller,
-      generateMotionSource: motionCaller,
+      generateMotionCard: motionCaller,
       globalPrompt: '整体偏商业分析风',
       onCardGenerated: (card, index) => {
         generated.push({ card, index });
@@ -526,19 +539,18 @@ describe('analyzeSrt', () => {
       keywords: ['AI', '播客'],
       globalPrompt: '整体偏商业分析风',
     });
-    const motionCaller = vi.fn<typeof generateMotionCardSource>();
-    motionCaller.mockImplementation(async (_settings, _system, _user, _binding, opts) => {
-      const label = opts?.label;
-      if (typeof label === 'string' && label.includes('seg-1')) {
+    const motionCaller = vi.fn<MotionCardAgentProvider>();
+    motionCaller.mockImplementation(async (ctx) => {
+      if (ctx.segmentId === 'seg-1') {
         throw new Error('LLM Motion 源码请求 空闲超时');
       }
-      return VALID_MOTION_TSX;
+      return { tsx: VALID_MOTION_TSX };
     });
     const generated: { card: AICard; index: number }[] = [];
 
     const result = await analyzeSrt(baseEntries, settings, {
       generateStructuredData: planningCaller,
-      generateMotionSource: motionCaller,
+      generateMotionCard: motionCaller,
       globalPrompt: '整体偏商业分析风',
       onCardGenerated: (card, index) => {
         generated.push({ card, index });
@@ -561,12 +573,12 @@ describe('analyzeSrt', () => {
       keywords: ['AI', '播客'],
     });
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(VALID_MOTION_TSX);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await analyzeSrt(longEntries, settings, {
       generateStructuredData: planningCaller,
-      generateMotionSource: motionCaller,
+      generateMotionCard: motionCaller,
     });
 
     expect(result.segments).toHaveLength(5);
@@ -605,8 +617,8 @@ describe('regenerateCoverPrompt', () => {
 describe('regenerateAICard', () => {
   it('regenerates a single motion-card and preserves original card id/title/timing', async () => {
     const motionCaller = vi
-      .fn<typeof generateMotionCardSource>()
-      .mockResolvedValue(`\`\`\`tsx\n${VALID_MOTION_TSX}\n\`\`\``);
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
 
     const result = await regenerateAICard(
       baseEntries,
@@ -614,12 +626,14 @@ describe('regenerateAICard', () => {
       baseSegment,
       settings,
       {
-        generateMotionSource: motionCaller,
+        generateMotionCard: motionCaller,
         globalPrompt: '整体偏商业分析风',
       },
     );
 
     expect(motionCaller).toHaveBeenCalledTimes(1);
+    // 精雕/重生成：现有源码通过 ctx.existingTsx 交给导演诊断（baseCard 无 motionCard → undefined）
+    expect(motionCaller.mock.calls[0]?.[0]?.existingTsx).toBe(baseCard.motionCard?.tsx);
     expect(result.id).toBe('card-1');
     expect(result.segmentId).toBe('seg-1');
     // 元信息从既有卡片延续（不再由模型决定）
@@ -637,7 +651,7 @@ describe('regenerateAICard', () => {
         null as unknown as AISegment,
         settings,
         {
-          generateMotionSource: vi.fn(),
+          generateMotionCard: vi.fn(),
         },
       ),
     ).rejects.toThrow('缺少卡片对应的段落信息');
@@ -729,35 +743,67 @@ describe('generateAnimationDirection', () => {
   });
 });
 
-describe('generateCardForSegment auto animationDirection', () => {
+// 旧的 autoAnimationDirection 直连 LLM 路径已移除：导演提示词经 ctx.buildDirectorPrompt 暴露给
+// 多 agent provider（重试/修复循环见 tests/motion-agent-run.test.ts），这里只测上下文契约。
+describe('generateCardForSegment motion agent context', () => {
   const baseEntries = [{ index: 1, startMs: 0, endMs: 2000, text: '今年用户翻倍' }] as any;
   const segment = { id: 's1', title: 'T', summary: 'S', startMs: 0, endMs: 2000, transcriptExcerpt: '今年用户翻倍', visualType: 'motion' } as any;
   const planning = { summary: 'S', keywords: [], globalPrompt: '' };
+  const MINIMAL_TSX = 'export default function Card(){return null}';
 
-  it('auto-generates animationDirection for motion cards and injects it into the card prompt', async () => {
-    const generateText = vi.fn().mockResolvedValue('视觉母题：折线');
-    const generateMotionSource = vi.fn().mockResolvedValue('export default function Card(){return null}');
-    const card = await generateCardForSegment(baseEntries, planning, segment, { autoAnimationDirection: true } as any, { generateText, generateMotionSource, visualType: 'motion', projectBindings: undefined });
-    expect(generateText).toHaveBeenCalled();
-    expect(card.animationDirection).toBe('视觉母题：折线');
-    // animationDirection 注入 cards.segment 提示词（generateMotionSource 第 2 个参数 = system prompt）
-    const cardPromptMsg = generateMotionSource.mock.calls[0][1] as string;
-    expect(cardPromptMsg).toContain('视觉母题：折线');
+  it('exposes prompt builders and writes the provider-returned animationDirection to the card', async () => {
+    const generateMotionCard = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: MINIMAL_TSX, animationDirection: '拍1｜入场｜数字翻牌' });
+
+    const card = await generateCardForSegment(baseEntries, planning, segment, settings, {
+      generateMotionCard,
+      visualType: 'motion',
+      projectBindings: undefined,
+    });
+
+    const ctx = generateMotionCard.mock.calls[0]![0];
+    // 导演任务书（cards.animation v5）要求设计 JSON 分镜
+    expect(ctx.buildDirectorPrompt()).toContain('分镜');
+    expect(ctx.buildDirectorPrompt()).toContain('data-hero');
+    // 导演产出的分镜注入 cards.segment 的 {{animationDirection}}
+    expect(ctx.buildCardPrompt('{"claim":"测试分镜"}')).toContain('测试分镜');
+    // cue 越界校验所需的句数与运行时 cues 一致
+    expect(ctx.cueCount).toBeGreaterThan(0);
+    expect(ctx.animationDirectionDraft).toBeUndefined();
+    expect(card.animationDirection).toBe('拍1｜入场｜数字翻牌');
   });
 
-  it('skips animationDirection when autoAnimationDirection is false', async () => {
-    const generateText = vi.fn().mockResolvedValue('视觉母题：折线');
-    const generateMotionSource = vi.fn().mockResolvedValue('export default function Card(){return null}');
-    const card = await generateCardForSegment(baseEntries, planning, segment, { autoAnimationDirection: false } as any, { generateText, generateMotionSource, visualType: 'motion', projectBindings: undefined });
-    expect(generateText).not.toHaveBeenCalled();
-    expect(card.animationDirection).toBeUndefined();
+  it('passes the caller animationDirection as draft and falls back to it when the provider returns none', async () => {
+    const generateMotionCard = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: MINIMAL_TSX });
+
+    const card = await generateCardForSegment(baseEntries, planning, segment, settings, {
+      generateMotionCard,
+      visualType: 'motion',
+      animationDirection: ' 拍1｜草案 ',
+      projectBindings: undefined,
+    });
+
+    expect(generateMotionCard.mock.calls[0]?.[0]?.animationDirectionDraft).toBe('拍1｜草案');
+    expect(card.animationDirection).toBe('拍1｜草案');
   });
 
-  it('does not block card generation when animationDirection generation throws', async () => {
-    const generateText = vi.fn().mockRejectedValue(new Error('llm down'));
-    const generateMotionSource = vi.fn().mockResolvedValue('export default function Card(){return null}');
-    const card = await generateCardForSegment(baseEntries, planning, segment, { autoAnimationDirection: true } as any, { generateText, generateMotionSource, visualType: 'motion', projectBindings: undefined });
-    expect(generateMotionSource).toHaveBeenCalled();
-    expect(card.animationDirection).toBeUndefined();
+  it('hands validateMotionSource through as ctx.validate (provider decides when to call it)', async () => {
+    const validateMotionSource = vi.fn();
+    const generateMotionCard = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: MINIMAL_TSX });
+
+    await generateCardForSegment(baseEntries, planning, segment, settings, {
+      generateMotionCard,
+      validateMotionSource,
+      visualType: 'motion',
+      projectBindings: undefined,
+    });
+
+    expect(generateMotionCard.mock.calls[0]?.[0]?.validate).toBe(validateMotionSource);
+    expect(validateMotionSource).not.toHaveBeenCalled();
   });
 });

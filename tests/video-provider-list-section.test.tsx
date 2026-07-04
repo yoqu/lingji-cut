@@ -38,24 +38,4 @@ describe('VideoProviderListSection', () => {
     expect(html).toContain('默认');
     expect(html).toContain('https://api.vidu.com');
   });
-
-  it('Kling provider 显示对应类型标签', () => {
-    const provider: VideoProvider = {
-      id: 'k1',
-      name: 'Kling Acct',
-      type: 'kling',
-      baseUrl: 'https://api.klingai.com',
-      apiKey: 'k',
-      models: ['kling-v1'],
-    };
-    const html = renderToStaticMarkup(
-      <VideoProviderListSection
-        videoProviders={[provider]}
-        defaultVideoProviderId={null}
-        onChange={() => {}}
-      />,
-    );
-    expect(html).toContain('Kling');
-    expect(html).toContain('kling-v1');
-  });
 });

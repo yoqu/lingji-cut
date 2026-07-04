@@ -2,13 +2,12 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { AISettings, LLMProvider } from '../../types/ai';
 import type { ResolvedBinding } from './binding-resolver';
 import {
-  extractMotionCardSource,
   extractReasoningContent,
   extractTextContent,
   parseLLMJsonResponse,
   parseStructuredOutput,
 } from './content';
-import { createChatModel, createChatModelFromProvider } from './model';
+import { createChatModelFromProvider } from './model';
 import {
   INSUFFICIENT_CREDITS_MESSAGE,
   isInsufficientCreditsError,
@@ -17,12 +16,11 @@ import {
   normalizeCreditsErrorForKey,
 } from './credits-error';
 
-/** 解析本次调用实际使用的 provider apiKey（binding 优先，回落默认 provider / 旧字段）。 */
+/** 解析本次调用实际使用的 provider apiKey（binding 优先，回落默认 provider）。 */
 function resolveProviderApiKey(settings: AISettings, binding?: ResolvedBinding): string | undefined {
   return (
     binding?.provider?.apiKey ??
-    settings.llmProviders?.find((p) => p.id === settings.defaultProviderId)?.apiKey ??
-    settings.llmApiKey
+    settings.llmProviders?.find((p) => p.id === settings.defaultProviderId)?.apiKey
   );
 }
 
@@ -49,7 +47,15 @@ function pickModel(settings: AISettings, binding?: ResolvedBinding) {
     // provider.enableThinking 缺省时由 createChatModelFromProvider 内部默认 true
     return createChatModelFromProvider(binding.provider, binding.model);
   }
-  return createChatModel(settings);
+  // 无 binding 时回落到默认 provider（旧的单 llmBaseUrl 路径已移除）
+  const provider =
+    settings.llmProviders?.find((p) => p.id === settings.defaultProviderId) ??
+    settings.llmProviders?.[0];
+  const model = settings.defaultModel ?? provider?.defaultModel ?? provider?.models[0];
+  if (!provider || !model) {
+    throw new Error('请先在「设置 → AI」中配置 LLM Provider 与模型');
+  }
+  return createChatModelFromProvider(provider, model);
 }
 
 // 轻量请求日志：主进程跑时输出到 `npm run dev` 终端，渲染进程跑时进 DevTools。
@@ -67,8 +73,6 @@ const STRUCTURED_HARD_TIMEOUT_MS = 30 * 60_000;
 const STRUCTURED_MAX_RETRIES = 2;
 const STRUCTURED_RETRY_HINT =
   '\n\n【重要】上一次返回的不是合法 JSON 对象。请严格只输出一个完整的 JSON 对象，不要包裹 markdown 代码块、不要追加任何解释文字、不要省略闭合花括号。';
-const MOTION_SOURCE_RETRY_HINT =
-  '\n\n【重要】上一次没有给出可用的 Remotion 组件。请只输出一个 ```tsx 代码块，块内是 export default 的单文件 Remotion 函数组件，不要任何解释文字。';
 
 export interface StructuredDataOptions {
   // 可选：调用方可指定标签，用于错误信息定位（如 "cards.segment#3/12"）
@@ -218,7 +222,7 @@ async function streamWithRetry<T>(
     failureMessage,
     options,
   } = config;
-  const chatModel = pickModel(settings, binding) as ReturnType<typeof createChatModel> &
+  const chatModel = pickModel(settings, binding) as ReturnType<typeof createChatModelFromProvider> &
     BindableModel &
     StreamableModel;
   const model: StreamableModel =
@@ -242,7 +246,7 @@ async function streamWithRetry<T>(
     const callStart = Date.now();
     llmLog(
       `${label} 发起请求 attempt=${attempt}/${STRUCTURED_MAX_RETRIES} ` +
-        `model=${binding?.model ?? settings.llmModel ?? 'default'} ` +
+        `model=${binding?.model ?? settings.defaultModel ?? 'default'} ` +
         `provider=${binding?.provider?.id ?? 'default'} thinking=${thinking} ` +
         `sys=${promptForAttempt.length} user=${userMessage.length} chars`,
     );
@@ -339,35 +343,8 @@ export async function generateStructuredData(
   });
 }
 
-/**
- * 生成 Motion Card 的 Remotion TSX 源码。与结构化 JSON 输出不同，这里**不**绑定
- * response_format=json_object —— 模型以自由文本（建议 ```tsx 代码块）输出组件，由
- * extractMotionCardSource 抽取源码。这样规避了"把整段 TSX 塞进 JSON 字符串再转义"的
- * 高失败率路径，对中小模型也更友好。
- */
-export interface MotionCardSourceOptions extends StructuredDataOptions {
-  /** 可选：抽取出 TSX 后的运行时校验（如生成期冒烟渲染）；抛错触发重试。 */
-  validate?: (tsx: string) => void | Promise<void>;
-}
-
-export async function generateMotionCardSource(
-  settings: AISettings,
-  systemPrompt: string,
-  userMessage: string,
-  binding?: ResolvedBinding,
-  options: MotionCardSourceOptions = {},
-): Promise<string> {
-  return streamWithRetry(settings, systemPrompt, userMessage, binding, {
-    parse: extractMotionCardSource,
-    validate: options.validate,
-    retryHint: MOTION_SOURCE_RETRY_HINT,
-    bindJsonObject: false,
-    label: `LLM Motion 源码请求${options.label ? `（${options.label}）` : ''}`,
-    telemetryLabel: options.label ?? 'motion-source',
-    failureMessage: 'LLM Motion 源码生成失败',
-    options,
-  });
-}
+// Motion Card TSX 生成已收敛到 pi 多 agent 编排器（electron/pipeline/motion-agent-run.ts，
+// 导演→雕刻→审查，file-first）——旧的 generateMotionCardSource 直连流式路径已移除，无回退。
 
 export async function generateText(
   settings: AISettings,

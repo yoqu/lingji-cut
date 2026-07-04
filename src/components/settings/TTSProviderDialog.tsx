@@ -31,7 +31,6 @@ const TTS_PROVIDER_TYPE_OPTIONS: SelectOption[] = [
 export const TTS_PROVIDER_TYPE_LABELS: Record<TTSProviderType, string> = {
   minimax: 'MiniMax T2A',
   xiaomi_mimo: 'Xiaomi MiMo',
-  custom_openai_audio: '自定义 OpenAI Audio',
 };
 
 export function getTTSProviderTypeLabel(type: TTSProviderType): string {

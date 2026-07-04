@@ -3,7 +3,6 @@ import { buildAICardTimelineDraft } from '../types/ai';
 import { useAIStore, loadAISettings } from '../store/ai';
 import { useTimelineStore, getProjectDir } from '../store/timeline';
 import { useTaskProgressStore } from '../store/task-progress';
-import { createPersistedAIState } from './ai-persistence';
 import type { SubtitleCardDraftInput } from './ai-analysis';
 
 interface GenerateSingleCardParams {
@@ -58,6 +57,7 @@ export async function generateAndInsertSingleCardFromSubtitles(
       keywords: aiState.analysisResult?.keywords,
       projectDir: projectDir || undefined,
       projectBindings: aiState.projectBindings,
+      feedId: taskId,
     });
 
     if (card.renderMode !== 'motion-card' || !card.motionCard?.tsx?.trim()) {
@@ -77,16 +77,8 @@ export async function generateAndInsertSingleCardFromSubtitles(
       ...baseResult,
       cards: [...baseResult.cards, card],
     };
+    // 落盘由 store/ai.ts 订阅自动完成。
     useAIStore.getState().setAnalysisResult(nextResult);
-
-    if (projectDir && window.electronAPI?.saveAIAnalysis) {
-      const persisted = createPersistedAIState(nextResult, aiState.coverCandidates);
-      try {
-        await window.electronAPI.saveAIAnalysis(projectDir, JSON.stringify(persisted, null, 2));
-      } catch (error) {
-        console.error('保存 aiAnalysis 失败:', error);
-      }
-    }
 
     taskStore.updateTask(taskId, { phase: '插入时间轴' });
 

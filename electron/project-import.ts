@@ -36,9 +36,6 @@ const MAX_MISSING_REPORT = 50;
 
 function classifyFile(relativePath: string, basename: string): DetectedFileKind {
   if (relativePath === 'project.json') return 'projectJson';
-  if (relativePath === 'timeline.json') return 'legacyTimeline';
-  if (relativePath === 'ai-analysis.json') return 'legacyAIAnalysis';
-  if (relativePath === 'script-state.json') return 'legacyScriptState';
   if (relativePath === 'script.md') return 'scriptMd';
   if (relativePath === 'original.md') return 'originalMd';
   if (basename.endsWith('.mp3') && basename.startsWith('podcast-audio')) return 'audioMp3';
@@ -90,13 +87,6 @@ async function collectDetectedFiles(projectDir: string): Promise<DetectedFile[]>
 function classifyScenario(files: DetectedFile[]): ImportProjectScenario {
   const kinds = new Set(files.map((f) => f.kind));
   if (kinds.has('projectJson')) return 'complete';
-  if (
-    kinds.has('legacyTimeline') ||
-    kinds.has('legacyAIAnalysis') ||
-    kinds.has('legacyScriptState')
-  ) {
-    return 'legacy';
-  }
   if (
     kinds.has('audioMp3') ||
     kinds.has('scriptMd') ||
@@ -356,15 +346,6 @@ async function readProjectJsonSafely(projectDir: string): Promise<ProjectData | 
   }
 }
 
-async function readLegacyTimeline(projectDir: string): Promise<TimelineData | null> {
-  try {
-    const raw = await fs.readFile(path.join(projectDir, 'timeline.json'), 'utf-8');
-    return JSON.parse(raw) as TimelineData;
-  } catch {
-    return null;
-  }
-}
-
 export async function scanProjectDirectory(
   projectDir: string,
 ): Promise<ImportProjectScanResult> {
@@ -385,8 +366,6 @@ export async function scanProjectDirectory(
     const data = await readProjectJsonSafely(projectDir);
     timeline = data?.timeline ?? null;
     coverCandidateCount = data?.aiAnalysis?.coverCandidates?.length ?? 0;
-  } else if (scenario === 'legacy') {
-    timeline = await readLegacyTimeline(projectDir);
   }
 
   const refs = collectTimelineAssetReferences(timeline);
@@ -470,6 +449,5 @@ export async function importProject(args: ImportProjectArgs): Promise<ImportProj
     projectName: scan.projectName,
     scenario: scan.scenario,
     fixReport,
-    migratedFromLegacy: scan.scenario === 'legacy',
   };
 }

@@ -14,13 +14,13 @@ import type {
   TTSVoicePreset,
   VideoAspectRatio,
 } from '../types/ai';
-import type { ImportKind } from './import-files';
 import type {
   VideoImportProgress,
   VideoImportRequest,
 } from './video-import-types';
 import type { VideoImportTaskSnapshot } from '../../electron/video-import/types';
 import type { PipelineTask } from '../../electron/pipeline/types';
+import type { AgentFeedEvent } from '../../electron/pipeline/agent-feed';
 import type {
   PromptKind,
   PromptKindMeta,
@@ -159,6 +159,8 @@ export interface GenerateAICardForSegmentArgs {
   prevSegment?: AISegment;
   nextSegment?: AISegment;
   visualType?: AISegmentVisualType;
+  /** 观测面板关联键（渲染端任务 id）；缺省不上报 agent 观测事件。 */
+  feedId?: string;
 }
 
 export interface CardMediaProgressPayload {
@@ -233,6 +235,7 @@ export interface ElectronAPI {
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
     telemetryRunId?: string | null;
+    feedId?: string;
   }) => Promise<unknown>;
   onAnalyzePlanningDone: (
     callback: (planning: {
@@ -260,6 +263,7 @@ export interface ElectronAPI {
     keywords?: string[];
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
+    feedId?: string;
   }) => Promise<AICard>;
   generateAnimationDirection: (args: {
     entries: SrtEntry[];
@@ -282,6 +286,7 @@ export interface ElectronAPI {
     keywords?: string[];
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
+    feedId?: string;
   }) => Promise<AICard>;
   /** 把 motion 卡片 TSX 批量编译为可执行 CJS（overlayId → js）。 */
   compileMotionCards: (args: {
@@ -358,10 +363,6 @@ export interface ElectronAPI {
     base: string;
     expired?: boolean;
   } | null>;
-  saveTimeline: (projectDir: string, data: string) => Promise<string>;
-  loadTimeline: (projectDir: string) => Promise<string | null>;
-  saveAIAnalysis: (projectDir: string, data: string) => Promise<string>;
-  loadAIAnalysis: (projectDir: string) => Promise<string | null>;
   loadProject: (projectDir: string) => Promise<string>;
   saveProjectSection: (projectDir: string, section: string, data: string) => Promise<void>;
   scanProjectDirectory: (
@@ -384,7 +385,6 @@ export interface ElectronAPI {
   saveGlobalSettings: (data: string) => Promise<void>;
   getProjectMetadata: (projectDir: string) => Promise<ProjectMetadata>;
   selectProjectDirectory: () => Promise<string | null>;
-  selectSetupFile: (kind: ImportKind) => Promise<string | null>;
   selectMediaFile: (kind: 'audio' | 'video' | 'srt' | 'image') => Promise<string | null>;
   /** 扫描项目目录顶层最新的 .mp4 成片；无则返回 null（发布选项卡联动兜底）。 */
   findLatestExport: (projectDir: string) => Promise<string | null>;
@@ -401,10 +401,6 @@ export interface ElectronAPI {
   scanProjectAssets: (projectDir: string) => Promise<
     { path: string; type: 'video' | 'image' | 'audio' | 'srt'; durationMs: number }[]
   >;
-  scanImportDirectory: (dir: string) => Promise<{
-    audioFiles: string[];
-    srtFiles: string[];
-  }>;
   renderVideo: (args: {
     timeline: string;
     outputPath: string;
@@ -423,8 +419,12 @@ export interface ElectronAPI {
   onPipelineTaskUpdate: (
     callback: (task: PipelineTask & { bridgeId: string }) => void,
   ) => () => void;
+  /** 订阅 Motion 卡多 agent 生成的观测事件（导演/雕刻/审查流式输出 → 观测面板）。 */
+  onAgentFeedEvent: (callback: (ev: AgentFeedEvent) => void) => () => void;
   /** 取消 MCP/pipeline 任务。 */
   cancelPipelineTask: (taskId: string) => Promise<void>;
+  /** 精雕 motion 卡（pi 多 agent 导演→雕刻→审查）；fire-and-forget，进度走 pipeline 任务桥。 */
+  sculptCard: (args: { projectPath: string; cardId: string; notes?: string }) => Promise<{ taskId: string }>;
   onMenuAction: (callback: (event: MenuEvent) => void) => () => void;
   onAppLog: (callback: (entry: AppLogEntry) => void) => () => void;
   toggleDevTools: () => Promise<void>;
@@ -450,8 +450,6 @@ export interface ElectronAPI {
   sonarBridgeInfo: () => Promise<{ port: number; token: string }>;
   /** 收件箱新增/刷新时触发（扩展推送到桥后），用于待创作箱实时刷新。返回取消订阅函数。 */
   onSonarInboxUpdated: (callback: () => void) => () => void;
-  saveScriptState: (projectDir: string, state: string) => Promise<void>;
-  loadScriptState: (projectDir: string) => Promise<string | null>;
   selectTextFile: () => Promise<{ path: string; content: string } | null>;
   /** 轻量级抖音链接解析：仅返回标题和视频 ID，不下载视频 */
   resolveDouyinUrl: (url: string) => Promise<{ title: string; videoId: string }>;

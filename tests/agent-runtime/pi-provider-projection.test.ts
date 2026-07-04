@@ -5,6 +5,8 @@ import {
   buildPiModelsJson,
   buildPiSettingsJson,
   llmTypeToPiApi,
+  piModelRef,
+  projectBuiltinProviderOverlay,
   projectProviderToPi,
 } from '../../electron/agent-runtime/pi-provider-projection';
 import type { LLMProvider, AISettings } from '../../src/types/ai';
@@ -15,11 +17,34 @@ describe('llmTypeToPiApi', () => {
     expect(llmTypeToPiApi('openai_responses')).toBe('openai-responses');
     expect(llmTypeToPiApi('lmstudio')).toBe('openai-completions');
     expect(llmTypeToPiApi('minimax')).toBe('anthropic-messages');
-    expect(llmTypeToPiApi('anthropic')).toBe('anthropic-messages');
     expect(llmTypeToPiApi('gemini')).toBe('google-generative-ai');
   });
-  it('returns null for claude_code_acp (not projected to pi)', () => {
-    expect(llmTypeToPiApi('claude_code_acp')).toBeNull();
+  it('returns null for removed/unknown types (not projected to pi)', () => {
+    expect(llmTypeToPiApi('claude_code_acp' as never)).toBeNull();
+  });
+});
+
+describe('piModelRef', () => {
+  const custom: LLMProvider = {
+    id: 'p1', name: 'Grok', type: 'openai_compatible',
+    baseUrl: 'https://grok.example/v1', apiKey: 'sk', models: ['grok-composer-2.5-fast'],
+  };
+  it('自建 provider 用 provider.id 组 ref', () => {
+    expect(piModelRef(custom, 'grok-composer-2.5-fast')).toBe('p1/grok-composer-2.5-fast');
+  });
+  it('内置 provider 用 builtinProviderId 组 ref', () => {
+    const builtin: LLMProvider = { ...custom, pi: { builtinProviderId: 'xai' } };
+    expect(piModelRef(builtin, 'grok-composer-2.5-fast')).toBe('xai/grok-composer-2.5-fast');
+  });
+  it('provider 无法投影（缺 baseUrl）返回 null', () => {
+    expect(piModelRef({ ...custom, baseUrl: '' }, 'grok-composer-2.5-fast')).toBeNull();
+  });
+  it('claude_code_acp 无对应 pi api 返回 null', () => {
+    const acp: LLMProvider = { id: 'a', name: 'ACP', type: 'claude_code_acp' as never, baseUrl: '', apiKey: '', models: ['x'] };
+    expect(piModelRef(acp, 'x')).toBeNull();
+  });
+  it('空模型名返回 null', () => {
+    expect(piModelRef(custom, '  ')).toBeNull();
   });
 });
 
@@ -36,6 +61,7 @@ describe('projectProviderToPi', () => {
       baseUrl: 'https://api.example.com/v1',
       api: 'openai-completions',
       apiKey: 'sk-xxx',
+      headers: { 'User-Agent': 'curl/8.7.1' },
       models: [
         { id: 'gpt-x', name: 'gpt-x', reasoning: false, input: ['text'], contextWindow: 128000, maxTokens: 8192,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -49,8 +75,26 @@ describe('projectProviderToPi', () => {
   it('uses provider.id as the pi provider key', () => {
     expect(projectProviderToPi(base)!.key).toBe('p1');
   });
-  it('marks reasoning:true and supportsReasoningEffort:true when enableThinking is set', () => {
+  it('does not project normal LLM thinking as Pi Agent extended thinking', () => {
     const out = projectProviderToPi({ ...base, enableThinking: true });
+    expect(out!.entry.models[0].reasoning).toBe(false);
+    expect(out!.entry.models[0].compat.supportsReasoningEffort).toBe(false);
+  });
+  it('lets pi model options explicitly opt into extended thinking', () => {
+    const out = projectProviderToPi({
+      ...base,
+      enableThinking: true,
+      pi: { model: { reasoning: true } },
+    });
+    expect(out!.entry.models[0].reasoning).toBe(true);
+    expect(out!.entry.models[0].compat.supportsReasoningEffort).toBe(false);
+  });
+  it('lets pi compat explicitly opt into reasoning_effort', () => {
+    const out = projectProviderToPi({
+      ...base,
+      enableThinking: true,
+      pi: { model: { reasoning: true }, compat: { supportsReasoningEffort: true } },
+    });
     expect(out!.entry.models[0].reasoning).toBe(true);
     expect(out!.entry.models[0].compat.supportsReasoningEffort).toBe(true);
   });
@@ -79,7 +123,10 @@ describe('projectProviderToPi', () => {
 
     expect(out!.entry.api).toBe('openai-responses');
     expect(out!.entry.authHeader).toBe(true);
-    expect(out!.entry.headers).toEqual({ 'x-proxy-key': '$PROXY_KEY' });
+    expect(out!.entry.headers).toEqual({
+      'User-Agent': 'curl/8.7.1',
+      'x-proxy-key': '$PROXY_KEY',
+    });
     expect(out!.entry.compat?.supportsDeveloperRole).toBe(true);
     expect(out!.entry.models[0]).toMatchObject({
       input: ['text', 'image'],
@@ -116,7 +163,7 @@ describe('projectProviderToPi', () => {
     expect(lmstudio?.entry.baseUrl).toBe('http://localhost:1234/v1');
   });
   it('skips claude_code_acp providers', () => {
-    expect(projectProviderToPi({ ...base, type: 'claude_code_acp' })).toBeNull();
+    expect(projectProviderToPi({ ...base, type: 'claude_code_acp' as never })).toBeNull();
   });
   it('skips providers with empty baseUrl or no models when no default base URL exists', () => {
     expect(projectProviderToPi({ ...base, baseUrl: '' })).toBeNull();
@@ -132,6 +179,46 @@ describe('projectProviderToPi', () => {
         pi: { builtinProviderId: 'openai' },
       }),
     ).toBeNull();
+  });
+  it('lets configured pi headers override default OpenAI-compatible headers', () => {
+    const out = projectProviderToPi({
+      ...base,
+      pi: { headers: { 'User-Agent': 'Lingji/1.0' } },
+    });
+
+    expect(out!.entry.headers).toEqual({ 'User-Agent': 'Lingji/1.0' });
+  });
+});
+
+describe('projectBuiltinProviderOverlay', () => {
+  it('adds only configured models missing from the known built-in preset', () => {
+    const overlay = projectBuiltinProviderOverlay({
+      id: 'xai-app',
+      name: 'xAI',
+      type: 'openai_compatible',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: 'xai-key',
+      models: ['grok-4.3', 'grok-composer-2.5-fast', 'grok-composer-2.5-fast'],
+      pi: { builtinProviderId: 'xai' },
+    });
+
+    expect(overlay).toEqual({
+      models: [{ id: 'grok-composer-2.5-fast' }],
+    });
+  });
+
+  it('returns null when a built-in provider only uses known preset models', () => {
+    const overlay = projectBuiltinProviderOverlay({
+      id: 'xai-app',
+      name: 'xAI',
+      type: 'openai_compatible',
+      baseUrl: 'https://api.x.ai/v1',
+      apiKey: 'xai-key',
+      models: ['grok-4.3', 'grok-code-fast-1'],
+      pi: { builtinProviderId: 'xai' },
+    });
+
+    expect(overlay).toBeNull();
   });
 });
 
@@ -152,7 +239,7 @@ describe('buildPiModelsJson', () => {
     const ai = { llmProviders: [], defaultProviderId: null, defaultModel: null } as unknown as AISettings;
     expect(buildPiModelsJson(ai)).toEqual({ providers: {} });
   });
-  it('omits pi built-in providers from models.json', () => {
+  it('omits pi built-in providers from models.json when they only use known models', () => {
     const ai = {
       llmProviders: [
         {
@@ -161,15 +248,36 @@ describe('buildPiModelsJson', () => {
           type: 'openai_compatible',
           baseUrl: 'https://api.openai.com/v1',
           apiKey: 'sk-live',
-          models: ['gpt-5.1'],
+          models: ['gpt-5.5'],
           pi: { builtinProviderId: 'openai' },
         },
         { id: 'custom', name: 'Custom', type: 'openai_compatible', baseUrl: 'https://c/v1', apiKey: 'k', models: ['m1'] },
       ],
       defaultProviderId: 'openai-app',
-      defaultModel: 'gpt-5.1',
+      defaultModel: 'gpt-5.5',
     } as unknown as AISettings;
     expect(Object.keys(buildPiModelsJson(ai).providers)).toEqual(['custom']);
+  });
+  it('writes a built-in provider overlay when the app config contains extra models', () => {
+    const ai = {
+      llmProviders: [
+        {
+          id: 'xai-app',
+          name: 'xAI',
+          type: 'openai_compatible',
+          baseUrl: 'https://api.x.ai/v1',
+          apiKey: 'xai-live',
+          models: ['grok-4.3', 'grok-composer-2.5-fast'],
+          pi: { builtinProviderId: 'xai' },
+        },
+      ],
+      defaultProviderId: 'xai-app',
+      defaultModel: 'grok-composer-2.5-fast',
+    } as unknown as AISettings;
+
+    expect(buildPiModelsJson(ai).providers.xai).toEqual({
+      models: [{ id: 'grok-composer-2.5-fast' }],
+    });
   });
 });
 

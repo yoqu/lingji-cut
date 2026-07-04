@@ -21,13 +21,12 @@
  *     - sendPrompt 时 new AgentSession（经 createSession 工厂）并 start 跑一轮；
  *       该轮 AgentSession.onEvent → toRuntimeEvent → emit 'event'。
  *     - 轮内状态置 'prompting'；turn_end / error 后回落 'connected'。
- *   resume：pi 用 parentSession，claude/codex 用 resumeSessionId。首版透传记录的
- *   sessionId 作为 resume 依据（见下方 TODO）。
+ *   resume：透传记录的 sessionId 作为 resumeSessionId。
  */
 
 import { EventEmitter } from 'node:events';
 import { AgentSession } from './session';
-import type { AgentSessionStartInput, SessionBinaryManager } from './session';
+import type { AgentSessionStartInput } from './session';
 import type { AgentStreamEvent } from './event-model';
 import { toRuntimeEvent } from './event-model';
 import { getAgentDef } from './registry';
@@ -48,7 +47,7 @@ export interface RuntimeConnectInput {
   agentType: string; // 'claude' | 'codex' | 'pi'
   projectDir: string;
   model?: string;
-  /** resume：pi parentSession / claude·codex 续轮 sessionId */
+  /** resume：续轮 sessionId（pi 会话 externalId）。 */
   sessionId?: string | null;
   env?: Record<string, string>;
   permissionPolicy?: string;
@@ -97,14 +96,10 @@ interface RuntimeContextEntry {
 }
 
 interface RuntimeRegistryOptions {
-  /** 可注入的 AgentSession 工厂；默认 () => new AgentSession({ binaryManager })。 */
+  /** 可注入的 AgentSession 工厂；默认 () => new AgentSession()。 */
   createSession?: () => AgentSessionLike;
-  /**
-   * detection / ensureNodeInPath 用的 BinaryManager。默认 createSession 会把它
-   * 注入新建的 AgentSession；不提供 binaryManager 也不提供 createSession 时，
-   * AgentSession.start() 会报 'missing binaryManager'。
-   */
-  binaryManager?: SessionBinaryManager;
+  /** @deprecated 旧子进程探测依赖；in-process 后已忽略（ipc.ts 仍传入，兼容保留）。 */
+  binaryManager?: unknown;
   defaultPermissionPolicy?: string;
 }
 
@@ -118,9 +113,7 @@ export class RuntimeRegistry extends EventEmitter {
   constructor(options: RuntimeRegistryOptions = {}) {
     super();
     this.permissionPolicy = options.defaultPermissionPolicy ?? 'tiered';
-    const binaryManager = options.binaryManager;
-    this.createSession =
-      options.createSession ?? (() => new AgentSession({ binaryManager }));
+    this.createSession = options.createSession ?? (() => new AgentSession());
   }
 
   size(): number {
@@ -245,8 +238,6 @@ export class RuntimeRegistry extends EventEmitter {
         skills: entry.skills,
         // live getter：审批策略运行时可热切，confirm 门控时读最新值。
         getPermissionPolicy: () => this.permissionPolicy,
-        // Pi 恢复历史会话走 CLI `--session`；RPC `new_session(parentSession)` 是新建派生会话。
-        parentSession: entry.def.id === 'pi' ? null : entry.snapshot.sessionId,
         resumeSessionId: entry.snapshot.sessionId,
         isResuming: Boolean(entry.snapshot.sessionId),
         onEvent,

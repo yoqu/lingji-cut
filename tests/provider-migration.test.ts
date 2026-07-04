@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { migrateToProviders, resolveProvider } from '../src/lib/llm/provider-utils';
+import { migrateToProviders } from '../src/lib/llm/provider-utils';
 import type { AISettings, LLMProvider } from '../src/types/ai';
 
 const baseSettings: AISettings = {
@@ -176,54 +176,58 @@ describe('migrateToProviders', () => {
     expect(result.llmProviders[0].models).toHaveLength(0);
     expect(result.defaultModel).toBeNull();
   });
-});
 
-describe('resolveProvider', () => {
-  const provider1: LLMProvider = {
-    id: 'p1',
-    name: 'Provider 1',
-    type: 'openai_compatible',
-    baseUrl: 'https://api.p1.com',
-    apiKey: 'key1',
-    models: ['model-a'],
-  };
-  const provider2: LLMProvider = {
-    id: 'p2',
-    name: 'Provider 2',
-    type: 'openai_compatible',
-    baseUrl: 'https://api.p2.com',
-    apiKey: 'key2',
-    models: ['model-b'],
-  };
-
-  it('providers 为空时返回 null', () => {
-    expect(resolveProvider([], null, null)).toBeNull();
-    expect(resolveProvider([], 'p1', 'p1')).toBeNull();
+  it('把已下线的 anthropic 类型 provider 重映射为 minimax', () => {
+    const legacy: LLMProvider = {
+      id: 'anthropic-id',
+      name: 'Anthropic',
+      type: 'anthropic' as never,
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: 'key',
+      models: ['claude-sonnet-4-6'],
+      enableThinking: true,
+    };
+    const settings: AISettings = {
+      ...baseSettings,
+      llmProviders: [legacy],
+      defaultProviderId: 'anthropic-id',
+      defaultModel: 'claude-sonnet-4-6',
+    };
+    const result = migrateToProviders(settings);
+    expect(result.llmProviders).toHaveLength(1);
+    expect(result.llmProviders[0].type).toBe('minimax');
+    expect(result.llmProviders[0].id).toBe('anthropic-id');
+    expect(result.defaultProviderId).toBe('anthropic-id');
   });
 
-  it('通过 providerId 精确匹配', () => {
-    const result = resolveProvider([provider1, provider2], 'p2', 'p1');
-    expect(result?.id).toBe('p2');
-  });
-
-  it('providerId 不存在时返回 null', () => {
-    const result = resolveProvider([provider1, provider2], 'unknown-id', null);
-    expect(result).toBeNull();
-  });
-
-  it('providerId 为 null 时回退到 defaultProviderId', () => {
-    const result = resolveProvider([provider1, provider2], null, 'p2');
-    expect(result?.id).toBe('p2');
-  });
-
-  it('defaultProviderId 不存在时回退到第一个 provider', () => {
-    // 当 defaultProviderId 有值但找不到，find 返回 undefined → null
-    const result = resolveProvider([provider1, provider2], null, 'unknown-default');
-    expect(result).toBeNull();
-  });
-
-  it('providerId 和 defaultProviderId 都为 null 时返回第一个 provider', () => {
-    const result = resolveProvider([provider1, provider2], null, null);
-    expect(result?.id).toBe('p1');
+  it('剔除 claude_code_acp provider 并把默认指向回退到首个剩余 provider', () => {
+    const acp: LLMProvider = {
+      id: 'acp-id',
+      name: 'Claude Code ACP',
+      type: 'claude_code_acp' as never,
+      baseUrl: '',
+      apiKey: '',
+      models: ['claude-code-default'],
+      enableThinking: true,
+    };
+    const remaining: LLMProvider = {
+      id: 'openai-id',
+      name: 'OpenAI',
+      type: 'openai_compatible',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'sk-test',
+      models: ['gpt-4o'],
+      enableThinking: true,
+    };
+    const settings: AISettings = {
+      ...baseSettings,
+      llmProviders: [acp, remaining],
+      defaultProviderId: 'acp-id',
+      defaultModel: 'claude-code-default',
+    };
+    const result = migrateToProviders(settings);
+    expect(result.llmProviders).toHaveLength(1);
+    expect(result.llmProviders[0].id).toBe('openai-id');
+    expect(result.defaultProviderId).toBe('openai-id');
   });
 });

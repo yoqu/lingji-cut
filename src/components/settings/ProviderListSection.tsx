@@ -5,7 +5,6 @@ import {
   type PiProviderApi,
   type PiThinkingFormat,
 } from '../../types/ai';
-import { CLAUDE_CODE_ACP_DEFAULT_MODEL } from '../../lib/llm/claude-code-acp-model';
 import { fetchProviderModels } from '../../lib/llm/fetch-models';
 import {
   CUSTOM_PROVIDER_PRESET_ID,
@@ -48,11 +47,9 @@ const PROVIDER_TYPE_OPTIONS: SelectOption[] = [
   { value: 'openai_compatible', label: 'OpenAI Compatible' },
   { value: 'openai_responses', label: 'OpenAI Responses' },
   { value: 'lmstudio', label: 'LM Studio (本地)' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'minimax', label: 'MiniMax (Anthropic 端点)' },
+  { value: 'minimax', label: 'Anthropic 兼容端点 (Claude / MiniMax)' },
   { value: 'volcengine_ark', label: '火山引擎方舟' },
   { value: 'gemini', label: 'Google Gemini' },
-  { value: 'claude_code_acp', label: 'Claude Code ACP' },
 ];
 
 const QUICK_PROVIDER_OPTIONS: SelectOption[] = [
@@ -251,7 +248,6 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
   const [picker, setPicker] = useState<FetchPickerState>({ status: 'idle' });
   const [modelTests, setModelTests] = useState<Record<string, ModelTestState>>({});
   const title = initial.name ? '编辑 Provider' : '添加 Provider';
-  const isClaudeCodeAcp = form.type === 'claude_code_acp';
   const isVolcengineArk = form.type === 'volcengine_ark';
   const selectedPreset = PI_PROVIDER_PRESETS.find((preset) => preset.id === presetId) ?? null;
   const isQuickPreset = Boolean(selectedPreset && selectedPreset.id !== CUSTOM_PROVIDER_PRESET_ID);
@@ -490,7 +486,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
             />
           </Field>
 
-          {isQuickPreset && !isClaudeCodeAcp ? (
+          {isQuickPreset ? (
             <Field
               label="API Key"
               required={selectedPreset?.apiKeyRequired ?? true}
@@ -542,16 +538,6 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                       if (nextType === 'volcengine_ark' && !next.baseUrl.trim()) {
                         next.baseUrl = VOLCENGINE_ARK_DEFAULT_BASE_URL;
                       }
-                      if (nextType === 'claude_code_acp') {
-                        next.baseUrl = '';
-                        next.apiKey = '';
-                        if (next.models.length === 0) {
-                          next.models = [CLAUDE_CODE_ACP_DEFAULT_MODEL];
-                        }
-                        if (!next.name.trim()) {
-                          next.name = 'Claude Code ACP';
-                        }
-                      }
                       return next;
                     });
                     clearFieldError('baseUrl');
@@ -561,8 +547,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                 />
               </Field>
 
-              {!isClaudeCodeAcp ? (
-                <>
+              <>
                   <Field
                     label="Base URL"
                     required={form.type !== 'gemini' && form.type !== 'lmstudio'}
@@ -622,11 +607,6 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                     </Field>
                   ) : null}
                 </>
-              ) : (
-                <p className={styles.hintText}>
-                  复用 Claude Code 设置中的认证、安装和版本配置，不需要 Base URL 或 API Key。
-                </p>
-              )}
             </>
           ) : null}
 
@@ -814,7 +794,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
             </Field>
           ) : null}
 
-          {!isClaudeCodeAcp && !isVolcengineArk ? (
+          {!isVolcengineArk ? (
             <Field
               label="开启思考模式"
               hint={
@@ -905,7 +885,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
             </>
           ) : null}
 
-          {showAdvanced && !isClaudeCodeAcp && !isQuickPreset ? (
+          {showAdvanced && !isQuickPreset ? (
             <div className={styles.piPanel}>
               <div className={styles.piPanelHeader}>
                 <div>
@@ -1033,7 +1013,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                   label="支持 developer role"
                 />
                 <Switch
-                  checked={form.pi?.compat?.supportsReasoningEffort ?? Boolean(form.enableThinking)}
+                  checked={form.pi?.compat?.supportsReasoningEffort ?? false}
                   onChange={(checked) => {
                     setForm((f) =>
                       updatePiCompat(f, (compat) => ({
@@ -1218,9 +1198,7 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
                   </div>
                 </div>
 
-                {p.type === 'claude_code_acp' ? (
-                  <span className={styles.providerBaseUrl}>Claude Code ACP · 本机运行时</span>
-                ) : p.baseUrl ? (
+                {p.baseUrl ? (
                   <span className={styles.providerBaseUrl}>{p.baseUrl}</span>
                 ) : null}
 

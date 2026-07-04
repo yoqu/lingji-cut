@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildRenderPlan, computeCardCues } from '../src/remotion/timeline-to-sequences';
+import {
+  buildRenderPlan,
+  CARD_CROSSFADE_FRAMES,
+  computeCardCues,
+} from '../src/remotion/timeline-to-sequences';
+import type { AICardDisplayMode } from '../src/types/ai';
 
 describe('computeCardCues', () => {
   const srt = [
@@ -73,5 +78,101 @@ describe('buildRenderPlan', () => {
     expect(plan.subtitles).toHaveLength(1);
     expect(plan.subtitles[0].startFrame).toBe(30);
     expect(plan.subtitles[0].durationFrames).toBe(30);
+  });
+});
+
+function aiCardOverlay(
+  id: string,
+  startMs: number,
+  durationMs: number,
+  displayMode: AICardDisplayMode = 'fullscreen',
+): OverlayItem {
+  return {
+    id,
+    type: 'image',
+    assetPath: '',
+    trackId: DEFAULT_VISUAL_TRACK_ID,
+    startMs,
+    durationMs,
+    position: { x: 0, y: 0, width: 1920, height: 1080 },
+    overlayType: 'ai-card',
+    aiCardData: {
+      cardType: 'concept',
+      title: id,
+      content: '',
+      template: 'default',
+      displayMode,
+      style: { primaryColor: '#fff', backgroundColor: '#000', fontSize: 24 },
+    },
+  };
+}
+
+function timelineWithCards(overlays: OverlayItem[]): TimelineData {
+  const timeline = createDefaultTimeline();
+  timeline.podcast = { audioPath: '/p/a.mp3', srtPath: '/p/s.srt', durationMs: 20000 };
+  timeline.overlays = overlays;
+  return timeline;
+}
+
+describe('buildRenderPlan card crossfade', () => {
+  it('extends the previous fullscreen card into the next one when the gap is small', () => {
+    // A: [0, 4000)，B: [4300, 8000) → 空隙 300ms ≤ 500ms，A 延长到 B 开始后 14 帧
+    const plan = buildRenderPlan(
+      timelineWithCards([aiCardOverlay('a', 0, 4000), aiCardOverlay('b', 4300, 3700)]),
+      [],
+      30,
+    );
+    const a = plan.visual.find((c) => c.id === 'a')!;
+    const b = plan.visual.find((c) => c.id === 'b')!;
+    expect(a.durationFrames).toBe(b.startFrame + CARD_CROSSFADE_FRAMES);
+    expect(b.durationFrames).toBe(111); // 后卡不受影响
+  });
+
+  it('keeps cards untouched when the gap exceeds the snap threshold', () => {
+    const plan = buildRenderPlan(
+      timelineWithCards([aiCardOverlay('a', 0, 4000), aiCardOverlay('b', 5000, 3000)]),
+      [],
+      30,
+    );
+    expect(plan.visual.find((c) => c.id === 'a')!.durationFrames).toBe(120);
+  });
+
+  it('renders the earlier card after the later one so it fades out on top', () => {
+    const plan = buildRenderPlan(
+      timelineWithCards([aiCardOverlay('a', 0, 4000), aiCardOverlay('b', 4300, 3700)]),
+      [],
+      30,
+    );
+    const cardIds = plan.visual.filter((c) => c.kind === 'ai-card').map((c) => c.id);
+    expect(cardIds).toEqual(['b', 'a']);
+  });
+
+  it('ignores pip cards and existing overlaps', () => {
+    const plan = buildRenderPlan(
+      timelineWithCards([
+        aiCardOverlay('a', 0, 4000, 'pip'),
+        aiCardOverlay('b', 4300, 3700, 'pip'),
+        aiCardOverlay('c', 8000, 2000),
+        aiCardOverlay('d', 9500, 2000), // 与 c 已重叠（gap < 0），不再延长
+      ]),
+      [],
+      30,
+    );
+    expect(plan.visual.find((c) => c.id === 'a')!.durationFrames).toBe(120);
+    expect(plan.visual.find((c) => c.id === 'c')!.durationFrames).toBe(60);
+  });
+
+  it('computes cues from the original card window, not the extended one', () => {
+    const srt: SrtEntry[] = [
+      { index: 0, startMs: 100, endMs: 2000, text: 's1' },
+      { index: 1, startMs: 4400, endMs: 6000, text: 's2' }, // 属于 B 窗口
+    ];
+    const plan = buildRenderPlan(
+      timelineWithCards([aiCardOverlay('a', 0, 4000), aiCardOverlay('b', 4300, 3700)]),
+      srt,
+      30,
+    );
+    expect(plan.visual.find((c) => c.id === 'a')!.cues).toEqual([3]);
+    expect(plan.visual.find((c) => c.id === 'b')!.cues).toEqual([3]);
   });
 });

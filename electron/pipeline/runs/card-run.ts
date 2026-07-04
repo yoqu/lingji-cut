@@ -6,9 +6,12 @@ import type { SubtitleCardDraftInput } from '../../../src/lib/ai-analysis';
 import { planMotionConversion, mergeMotionConversionResult } from '../../../src/lib/ai-card-conversion';
 import { handleGenerateCardImage, handleGenerateCardVideo } from '../../card-media-handlers';
 import { assertCardRenders } from '../../remotion/smoke-render';
+import { createMotionCardAgentProvider, resolveMotionCardModels } from '../motion-agent-run';
+import { makeAgentFeedCallback } from '../agent-feed';
+import type { MotionCardAgentProvider } from '../../../src/lib/ai-analysis';
 import { updateCardInResult } from '../../../src/lib/ai-persistence';
 import { loadFullHeadlessAISettings, loadHeadlessProjectBindings } from '../headless-settings';
-import { loadEffectivePromptTemplate } from '../../prompts-io';
+import { loadCardTemplates } from '../../prompts-io';
 import { loadProjectFile } from '../../project-file';
 import { HeadlessProjectContext } from '../context';
 import { GenerationError } from '../generation-error';
@@ -133,25 +136,38 @@ interface RegenDeps {
   regenerate?: RegenerateFn;
 }
 
+/**
+ * Motion TSX 多 agent provider（懒构造）：electron 依赖延迟到真正生成 motion 卡时才加载，
+ * 保持 card-run 的 import 图对 vitest 友好（测试 mock regenerate 后不会触达 electron）。
+ */
+function makeHeadlessMotionCardProvider(ctx: GenerationRunCtx, l: Loaded): MotionCardAgentProvider {
+  const { directorModel, sculptorModel } = resolveMotionCardModels(l.settings, l.projectBindings);
+  return async (mctx) => {
+    const { app } = await import('electron');
+    const provider = createMotionCardAgentProvider({
+      userDataPath: ctx.userDataPath,
+      projectPath: ctx.projectPath,
+      rolesSeedDir: join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
+      signal: ctx.handle.signal,
+      onPhase: (phase) => ctx.handle.update({ phase }),
+      // 观测面板关联键与统一进度条的 bridgeId 同值（pipeline:<taskId>）。
+      onAgentEvent: makeAgentFeedCallback(`pipeline:${ctx.handle.taskId}`),
+      directorModel,
+      sculptorModel,
+    });
+    return provider(mctx);
+  };
+}
+
 /** 装配 regenerateAICard 的 options，复刻 main.ts 的 regenerate-ai-card 处理体。 */
 async function buildRegenerateOptions(
   ctx: GenerationRunCtx,
   l: Loaded,
 ): Promise<Record<string, unknown>> {
-  const [cardTemplate, imageTemplate, animationTemplate] = await Promise.all([
-    loadEffectivePromptTemplate('cards.segment', {
-      userDataPath: ctx.userDataPath,
-      projectDir: l.projectPath,
-    }),
-    loadEffectivePromptTemplate('card.image', {
-      userDataPath: ctx.userDataPath,
-      projectDir: l.projectPath,
-    }),
-    loadEffectivePromptTemplate('cards.animation', {
-      userDataPath: ctx.userDataPath,
-      projectDir: l.projectPath,
-    }),
-  ]);
+  const { cardTemplate, imageTemplate, animationTemplate } = await loadCardTemplates({
+    userDataPath: ctx.userDataPath,
+    projectDir: l.projectPath,
+  });
   const projectStylePresetId = (await loadProjectFile(l.projectPath)).stylePresetId;
   return {
     globalPrompt: l.result.globalPrompt,
@@ -165,6 +181,7 @@ async function buildRegenerateOptions(
     animationTemplate,
     animationDirection: l.card.animationDirection,
     projectBindings: l.projectBindings,
+    generateMotionCard: makeHeadlessMotionCardProvider(ctx, l),
     validateMotionSource: assertCardRenders,
   };
 }
@@ -178,6 +195,31 @@ export async function runRegenerateCard(ctx: GenerationRunCtx, deps: RegenDeps =
   }
   ctx.handle.update({ phase: '重生成', percent: 20 });
   const opts = await buildRegenerateOptions(ctx, l);
+  const generated = await regenerate(l.entries, l.card, l.segment, l.settings, opts);
+  ctx.handle.update({ phase: '写入', percent: 90 });
+  return persistCard(l, { ...generated, id: l.card.id, segmentId: l.card.segmentId });
+}
+
+/**
+ * 精雕 motion 卡（refine）：与 runRegenerateCard 同引擎（pi 导演→雕刻→审查），
+ * 差异在于①仅接受 motion 卡②可携带用户精雕要求 notes③导演会拿到现有 motionCard.tsx
+ * 做针对性诊断（regenerateAICard 传 currentCard → provider 的 existingTsx）。
+ */
+export async function runSculptCard(ctx: GenerationRunCtx, deps: RegenDeps = {}): Promise<AICard> {
+  const regenerate = deps.regenerate ?? (regenerateAICard as unknown as RegenerateFn);
+  const l = await loadForCard(ctx);
+  if (!l.segment) {
+    throw new GenerationError('no_segment', `卡片无对应段落: ${l.card.segmentId}`);
+  }
+  if (!l.card.motionCard?.tsx && !l.card.motionCard?.tsxPath) {
+    throw new GenerationError('not_motion_card', `仅 motion 卡可精雕，卡片 ${l.card.id} 无 motionCard 源码`);
+  }
+  ctx.handle.update({ phase: '精雕', percent: 10 });
+  const opts = await buildRegenerateOptions(ctx, l);
+  const notes = String((ctx.params ?? {}).notes ?? '').trim();
+  if (notes) {
+    opts.cardPrompt = [l.card.cardPrompt, `精雕要求：${notes}`].filter(Boolean).join('\n');
+  }
   const generated = await regenerate(l.entries, l.card, l.segment, l.settings, opts);
   ctx.handle.update({ phase: '写入', percent: 90 });
   return persistCard(l, { ...generated, id: l.card.id, segmentId: l.card.segmentId });
@@ -280,20 +322,10 @@ export async function runConvertCard(ctx: GenerationRunCtx, deps: ConvertDeps = 
     } else {
       const fromSubtitles =
         deps.fromSubtitles ?? (generateSingleCardFromSubtitles as unknown as FromSubtitlesFn);
-      const [cardTemplate, imageTemplate, animationTemplate] = await Promise.all([
-        loadEffectivePromptTemplate('cards.segment', {
-          userDataPath: ctx.userDataPath,
-          projectDir: l.projectPath,
-        }),
-        loadEffectivePromptTemplate('card.image', {
-          userDataPath: ctx.userDataPath,
-          projectDir: l.projectPath,
-        }),
-        loadEffectivePromptTemplate('cards.animation', {
-          userDataPath: ctx.userDataPath,
-          projectDir: l.projectPath,
-        }),
-      ]);
+      const { cardTemplate, imageTemplate, animationTemplate } = await loadCardTemplates({
+        userDataPath: ctx.userDataPath,
+        projectDir: l.projectPath,
+      });
       const projectStylePresetId = (await loadProjectFile(l.projectPath)).stylePresetId;
       generated = await fromSubtitles(l.entries, plan.draft, l.settings, {
         globalPrompt: l.result.globalPrompt,
@@ -306,6 +338,7 @@ export async function runConvertCard(ctx: GenerationRunCtx, deps: ConvertDeps = 
         animationTemplate,
         animationDirection: l.card.animationDirection,
         projectBindings: l.projectBindings,
+        generateMotionCard: makeHeadlessMotionCardProvider(ctx, l),
         validateMotionSource: assertCardRenders,
       });
     }

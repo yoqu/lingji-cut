@@ -3,6 +3,7 @@ import * as JsxRuntime from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as Remotion from 'remotion';
 import { compileCardTsx } from './compile-card-node';
+import { createMotionKit, type MotionKitRemotion } from '../../src/remotion/motion-kit';
 
 export interface SmokeRenderResult {
   ok: boolean;
@@ -58,10 +59,13 @@ function evalCardComponent(
 ): React.ComponentType<Record<string, unknown>> | null {
   if (!compiledJs.trim()) return null;
   const remotionShim = makeRemotionShim(frame);
+  // motion-kit 绑定当前帧的 remotion 垫片，使 kit 内部 useCurrentFrame/useVideoConfig 在裸渲染下可用。
+  const motionKit = createMotionKit(remotionShim as unknown as MotionKitRemotion);
   const requireShim = (id: string): unknown => {
     if (id === 'react') return React;
     if (id === 'react/jsx-runtime') return JsxRuntime;
     if (id === 'remotion') return remotionShim;
+    if (id === '@lingji/motion-kit') return motionKit;
     throw new Error(`Motion Card 不允许引用模块：${id}`);
   };
   const moduleObj: { exports: Record<string, unknown> } = { exports: {} };
@@ -109,6 +113,8 @@ interface LayoutProbe {
   whiteSpace: string;
   overflowWrap: string;
   wordBreak: string;
+  overflowX: string;
+  overflowY: string;
   directText: boolean;
   isMedia: boolean;
 }
@@ -153,6 +159,8 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
               whiteSpace: s.whiteSpace,
               overflowWrap: s.overflowWrap,
               wordBreak: s.wordBreak,
+              overflowX: s.overflowX,
+              overflowY: s.overflowY,
               directText,
               isMedia: ['img', 'video', 'canvas', 'svg'].includes((el as Element).tagName.toLowerCase()),
             };
@@ -228,7 +236,10 @@ async function inspectLayoutRisks(
       message: `检测到 ${absoluteCount} 个 absolute 定位元素，文字或图形存在互相遮挡风险。`,
     });
   }
-  if (textRuns.length >= 3 && !hasTextAlignment) {
+  // kit 卡的对齐与缓动工艺在 @lingji/motion-kit 内部实现，卡片源码看不到这些关键词，
+  // 源码级启发式（对齐缺失 / 缓动单调）只对非 kit 卡生效。
+  const usesMotionKit = tsx.includes('@lingji/motion-kit');
+  if (textRuns.length >= 3 && !hasTextAlignment && !usesMotionKit) {
     issues.push({
       severity: 'warning',
       code: 'missing-alignment-style',
@@ -249,6 +260,14 @@ async function inspectLayoutRisks(
       message: '检测到大字号与较长文本组合，需确认移动端/导出画面里不会遮挡或溢出。',
     });
   }
+  const easingVariety = new Set(Array.from(tsx.matchAll(/Easing\.(?:in|out|inOut)?\(?[A-Za-z]*/g), (m) => m[0])).size;
+  if (easingVariety < 2 && !/\bspring\s*\(/.test(tsx) && !usesMotionKit) {
+    issues.push({
+      severity: 'warning',
+      code: 'monotone-easing',
+      message: '整卡缓动种类不足 2 种且未使用 spring，动效可能单调（运动多样性不足）。',
+    });
+  }
   if (!checkRenderedLayout) return issues;
 
   const layoutNodes = await inspectRenderedLayout(markups);
@@ -267,22 +286,50 @@ async function inspectLayoutRisks(
     issueCounts.set(issue.code, count + 1);
   };
   for (const node of layoutNodes) {
-    const outLeft = node.x < -2;
-    const outTop = node.y < -2;
-    const outRight = node.x + node.width > 1922;
-    const outBottom = node.y + node.height > 1082;
+    // 容差 24px：吸收有界虚拟摄影机（scale ≤1.02，边缘位移 ≤~19px）造成的设计内出血。
+    const outLeft = node.x < -24;
+    const outTop = node.y < -24;
+    const outRight = node.x + node.width > 1920 + 24;
+    const outBottom = node.y + node.height > 1080 + 24;
     if (outLeft || outTop || outRight || outBottom) {
       pushCappedIssue({
         severity: node.isMedia || node.directText ? 'error' : 'warning',
         code: 'layout-overflow',
-        message: `元素 ${node.tag} 超出画布边界，可能被裁切或遮挡。`,
+        message: `元素 ${node.tag}（"${node.text.slice(0, 12)}"）超出画布边界（x=${Math.round(node.x)}, y=${Math.round(node.y)}, w=${Math.round(node.width)}, h=${Math.round(node.height)}），可能被裁切。`,
       });
     }
-    if ((node.text.length >= 18 || node.directText) && (node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1)) {
+    // 底部 20% 为口播字幕安全区；文字/媒体元素起始于画面下部且延伸入安全区（留 4% 容差）按 error。
+    // 全高容器（文字实际渲染在顶部）不误报：仅当元素顶边已落在下部 62% 之后才判定。
+    if (
+      (node.directText || node.isMedia) &&
+      node.height > 0 &&
+      node.y > 1080 * 0.62 &&
+      node.y + node.height > 1080 * 0.84
+    ) {
+      pushCappedIssue({
+        severity: 'error',
+        code: 'subtitle-zone-violation',
+        message: `元素 ${node.tag}（"${node.text.slice(0, 12)}"）侵入底部字幕安全区（y+height=${Math.round(node.y + node.height)} > ${Math.round(1080 * 0.84)}）；内容必须收在 y ≤ H*0.80 内。`,
+      });
+    }
+    // 真裁切 = 元素自身 overflow 会剪内容（hidden/clip/scroll/auto）且滚动尺寸超出可视尺寸。
+    // overflow: visible 的大字（如 lineHeight ≤1 的 hero 数字）scrollHeight 天然超出，但内容完整渲染，不算截断。
+    // 画布级容器（CardStage 根）允许 ≤3% 的镜头出血；超过即内容真装不下。
+    const clipsSelf = (v: string) => v === 'hidden' || v === 'clip' || v === 'scroll' || v === 'auto';
+    const isCanvasRoot = node.width >= 1912 && node.height >= 1072;
+    const overW = isCanvasRoot ? 1920 * 0.03 : 1;
+    const overH = isCanvasRoot ? 1080 * 0.03 : 1;
+    if (
+      (node.text.length >= 18 || node.directText) &&
+      ((clipsSelf(node.overflowX) && node.scrollWidth > node.clientWidth + overW) ||
+        (clipsSelf(node.overflowY) && node.scrollHeight > node.clientHeight + overH))
+    ) {
       pushCappedIssue({
         severity: 'error',
         code: 'text-clipped',
-        message: `文本元素 ${node.tag} 存在滚动尺寸大于可视尺寸的情况，可能发生截断或遮挡。`,
+        message: isCanvasRoot
+          ? `内容总尺寸（${node.scrollWidth}×${node.scrollHeight}）明显超出画布 1920×1080，放不下的部分会被裁掉——必须删减文字/缩小元素，而不是硬塞。`
+          : `文本元素 ${node.tag}（"${node.text.slice(0, 12)}"）被自身 overflow 裁切（scroll ${node.scrollWidth}×${node.scrollHeight} > client ${node.clientWidth}×${node.clientHeight}），文字显示不全。`,
       });
     }
   }
@@ -372,12 +419,17 @@ export async function validateMotionCardTsx(
 }
 
 /**
- * 生成期断言卡片可渲染；不可渲染时抛出带"请重新生成"后缀的错误，
- * 由 LLM 重试循环捕获并把错误作为提示反馈给模型。
+ * 生成期断言卡片可渲染；不可渲染或存在 error 级布局问题（文字截断 / 越界 /
+ * 字幕安全区侵入）时抛出带"请重新生成"后缀的错误，由编排器修复循环捕获回喂。
  */
 export async function assertCardRenders(tsx: string): Promise<void> {
-  const result = await smokeRenderCardTsx(tsx);
-  if (!result.ok) {
-    throw new Error(`Motion Card 渲染校验失败：${result.error}；请重新生成`);
+  const result = await validateMotionCardTsx(tsx, { checkRenderedLayout: true });
+  if (!result.render.ok) {
+    throw new Error(`Motion Card 渲染校验失败：${result.render.error}；请重新生成`);
+  }
+  const errors = result.issues.filter((i) => i.severity === 'error');
+  if (errors.length > 0) {
+    const detail = errors.map((i) => `[${i.code}] ${i.message}`).join('；');
+    throw new Error(`Motion Card 布局校验失败：${detail}；请重新生成`);
   }
 }

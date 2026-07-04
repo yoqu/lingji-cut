@@ -72,20 +72,43 @@ export async function createRenderPublicDir(
   };
 }
 
+/** 递归复制目录，优先硬链接（同卷零拷贝，比整量 copy 快一个量级），失败回退 copyFile。 */
+async function copyDirPreferHardlinks(src: string, dest: string): Promise<void> {
+  await fs.mkdir(dest, { recursive: true });
+  const entries = await fs.readdir(src, { withFileTypes: true });
+  await Promise.all(
+    entries.map(async (entry) => {
+      const from = path.join(src, entry.name);
+      const to = path.join(dest, entry.name);
+      if (entry.isDirectory()) {
+        await copyDirPreferHardlinks(from, to);
+        return;
+      }
+      try {
+        await fs.link(from, to);
+      } catch {
+        await fs.copyFile(from, to);
+      }
+    }),
+  );
+}
+
 /**
- * 打包态复用构建期预打包的 Remotion 产物（dist-remotion）。
- * 运行时 webpack 既无法 chdir 进 app.asar 也无法穿透 asar 解析模块，故不再运行时 bundle；
- * 改为把只读的预打包站点 copy 到可写临时目录，再把本次导出 materialize 的素材注入其
- * public/（staticFile 解析根），返回该目录作为 Remotion serveUrl。调用方负责清理返回目录。
+ * 把只读的 Remotion 站点产物（dev 缓存 bundle / 打包态 dist-remotion）与本次导出
+ * materialize 的素材合成一个可写临时 serve 目录：站点在前、素材注入 public/
+ * （staticFile 解析根），返回目录作为 Remotion serveUrl。调用方负责清理返回目录。
  *
- * dist-remotion 经 asar-unpack 落在 app.asar.unpacked（真实目录），这里用真实路径 copy：
- * Electron 的 asar 透明层不支持对目录做递归 copy，走 app.asar 虚拟路径会 ENOENT。
+ * 站点产物跨导出复用（dev bundle 按 entry 缓存、打包态 dist-remotion 构建期生成），
+ * 每次导出只付出硬链接级的组装成本。
+ *
+ * 打包态注意：dist-remotion 经 asar-unpack 落在 app.asar.unpacked（真实目录），
+ * 必须用真实路径——Electron 的 asar 透明层不支持对目录做递归 copy，走 app.asar
+ * 虚拟路径会 ENOENT。
  */
-async function prepareServeUrlFromPrebuilt(publicDir: string): Promise<string> {
-  const prebuiltDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'dist-remotion');
+async function prepareServeDir(siteDir: string, publicDir: string): Promise<string> {
   const serveDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lingjijianying-serve-'));
-  await fs.cp(prebuiltDir, serveDir, { recursive: true });
-  await fs.cp(publicDir, path.join(serveDir, 'public'), { recursive: true });
+  await copyDirPreferHardlinks(siteDir, serveDir);
+  await copyDirPreferHardlinks(publicDir, path.join(serveDir, 'public'));
   return serveDir;
 }
 
@@ -190,7 +213,12 @@ export async function renderVideoHeadless(
 
   const cpuCount = os.cpus().length;
   // 帧渲染是 Chromium 截图主导的 CPU 任务；cpu-2 给系统留一点喘息，避免输入卡顿。
-  const explicitConcurrency = Math.max(1, cpuCount - 2);
+  // LINGJI_EXPORT_CONCURRENCY（正整数）供性能对比实验覆盖默认值。
+  const envConcurrency = Number(process.env.LINGJI_EXPORT_CONCURRENCY);
+  const explicitConcurrency =
+    Number.isInteger(envConcurrency) && envConcurrency >= 1
+      ? envConcurrency
+      : Math.max(1, cpuCount - 2);
 
   // 把 UI 档位（resolution + quality）展开成完整的渲染配置：
   // - x264Preset / videoBitrate / audioBitrate 直接落到 renderMedia；
@@ -218,6 +246,7 @@ export async function renderVideoHeadless(
       x264Preset: renderConfig.x264Preset,
       videoBitrate: renderConfig.videoBitrate,
       audioBitrate: renderConfig.audioBitrate,
+      jpegQuality: renderConfig.jpegQuality,
       hardwareAcceleration: 'if-possible',
       cpuCount,
       explicitConcurrency,
@@ -239,8 +268,8 @@ export async function renderVideoHeadless(
   const projectPrepStart = assetsStart;
   // materialize 资源到临时 publicDir，并把 timeline 内绝对素材路径改写为 assets/... 相对路径。
   const { timeline: renderTimeline, publicDir } = await createRenderPublicDir(timelineData);
-  // 打包态复用预打包 Remotion 产物时会 copy 出可写临时站点目录，导出后在 finally 清理。
-  let prebuiltServeDir: string | undefined;
+  // dev / 打包态统一组装出的可写临时 serve 目录，导出后在 finally 清理。
+  let tempServeDir: string | undefined;
   // 打包态需要把 cwd 切到可写目录，让 Remotion 的浏览器缓存落点不是 `/.remotion`。
   // 在 finally 中恢复，避免影响后续主进程逻辑（譬如其它 IPC 的相对路径解析）。
   const originalCwd = process.cwd();
@@ -325,14 +354,18 @@ export async function renderVideoHeadless(
     let serveUrl: string;
     try {
       if (isDev) {
-        // 开发态：源码在真实磁盘，运行时 bundle src/remotion。
+        // 开发态：源码在真实磁盘，运行时 bundle src/remotion（按 entry 缓存，首次导出后复用）。
         const remotionEntry = path.join(app.getAppPath(), 'src', 'remotion', 'index.ts');
-        serveUrl = await getRemotionBundle(remotionEntry, publicDir);
+        const bundleDir = await getRemotionBundle(remotionEntry);
+        tempServeDir = await prepareServeDir(bundleDir, publicDir);
       } else {
         // 打包态：复用构建期预打包产物，避开 app.asar 内运行时 webpack。
-        prebuiltServeDir = await prepareServeUrlFromPrebuilt(publicDir);
-        serveUrl = prebuiltServeDir;
+        tempServeDir = await prepareServeDir(
+          path.join(process.resourcesPath, 'app.asar.unpacked', 'dist-remotion'),
+          publicDir,
+        );
       }
+      serveUrl = tempServeDir;
       tel.emit('stage.end', {
         stage: 'export.bundle',
         durationMs: Date.now() - bundleStart,
@@ -370,28 +403,47 @@ export async function renderVideoHeadless(
         }
       }
     }
+    // 每 15s 采样一次 rendered/encoded 帧数：encoded 持续贴近 rendered 说明编码不是瓶颈，
+    // 差距持续拉大说明编码端拖后腿，据此决定调优截帧还是编码。
+    let lastSampleAt = renderStart;
     try {
-      await renderRemotionVideo({
+      const { totalFrames, fps } = await renderRemotionVideo({
         serveUrl,
         outputPath: args.outputPath,
         timeline: renderTimeline,
         srtEntries,
         compiledCards,
-        width: renderConfig.renderWidth,
-        height: renderConfig.renderHeight,
+        scale: exportScale,
+        jpegQuality: renderConfig.jpegQuality,
         x264Preset: renderConfig.x264Preset,
         videoBitrate: renderConfig.videoBitrate,
         audioBitrate: renderConfig.audioBitrate,
         concurrency: explicitConcurrency,
         hardwareAcceleration: 'if-possible',
         binariesDirectory: resolveRemotionBinariesDirectory(),
-        onProgress: (ratio) => onProgress(Math.max(0.05, Math.min(0.98, ratio))),
+        onProgress: ({ ratio, renderedFrames, encodedFrames }) => {
+          onProgress(Math.max(0.05, Math.min(0.98, ratio)));
+          const now = Date.now();
+          if (now - lastSampleAt >= 15_000) {
+            lastSampleAt = now;
+            tel.emit('render.progress', {
+              stage: 'export.render',
+              elapsedMs: now - renderStart,
+              renderedFrames,
+              encodedFrames,
+            });
+          }
+        },
       });
       onProgress(1);
+      const renderDurationMs = Date.now() - renderStart;
       tel.emit('stage.end', {
         stage: 'export.render',
-        durationMs: Date.now() - renderStart,
+        durationMs: renderDurationMs,
         ok: true,
+        totalFrames,
+        fps,
+        renderFps: Math.round((totalFrames / Math.max(1, renderDurationMs)) * 1000 * 10) / 10,
       });
     } catch (err) {
       tel.emit('stage.end', {
@@ -425,8 +477,8 @@ export async function renderVideoHeadless(
       }
     }
     await fs.rm(publicDir, { recursive: true, force: true });
-    if (prebuiltServeDir) {
-      await fs.rm(prebuiltServeDir, { recursive: true, force: true });
+    if (tempServeDir) {
+      await fs.rm(tempServeDir, { recursive: true, force: true });
     }
   }
 }

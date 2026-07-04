@@ -12,6 +12,8 @@ export interface ExportRenderConfig extends ExportConfig {
   x264Preset: 'ultrafast' | 'veryfast' | 'medium';
   videoBitrate: string;
   audioBitrate: string;
+  /** Chromium 截帧 JPEG 质量（1-100）：影响截帧序列化速度，与最终视频码率无关。 */
+  jpegQuality: number;
 }
 
 interface ExportOption<T extends string> {
@@ -32,11 +34,13 @@ const QUALITY_PROFILE: Record<
     x264Preset: ExportRenderConfig['x264Preset'];
     audioBitrate: string;
     videoBitrate: Record<ExportResolution, string>;
+    jpegQuality: number;
   }
 > = {
   speed: {
     x264Preset: 'ultrafast',
     audioBitrate: '96k',
+    jpegQuality: 70,
     videoBitrate: {
       source: '3500k',
       '720p': '1800k',
@@ -47,6 +51,7 @@ const QUALITY_PROFILE: Record<
   balanced: {
     x264Preset: 'veryfast',
     audioBitrate: '128k',
+    jpegQuality: 80,
     videoBitrate: {
       source: '5500k',
       '720p': '3000k',
@@ -57,6 +62,7 @@ const QUALITY_PROFILE: Record<
   quality: {
     x264Preset: 'medium',
     audioBitrate: '192k',
+    jpegQuality: 90,
     videoBitrate: {
       source: '8000k',
       '720p': '4500k',
@@ -244,5 +250,6 @@ export function buildExportRenderConfig({
     x264Preset: profile.x264Preset,
     videoBitrate: profile.videoBitrate[resolution],
     audioBitrate: profile.audioBitrate,
+    jpegQuality: profile.jpegQuality,
   };
 }

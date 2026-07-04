@@ -18,8 +18,12 @@ export function StyleLibraryPanel({ value, onChange, facetHint }: StyleLibraryPa
     <div className={styles.grid}>
       {presets.map((preset) => {
         const selected = preset.id === value;
+        // motion facet 已结构化为 motionTokens；其余 facet 仍看提示词块是否非空。
         const missingFacet =
-          facetHint != null && !(preset.facets[facetHint] && preset.facets[facetHint]!.trim());
+          facetHint != null &&
+          (facetHint === 'motion'
+            ? !preset.motionTokens
+            : !(preset.facets[facetHint] && preset.facets[facetHint]!.trim()));
         return (
           <button
             key={preset.id}

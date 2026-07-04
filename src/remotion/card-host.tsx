@@ -6,8 +6,12 @@ import { Component, useMemo, type ReactNode } from 'react';
 import { toFileSrc } from '../lib/utils';
 import { useIsRendering } from './use-is-rendering';
 import { makeCardAssetResolver } from './card-asset';
+import { createMotionKit, type MotionKitRemotion } from './motion-kit';
 
 type CardAssetResolver = (rel: string) => string;
+
+/** motion-kit 绑定宿主真实 remotion 实例；模块级单例，所有卡片共享。 */
+const motionKit = createMotionKit(Remotion as unknown as MotionKitRemotion);
 
 /**
  * 评估主进程 esbuild 编译出的卡片 CJS 模块，返回其 default 导出的组件。
@@ -27,6 +31,7 @@ function evalCardComponent(
     if (id === 'react') return React;
     if (id === 'react/jsx-runtime') return JsxRuntime;
     if (id === 'remotion') return Remotion;
+    if (id === '@lingji/motion-kit') return motionKit;
     throw new Error(`Motion Card 不允许引用模块：${id}`);
   };
   const moduleObj: { exports: Record<string, unknown> } = { exports: {} };

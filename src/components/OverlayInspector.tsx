@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { getFileNameFromPath } from '../lib/utils';
+import { ENTER_PRESETS, EXIT_PRESETS, LOOP_PRESETS } from '../lib/motion-presets';
 import { useTimelineStore } from '../store/timeline';
 import type { OverlayMotion } from '../types';
 import { Button, NumberField, Select, type SelectOption } from '../ui';
@@ -7,42 +8,18 @@ import { AudioInspector } from './AudioInspector';
 import { TextInspector } from './TextInspector';
 import styles from './OverlayInspector.module.css';
 
-const ENTER_OPTIONS: Array<OverlayMotion['enter']> = [
-  'none',
-  'fadeIn',
-  'slideInLeft',
-  'slideInRight',
-  'slideInUp',
-  'slideInDown',
-  'scaleIn',
-  'bounceIn',
-];
-
-const EXIT_OPTIONS: Array<OverlayMotion['exit']> = [
-  'none',
-  'fadeOut',
-  'slideOutLeft',
-  'slideOutRight',
-  'slideOutUp',
-  'slideOutDown',
-  'scaleOut',
-  'bounceOut',
-];
-
-const LOOP_OPTIONS: Array<OverlayMotion['loop']> = ['none', 'pulse', 'float', 'flicker'];
-
-const ENTER_SELECT_OPTIONS: SelectOption[] = ENTER_OPTIONS.map((option) => ({
-  value: option,
-  label: option,
+// 与 TextInspector 共用同一套动效预设与中文标签（媒体 overlay 不支持 typewriter 循环）。
+const ENTER_SELECT_OPTIONS: SelectOption[] = ENTER_PRESETS.map(({ value, label }) => ({
+  value,
+  label,
 }));
-const EXIT_SELECT_OPTIONS: SelectOption[] = EXIT_OPTIONS.map((option) => ({
-  value: option,
-  label: option,
+const EXIT_SELECT_OPTIONS: SelectOption[] = EXIT_PRESETS.map(({ value, label }) => ({
+  value,
+  label,
 }));
-const LOOP_SELECT_OPTIONS: SelectOption[] = LOOP_OPTIONS.map((option) => ({
-  value: option,
-  label: option,
-}));
+const LOOP_SELECT_OPTIONS: SelectOption[] = LOOP_PRESETS.filter(
+  ({ value }) => value !== 'typewriter',
+).map(({ value, label }) => ({ value, label }));
 
 interface OverlayInspectorProps {
   overlayId: string;

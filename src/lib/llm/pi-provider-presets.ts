@@ -50,10 +50,10 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
   {
     id: 'anthropic',
     label: 'Anthropic',
-    description: 'Pi 内置 Anthropic provider，适合 Claude 系列模型。',
+    description: 'Pi 内置 Anthropic provider，适合 Claude 系列模型（走 Anthropic Messages 协议）。',
     piProviderId: 'anthropic',
     providerName: 'Anthropic',
-    type: 'anthropic',
+    type: 'minimax',
     baseUrl: 'https://api.anthropic.com',
     models: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5', 'claude-fable-5'],
     apiKeyPlaceholder: 'sk-ant-...',

@@ -20,30 +20,6 @@ function normalizeCoverPrompts(prompts: string[]): string[] {
   return prompt ? [prompt.trim()] : [];
 }
 
-// 旧工程的 motion 卡片用 HyperFrames HTML+GSAP（motionCard.html，无 tsx）。
-// 引擎已切到 Remotion TSX：保留旧 html 到 legacyHtml 并标记 needsRegeneration，
-// 渲染层降级为占位、Inspector 提示重新生成，避免崩溃。
-function migrateLegacyMotionCard(card: AICard): AICard {
-  if (card.renderMode !== 'motion-card' || !card.motionCard) {
-    return card;
-  }
-  const motion = card.motionCard;
-  if (motion.tsx && motion.tsx.trim()) {
-    return card;
-  }
-  if (!motion.html || !motion.html.trim()) {
-    return card;
-  }
-  return {
-    ...card,
-    motionCard: {
-      ...motion,
-      legacyHtml: motion.html,
-      needsRegeneration: true,
-    },
-  };
-}
-
 function normalizeAnalysisResult(result: AIAnalysisResult | null): AIAnalysisResult | null {
   if (!result) {
     return null;
@@ -52,7 +28,6 @@ function normalizeAnalysisResult(result: AIAnalysisResult | null): AIAnalysisRes
   return {
     ...result,
     coverPrompts: normalizeCoverPrompts(result.coverPrompts),
-    cards: result.cards.map(migrateLegacyMotionCard),
   };
 }
 

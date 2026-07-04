@@ -3,14 +3,13 @@ import { BinaryManager } from './binary-manager';
 import type { AgentConfig } from './config';
 import { normalizeAgentId } from './config';
 import { getAgentDef } from '../agent-runtime/registry';
-import { detectAgent, createDetectionDeps } from '../agent-runtime/detection';
 
 /**
- * 多协议 preflight：基于 RuntimeAgentDef + detection 探测 agent CLI 是否可用。
+ * preflight：唯一注册的 agent（pi）为 in-process SDK，恒可用，无需 CLI 探测。
  *
  * 返回 PreflightCheck[] 契约不变（UI 不崩）：
  *   - Node.js / npx：保留原检查（npm 托管安装/升级仍依赖它们）。
- *   - <agent bin>：用 detection.detectAgent(def, ...) 检查 CLI 是否在 PATH/可探测版本。
+ *   - <agent bin>：inProcess agent 直接 pass。
  *   - API Key：仅对显式配置 custom_api authMode 的 agent 提示（subscription/未配置不阻断）。
  *
  * agentId 可传旧键（claude-acp/pi-acp），内部 normalize 到 claude/codex/pi。
@@ -50,29 +49,9 @@ export async function runPreflight(
     });
   }
 
-  // 3. Agent 探测：in-process agent（pi）内置于应用，恒可用，无需 CLI 探测。
+  // 3. Agent：唯一注册的 pi 为 in-process，内置于应用，恒可用。
   if (def) {
-    const agentLabel = def.bin;
-    if (def.inProcess) {
-      checks.push({ label: agentLabel, status: 'pass', message: '内置（无需安装）' });
-    } else {
-      const detection = await detectAgent(def, createDetectionDeps(binaryManager));
-      if (detection.installed) {
-        const versionSuffix = detection.version ? ` ${detection.version}` : '';
-        checks.push({
-          label: agentLabel,
-          status: 'pass',
-          message: `${detection.binPath ?? '已安装'}${versionSuffix}`,
-        });
-      } else {
-        checks.push({
-          label: agentLabel,
-          status: 'fail',
-          message: `未找到 ${agentLabel}，请确认已安装并在 PATH 中`,
-          fixAction: 'install',
-        });
-      }
-    }
+    checks.push({ label: def.bin, status: 'pass', message: '内置（无需安装）' });
 
     // 4. API Key（仅 custom_api 模式提示；subscription/默认不阻断）
     const configData = await config.load();

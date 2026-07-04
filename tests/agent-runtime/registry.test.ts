@@ -32,16 +32,6 @@ describe('agent-runtime registry', () => {
     });
   });
 
-  describe('pi in-process shape', () => {
-    it('在进程内运行：无 CLI buildArgs / bundledNodeEntry / streamFormat', () => {
-      const def = getAgentDef('pi')!;
-      expect(def.inProcess).toBe(true);
-      expect(def.buildArgs).toBeUndefined();
-      expect(def.bundledNodeEntry).toBeUndefined();
-      expect(def.streamFormat).toBeUndefined();
-    });
-  });
-
   describe('pi reasoningOptions', () => {
     it('pi 暴露非空 reasoningOptions 且默认 default', () => {
       const def = getAgentDef('pi')!;

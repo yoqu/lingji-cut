@@ -1,26 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { RuntimeRegistry } from '../../electron/agent-runtime/runtime-registry';
 import type { AgentSessionStartInput } from '../../electron/agent-runtime/session';
 import type { AgentStreamEvent } from '../../electron/agent-runtime/event-model';
-
-// 捕获默认 createSession 工厂构造 AgentSession 时注入的 deps，
-// 用于验证 binaryManager 流入 AgentSession（pi 现为内置入口，detection 不再调
-// resolveBinary，故无法通过 resolveBinary 被调用来证明，改为直接断言构造注入）。
-const hoisted = vi.hoisted(() => ({ capturedDeps: null as any }));
-vi.mock('../../electron/agent-runtime/session', () => ({
-  AgentSession: class {
-    constructor(deps: any) {
-      hoisted.capturedDeps = deps;
-    }
-    async start(): Promise<void> {
-      /* no-op：本文件其余测试均注入自定义 createSession，不走此构造 */
-    }
-    cancel(): void {
-      /* no-op */
-    }
-  },
-}));
 
 // ─── Fake AgentSession ───────────────────────────────────────────────────────
 
@@ -102,7 +84,6 @@ describe('RuntimeRegistry', () => {
   beforeEach(() => {
     statusEvents = [];
     runtimeEvents = [];
-    hoisted.capturedDeps = null;
   });
 
   it('connect 登记会话上下文但不 spawn（不创建 session.start）', async () => {
@@ -383,7 +364,7 @@ describe('RuntimeRegistry', () => {
     expect(c2.map((e) => e.event.text)).toEqual(['B']);
   });
 
-  it('pi resume uses CLI --session semantics and does not send RPC parentSession', async () => {
+  it('pi resume 透传记录的 sessionId 作为 resumeSessionId', async () => {
     const { registry, sessions } = makeRegistry();
     attachListeners(registry);
 
@@ -398,7 +379,6 @@ describe('RuntimeRegistry', () => {
     const started = sessions.find((s) => s.startCalls > 0)!;
     expect(started.lastInput!.resumeSessionId).toBe('pi-session-123');
     expect(started.lastInput!.isResuming).toBe(true);
-    expect(started.lastInput!.parentSession).toBeNull();
   });
 
   it('回写每轮上报的 sessionId：新建会话第二轮以第一轮 session 续接（保留上下文历史）', async () => {
@@ -436,26 +416,6 @@ describe('RuntimeRegistry', () => {
     await expect(registry.setMode(1, 'm')).resolves.toBeUndefined();
     await expect(registry.setConfigOption(1, 'c', 'v')).resolves.toBeUndefined();
     await expect(registry.respondPermission(1, 'r', 'o')).resolves.toBeUndefined();
-  });
-
-  // 回归：默认 createSession 工厂会把 RuntimeRegistry 的 binaryManager 注入新建的
-  // AgentSession。pi 现为内置入口（detection 不再调 resolveBinary），故改为直接断言
-  // 构造期注入的 deps.binaryManager 即传入的 bm，证明 binaryManager 流入了 AgentSession。
-  it('默认 createSession 注入 binaryManager（回归 missing binaryManager）', async () => {
-    hoisted.capturedDeps = null;
-    const bm = {
-      resolveBinary: vi.fn().mockResolvedValue(null),
-      ensureNodeInPath: vi.fn(),
-    };
-    const registry = new RuntimeRegistry({ binaryManager: bm as any });
-    attachListeners(registry);
-
-    await registry.connect({ conversationId: 1, agentType: 'pi', projectDir: '/proj' });
-    await registry.sendPrompt(1, [{ type: 'text', text: 'hi' }]);
-
-    // 默认工厂 new AgentSession({ binaryManager }) 已携带传入的 bm。
-    expect(hoisted.capturedDeps).not.toBeNull();
-    expect(hoisted.capturedDeps.binaryManager).toBe(bm);
   });
 });
 

@@ -201,6 +201,7 @@ describe('EditorInspector', () => {
 
     expect(html).toContain('素材图层');
     expect(html).toContain('cover.png');
-    expect(html).toContain('slideInLeft');
+    // 动效下拉展示共享预设的中文标签（slideInLeft → 左滑入）
+    expect(html).toContain('左滑入');
   });
 });

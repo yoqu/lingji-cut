@@ -244,10 +244,6 @@ export function registerAgentIpc(getMainWindow: () => BrowserWindow | null): voi
       return { models: [{ id: 'default', label: '默认' }], source: 'fallback' as const };
     }
   });
-  ipcMain.handle('agent:install', async (_event, version: string) => binaryManager.install(version));
-  ipcMain.handle('agent:uninstall', () => binaryManager.uninstall());
-  ipcMain.handle('agent:get-latest-version', () => binaryManager.getLatestVersion());
-
   // 列出某 agent 的内置 skills（renderer 设置页 / composer 补全用）
   ipcMain.handle('agent:list-skills', async (_e, agentId?: string) => {
     const id = normalizeAgentId(agentId ?? 'pi');

@@ -37,10 +37,17 @@ export type VideoImportSourceInput =
       filePath: string;
     };
 
+export interface TranscriptWord {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
 export interface TranscriptSegment {
   text: string;
   startMs: number;
   endMs: number;
+  words?: TranscriptWord[];
 }
 
 export interface VideoImportResult {

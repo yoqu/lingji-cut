@@ -11,7 +11,8 @@ describe('LockMonitor', () => {
       onChange: (s) => events.push(s),
     });
     await mon.poll();
-    expect(events.at(-1)).toEqual({ active: true, scope: 'video' });
+    // locked 上报现在附带解析出的 lock 对象，这里只关心 active/scope
+    expect(events.at(-1)).toMatchObject({ active: true, scope: 'video' });
   });
 
   it('锁文件消失 → 上报 unlocked', async () => {

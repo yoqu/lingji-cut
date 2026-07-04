@@ -81,6 +81,57 @@ describe('loadEffectivePromptTemplate fallback chain', () => {
     const tpl = await loadEffectivePromptTemplate('planning.segment', { userDataPath });
     expect(tpl.sourceScope).toBe('builtin');
   });
+
+  it('skips a stale global override (version < builtin) and falls back to builtin', async () => {
+    // 内置 cards.segment 当前为 v19；旧覆盖缺少 {{presetMotionTokens}} 等新占位符，必须失效。
+    await writePromptYaml(
+      'global',
+      'cards.segment',
+      'name: cards.segment\nversion: 16\nuser: |-\n  OLD STYLE {{styleSystemBlock}}\n',
+      { userDataPath },
+    );
+    const tpl = await loadEffectivePromptTemplate('cards.segment', { userDataPath, projectDir });
+    expect(tpl.sourceScope).toBe('builtin');
+    expect(tpl.user).toContain('{{presetMotionTokens}}');
+  });
+
+  it('skips a stale project override but keeps a fresh global override', async () => {
+    await writePromptYaml(
+      'project',
+      'cards.segment',
+      'name: cards.segment\nversion: 1\nuser: |-\n  STALE PROJECT {{programContext}}\n',
+      { userDataPath, projectDir },
+    );
+    await writePromptYaml(
+      'global',
+      'cards.segment',
+      'name: cards.segment\nversion: 999\nuser: |-\n  FRESH GLOBAL {{programContext}}\n',
+      { userDataPath },
+    );
+    const tpl = await loadEffectivePromptTemplate('cards.segment', { userDataPath, projectDir });
+    expect(tpl.sourceScope).toBe('global');
+    expect(tpl.user).toContain('FRESH GLOBAL');
+  });
+
+  it('respects overrides with version >= builtin or without version', async () => {
+    await writePromptYaml(
+      'global',
+      'cards.segment',
+      'name: cards.segment\nversion: 999\nuser: |-\n  NEWER {{programContext}}\n',
+      { userDataPath },
+    );
+    const newer = await loadEffectivePromptTemplate('cards.segment', { userDataPath });
+    expect(newer.sourceScope).toBe('global');
+
+    await writePromptYaml(
+      'global',
+      'planning.segment',
+      'name: planning.segment\nuser: |-\n  NO VERSION {{globalPromptLine}}\n',
+      { userDataPath },
+    );
+    const noVersion = await loadEffectivePromptTemplate('planning.segment', { userDataPath });
+    expect(noVersion.sourceScope).toBe('global');
+  });
 });
 
 describe('write / read / delete', () => {
@@ -147,6 +198,24 @@ describe('write / read / delete', () => {
     expect(tpl.user).toBe('新正文 {{scriptText}}');
   });
 
+  it('bumps a stale override version up to builtin when user saves text', async () => {
+    // 旧覆盖（v16 时代快照）会被 loader 判过旧忽略；用户在设置页重新保存即视为
+    // 基于当前内置版本的主动选择，version 必须提到内置版本，否则保存永远不生效。
+    await writePromptYaml(
+      'global',
+      'cards.segment',
+      'name: cards.segment\nversion: 16\nuser: |-\n  OLD {{programContext}}\n',
+      { userDataPath },
+    );
+    await writePromptUserText('global', 'cards.segment', '重新保存 {{programContext}}', {
+      userDataPath,
+    });
+    const tpl = await loadEffectivePromptTemplate('cards.segment', { userDataPath });
+    expect(tpl.sourceScope).toBe('global');
+    expect(tpl.user).toBe('重新保存 {{programContext}}');
+    expect(typeof tpl.version).toBe('number');
+  });
+
   it('deletes an existing override', async () => {
     const yaml = 'name: cards.segment\nuser: |-\n  hi {{programContext}}\n';
     await writePromptYaml('global', 'cards.segment', yaml, { userDataPath });
@@ -186,5 +255,18 @@ describe('listPromptOverview', () => {
     expect(map['cards.segment'].effectiveScope).toBe('project');
     expect(map['cards.segment'].hasProject).toBe(true);
     expect(map['planning.segment'].effectiveScope).toBe('builtin');
+  });
+
+  it('reports builtin as effective when the only override is stale', async () => {
+    await writePromptYaml(
+      'global',
+      'cards.segment',
+      'name: cards.segment\nversion: 16\nuser: |-\n  OLD {{programContext}}\n',
+      { userDataPath },
+    );
+    const items = await listPromptOverview({ userDataPath, projectDir });
+    const item = items.find((i) => i.kind === 'cards.segment')!;
+    expect(item.hasGlobal).toBe(true);
+    expect(item.effectiveScope).toBe('builtin');
   });
 });

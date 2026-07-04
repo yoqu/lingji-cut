@@ -72,6 +72,13 @@ interface AIConfigSnapshotInput {
   defaultVideoModel?: string | null;
 }
 
+/** 修剪空白并去重的模型列表归一化，LLM / 图像 / 视频 provider 共用。 */
+function dedupeTrimmedModels(models: string[]): string[] {
+  return models
+    .map((model) => model.trim())
+    .filter((model, index, list) => model.length > 0 && list.indexOf(model) === index);
+}
+
 export function normalizeProviderDraft(provider: LLMProvider): LLMProvider {
   const pi = normalizePiProjectionOptions(provider.pi);
   const withNormalizedPi = { ...provider, ...(pi ? { pi } : { pi: undefined }) };
@@ -79,9 +86,7 @@ export function normalizeProviderDraft(provider: LLMProvider): LLMProvider {
   const withPresetDefaults = preset
     ? applyPiProviderPreset(withNormalizedPi, preset)
     : withNormalizedPi;
-  const models = withPresetDefaults.models
-    .map((model) => model.trim())
-    .filter((model, index, list) => model.length > 0 && list.indexOf(model) === index);
+  const models = dedupeTrimmedModels(withPresetDefaults.models);
   const trimmedDefaultModel = withPresetDefaults.defaultModel?.trim();
   const defaultModel =
     trimmedDefaultModel && models.includes(trimmedDefaultModel) ? trimmedDefaultModel : undefined;
@@ -112,17 +117,12 @@ export function validateProviderDraft(provider: LLMProvider): ProviderDraftError
     !normalized.baseUrl &&
     normalized.type !== 'gemini' &&
     normalized.type !== 'lmstudio' &&
-    normalized.type !== 'claude_code_acp' &&
     !normalized.pi?.builtinProviderId
   ) {
     errors.baseUrl = '请输入 Base URL';
   }
 
-  if (
-    !normalized.apiKey &&
-    normalized.type !== 'lmstudio' &&
-    normalized.type !== 'claude_code_acp'
-  ) {
+  if (!normalized.apiKey && normalized.type !== 'lmstudio') {
     errors.apiKey = '请输入 API Key';
   }
 
@@ -328,6 +328,9 @@ function normalizePiProjectionOptions(
   if (compat) out.compat = compat;
 
   const model: NonNullable<PiProviderProjectionOptions['model']> = {};
+  if (typeof value.model?.reasoning === 'boolean') {
+    model.reasoning = value.model.reasoning;
+  }
   const input = normalizePiInputTypes(value.model?.input);
   if (input) model.input = input;
   const contextWindow = normalizePositiveInteger(value.model?.contextWindow);
@@ -343,18 +346,37 @@ function normalizePiProjectionOptions(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-// ─── Image Provider 校验与归一化 ─────────────────────────────────────────
+// ─── Image / Video Provider 校验与归一化（共用骨架） ─────────────────────
 
-export function normalizeImageProviderDraft(provider: ImageProvider): ImageProvider {
+function normalizeMediaProviderDraft<T extends {
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  models: string[];
+}>(provider: T): T {
   return {
     ...provider,
     name: provider.name.trim(),
     baseUrl: provider.baseUrl.trim(),
     apiKey: provider.apiKey.trim(),
-    models: provider.models
-      .map((model) => model.trim())
-      .filter((model, index, list) => model.length > 0 && list.indexOf(model) === index),
+    models: dedupeTrimmedModels(provider.models),
   };
+}
+
+function validateMediaProviderDraft(
+  normalized: { name: string; baseUrl: string; apiKey: string; models: string[] },
+  apiKeyLabel: string,
+): { name?: string; baseUrl?: string; apiKey?: string; models?: string } {
+  const errors: { name?: string; baseUrl?: string; apiKey?: string; models?: string } = {};
+  if (!normalized.name) errors.name = '请输入 Provider 名称';
+  if (!normalized.baseUrl) errors.baseUrl = '请输入 Base URL';
+  if (!normalized.apiKey) errors.apiKey = `请输入 ${apiKeyLabel}`;
+  if (normalized.models.length === 0) errors.models = '请至少添加一个模型';
+  return errors;
+}
+
+export function normalizeImageProviderDraft(provider: ImageProvider): ImageProvider {
+  return normalizeMediaProviderDraft(provider);
 }
 
 export function normalizeImageProviderDrafts(providers: ImageProvider[]): ImageProvider[] {
@@ -363,39 +385,14 @@ export function normalizeImageProviderDrafts(providers: ImageProvider[]): ImageP
 
 export function validateImageProviderDraft(provider: ImageProvider): ImageProviderDraftErrors {
   const normalized = normalizeImageProviderDraft(provider);
-  const errors: ImageProviderDraftErrors = {};
-
-  if (!normalized.name) {
-    errors.name = '请输入 Provider 名称';
-  }
-
-  if (!normalized.baseUrl) {
-    errors.baseUrl = '请输入 Base URL';
-  }
-
-  if (!normalized.apiKey) {
-    errors.apiKey = normalized.type === 'jimeng' ? '请输入 Session ID' : '请输入 API Key';
-  }
-
-  if (normalized.models.length === 0) {
-    errors.models = '请至少添加一个模型';
-  }
-
-  return errors;
+  return validateMediaProviderDraft(
+    normalized,
+    normalized.type === 'jimeng' ? 'Session ID' : 'API Key',
+  );
 }
 
-// ─── Video Provider 校验与归一化 ─────────────────────────────────────────
-
 export function normalizeVideoProviderDraft(provider: VideoProvider): VideoProvider {
-  return {
-    ...provider,
-    name: provider.name.trim(),
-    baseUrl: provider.baseUrl.trim(),
-    apiKey: provider.apiKey.trim(),
-    models: provider.models
-      .map((model) => model.trim())
-      .filter((model, index, list) => model.length > 0 && list.indexOf(model) === index),
-  };
+  return normalizeMediaProviderDraft(provider);
 }
 
 export function normalizeVideoProviderDrafts(providers: VideoProvider[]): VideoProvider[] {
@@ -403,13 +400,5 @@ export function normalizeVideoProviderDrafts(providers: VideoProvider[]): VideoP
 }
 
 export function validateVideoProviderDraft(provider: VideoProvider): VideoProviderDraftErrors {
-  const normalized = normalizeVideoProviderDraft(provider);
-  const errors: VideoProviderDraftErrors = {};
-
-  if (!normalized.name) errors.name = '请输入 Provider 名称';
-  if (!normalized.baseUrl) errors.baseUrl = '请输入 Base URL';
-  if (!normalized.apiKey) errors.apiKey = '请输入 API Key';
-  if (normalized.models.length === 0) errors.models = '请至少添加一个模型';
-
-  return errors;
+  return validateMediaProviderDraft(normalizeVideoProviderDraft(provider), 'API Key');
 }

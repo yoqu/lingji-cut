@@ -79,13 +79,13 @@ describe('scanProjectDirectory', () => {
     expect(result.projectName).toBe(path.basename(tmpDir));
   });
 
-  it('S2 legacy：只有 timeline.json', async () => {
+  it('只有 timeline.json：不再识别为旧版项目', async () => {
     await fs.writeFile(
       path.join(tmpDir, 'timeline.json'),
       JSON.stringify({ tracks: [], overlays: [] }),
     );
     const result = await scanProjectDirectory(tmpDir);
-    expect(result.scenario).toBe('legacy');
+    expect(result.scenario).toBe('unrecognized');
   });
 
   it('S3 mediaOnly：只有 podcast-audio.mp3', async () => {
@@ -389,7 +389,6 @@ describe('importProject', () => {
     const result = await importProject({ projectDir: tmpDir, acceptMissingAssets: false });
     expect(result.scenario).toBe('complete');
     expect(result.fixReport.fixed).toHaveLength(1);
-    expect(result.migratedFromLegacy).toBe(false);
 
     const after = JSON.parse(
       await fs.readFile(path.join(tmpDir, 'project.json'), 'utf-8'),
@@ -430,39 +429,14 @@ describe('importProject', () => {
     expect(result.fixReport.missing).toHaveLength(1);
   });
 
-  it('S2 legacy：从 timeline.json 迁移并修复', async () => {
-    await fs.writeFile(path.join(tmpDir, 'clip.mp4'), Buffer.from([0]));
-    const legacyTimeline = makeTimeline({
-      overlays: [
-        {
-          id: 'o1',
-          type: 'video',
-          assetPath: '/old/clip.mp4',
-          trackId: 'visual-1',
-          startMs: 0,
-          durationMs: 1000,
-          position: { x: 0, y: 0, width: 100, height: 100 },
-        },
-      ],
-    });
-    await fs.writeFile(path.join(tmpDir, 'timeline.json'), JSON.stringify(legacyTimeline));
-
-    const result = await importProject({ projectDir: tmpDir, acceptMissingAssets: false });
-    expect(result.scenario).toBe('legacy');
-    expect(result.migratedFromLegacy).toBe(true);
-    expect(result.fixReport.fixed).toHaveLength(1);
-
-    // project.json 已生成，旧 timeline.json 已删除
-    const projectJsonExists = await fs
-      .access(path.join(tmpDir, 'project.json'))
-      .then(() => true)
-      .catch(() => false);
-    expect(projectJsonExists).toBe(true);
-    const oldTimelineExists = await fs
-      .access(path.join(tmpDir, 'timeline.json'))
-      .then(() => true)
-      .catch(() => false);
-    expect(oldTimelineExists).toBe(false);
+  it('只有 timeline.json：按无法识别拒绝导入', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'timeline.json'),
+      JSON.stringify(makeTimeline()),
+    );
+    await expect(
+      importProject({ projectDir: tmpDir, acceptMissingAssets: false }),
+    ).rejects.toMatchObject({ code: 'unrecognized' });
   });
 
   it('S3 mediaOnly：创建骨架 project.json', async () => {
@@ -470,7 +444,6 @@ describe('importProject', () => {
     await fs.writeFile(path.join(tmpDir, 'script.md'), '# x');
     const result = await importProject({ projectDir: tmpDir, acceptMissingAssets: false });
     expect(result.scenario).toBe('mediaOnly');
-    expect(result.migratedFromLegacy).toBe(false);
     expect(result.fixReport.fixed).toHaveLength(0);
     const exists = await fs
       .access(path.join(tmpDir, 'project.json'))

@@ -77,15 +77,18 @@ describe('PROMPT_KINDS and metadata', () => {
   });
 });
 
-describe('cards.animation default template', () => {
-  it('has a builtin template mentioning 逐拍 and segmentCues', () => {
+describe('cards.animation default template（v5 JSON 分镜）', () => {
+  it('has a builtin template mentioning 分镜 and segmentCues', () => {
     const tpl = getBuiltinPromptTemplate('cards.animation');
     expect(tpl.user).toContain('{{segmentCues}}');
-    expect(tpl.user).toContain('逐拍');
+    expect(tpl.user).toContain('分镜');
+    expect(tpl.user).toContain('data-hero');
   });
-  it('cards.segment template exposes an animationDirection injection point', () => {
+  it('cards.segment template exposes storyboard / kit / tokens injection points', () => {
     const seg = getBuiltinPromptTemplate('cards.segment');
     expect(seg.user).toContain('{{animationDirection}}');
+    expect(seg.user).toContain('{{motionKitApi}}');
+    expect(seg.user).toContain('{{presetMotionTokens}}');
   });
 });
 
@@ -115,25 +118,58 @@ describe('renderUserPromptWithLock', () => {
       'cards.segment',
       getBuiltinPromptTemplate('cards.segment'),
       {
-        globalPrompt: '无',
-        programSummary: '无',
-        keywords: '无',
         segmentId: 's1',
         segmentTitle: '标题',
         segmentSummary: '摘要',
-        segmentStartMs: 0,
-        segmentEndMs: 1000,
-        segmentTranscriptExcerpt: '原文',
+        segmentCues: '  [0] +0.0s 第一句',
         cardPrompt: '无',
+        animationDirection: '{"claim":"x"}',
+        motionKitApi: 'kit api 摘要',
+        presetMotionTokens: '{ "palette": {} }',
+        presetStyleNotes: '',
         currentCardSection: '当前卡片线索：无',
         programContext: '节目级浓缩上下文',
-        sandboxReference: '沙箱 API 示例',
       },
     );
-    // 卡片生成链路已收敛到 Motion Card（TSX-only 输出）：契约段必须要求 tsx 代码块 + export default
-    expect(cards).toContain('tsx');
-    expect(cards).toContain('export default');
+    // 卡片生成链路：file-first 写 motionCard.tsx + 仅允许三个模块 + 帧纯函数
+    expect(cards).toContain('motionCard.tsx');
+    expect(cards).toContain('export default function Card');
     expect(cards).toContain('useCurrentFrame');
+    expect(cards).toContain('@lingji/motion-kit');
     expect(cards).not.toContain('webCard');
+  });
+});
+
+describe('cards.segment v19 / cards.animation v5 契约', () => {
+  it('cards.segment 是 kit 组合契约：技术契约 + 状态演进 + 分镜注入', () => {
+    const cards = DEFAULT_PROMPT_YAML['cards.segment'];
+    expect(cards).toContain('CardStage');
+    expect(cards).toContain('useBeats');
+    expect(cards).toContain('状态演进');
+    expect(cards).toContain('storyboard');
+    // 机器可查的规则已迁出提示词（lint / kit / 布局探针承担）
+    expect(cards).not.toContain('动效词汇表');
+    expect(cards).not.toContain('编排三律');
+  });
+
+  it('cards.animation v5 是 JSON 分镜契约：7 种载体 + adds/changes + focus', () => {
+    const anim = DEFAULT_PROMPT_YAML['cards.animation'];
+    expect(anim).toContain('claim');
+    expect(anim).toContain('data-hero');
+    expect(anim).toContain('adds');
+    expect(anim).toContain('changes');
+    expect(anim).toContain('状态演进');
+    expect(anim).toContain('{{segmentCues}}');
+  });
+
+  it('cards.animation 锁定契约要求严格 JSON 输出', () => {
+    const rendered = renderUserPromptWithLock(
+      'cards.animation',
+      getBuiltinPromptTemplate('cards.animation'),
+      { segmentCues: '  [0] +0.0s 第一句' },
+    );
+    expect(rendered).toContain('【系统契约 · 不可修改】');
+    expect(rendered).toContain('"beats"');
+    expect(rendered).toContain('单调不减');
   });
 });

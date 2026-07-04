@@ -16,6 +16,7 @@ describe('buildExportRenderConfig', () => {
       x264Preset: 'ultrafast',
       videoBitrate: '1800k',
       audioBitrate: '96k',
+      jpegQuality: 70,
     });
   });
 
@@ -33,6 +34,7 @@ describe('buildExportRenderConfig', () => {
       x264Preset: 'medium',
       videoBitrate: '8000k',
       audioBitrate: '192k',
+      jpegQuality: 90,
     });
   });
 });

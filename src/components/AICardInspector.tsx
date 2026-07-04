@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAICardOverlayPosition } from '../lib/ai-card-layout';
+import { getProjectDir } from '../store/timeline';
 import { listStylePresets } from '../lib/card-style-presets';
 import { toFileSrc } from '../lib/utils';
 import { getVideoProvider } from '../lib/video-gen/registry';
@@ -69,6 +70,7 @@ export function AICardInspector({
   const [cardPrompt, setCardPrompt] = useState('');
   const [animationDirection, setAnimationDirection] = useState('');
   const [isGeneratingDirection, setIsGeneratingDirection] = useState(false);
+  const [isSculpting, setIsSculpting] = useState(false);
   const [type, setType] = useState<AICardType>('summary');
   const [stylePresetId, setStylePresetId] = useState<string | undefined>(undefined);
   const [displayMode, setDisplayMode] = useState<'fullscreen' | 'pip'>('fullscreen');
@@ -140,7 +142,6 @@ export function AICardInspector({
 
   const motion = card.motionCard;
   const hasCompiledMotion = Boolean(motion?.tsx?.trim());
-  const needsRegeneration = Boolean(motion?.needsRegeneration);
   const previewCardPosition = getAICardOverlayPosition(displayMode, previewWidth, previewHeight);
   const previewFrameStyle =
     displayMode === 'fullscreen'
@@ -153,6 +154,19 @@ export function AICardInspector({
 
   const handleRegenerateClick = async () => {
     await onRegenerate(draftUpdates);
+  };
+
+  const handleSculptClick = async () => {
+    const projectPath = getProjectDir();
+    if (!card || !projectPath) return;
+    setIsSculpting(true);
+    try {
+      // fire-and-forget：任务进度经 pipeline 桥出现在底部任务条，完成后
+      // pipeline:project-updated 自动刷新卡片；这里只等任务受理。
+      await window.electronAPI.sculptCard({ projectPath, cardId: card.id });
+    } finally {
+      setIsSculpting(false);
+    }
   };
 
   const handleGenerateDirection = async () => {
@@ -230,14 +244,14 @@ export function AICardInspector({
         </label>
 
         <label className={styles.fieldStack}>
-          <span className={styles.fieldLabel}>动画指导</span>
+          <span className={styles.fieldLabel}>分镜（storyboard）</span>
           <Textarea
             size="sm"
             value={animationDirection}
             rows={6}
             resize="none"
             className={styles.promptArea}
-            placeholder="AI 会自动生成；也可点下方按钮单独生成后再出卡…"
+            placeholder="AI 会自动设计 JSON 分镜；也可点下方按钮单独生成后再出卡…"
             onChange={(event) => setAnimationDirection(event.target.value)}
           />
           <Button
@@ -249,7 +263,7 @@ export function AICardInspector({
               void handleGenerateDirection();
             }}
           >
-            {isGeneratingDirection ? '生成中...' : '✨ 生成动画指导'}
+            {isGeneratingDirection ? '生成中...' : '✨ 生成分镜'}
           </Button>
         </label>
       </div>
@@ -302,11 +316,7 @@ export function AICardInspector({
               <div className={styles.previewPlaceholder}>
                 <AppIcon name="eye" size={20} className={styles.previewIcon} />
                 <span className={styles.previewHint}>
-                  {needsRegeneration
-                    ? '旧版卡片，需重新生成为 Remotion 卡片'
-                    : hasCompiledMotion
-                      ? 'Motion 卡片已就绪'
-                      : '尚未生成 Remotion 动画'}
+                  {hasCompiledMotion ? 'Motion 卡片已就绪' : '尚未生成 Remotion 动画'}
                 </span>
                 <span className={styles.previewBadge}>
                   {displayMode === 'fullscreen' ? '全屏模式' : '画中画模式'}
@@ -341,6 +351,22 @@ export function AICardInspector({
           >
             {isRegenerating ? '重生成中...' : '重新生成'}
           </Button>
+
+          {hasCompiledMotion ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className={styles.actionBtn}
+              leftIcon={<AppIcon name="sparkles" size={12} />}
+              title="多 agent 精雕现有动画（导演诊断→雕刻→审查，分钟级），进度见底部任务条"
+              onClick={() => {
+                void handleSculptClick();
+              }}
+              disabled={isSculpting || isRegenerating}
+            >
+              {isSculpting ? '提交中...' : '精雕动画'}
+            </Button>
+          ) : null}
 
           <Button
             variant="primary"

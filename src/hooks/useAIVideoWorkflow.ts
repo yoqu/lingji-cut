@@ -946,6 +946,7 @@ export function useAIVideoWorkflow() {
             projectDir,
             projectBindings: useAIStore.getState().projectBindings,
             telemetryRunId: workflowSession.telemetryRunId,
+            feedId: workflowSession.taskId || undefined,
           })) as AIAnalysisResult;
         } catch (error) {
           // analyze 失败：cover-prompts-ready 可能根本没发出，主动解除 cover 的等待
