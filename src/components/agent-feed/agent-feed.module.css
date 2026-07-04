@@ -1,0 +1,225 @@
+/* agent-feed 观测视图（Inspector 停靠与状态栏浮层共用） */
+
+.view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* ── 卡片轨(多卡并行时的左侧头像列) ── */
+.cardRail {
+  width: 44px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-separator);
+  overflow-y: auto;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.cardAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.cardAvatar[data-status='active'] {
+  border-color: var(--color-system-blue, #0a84ff);
+  animation: feedPulse 1.4s ease-in-out infinite;
+}
+
+.cardAvatar[data-status='done'] {
+  border-color: var(--color-success, #32d74b);
+}
+
+.cardAvatar[data-status='error'] {
+  border-color: var(--color-danger, #ff453a);
+}
+
+.cardAvatarSelected {
+  background: color-mix(in srgb, var(--color-system-blue) 22%, transparent);
+  color: var(--color-text-primary);
+}
+
+@keyframes feedPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── 会话主视图 ── */
+.sessionView {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sessionHead {
+  padding: 8px 12px 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── 阶段管线 ── */
+.pipeline {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-separator);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.pipelineNode {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pipelineNode:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+}
+
+.pipelineNode[data-status='active'] {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.pipelineNode[data-status='done'] {
+  color: var(--color-text-secondary);
+}
+
+.pipelineNode[data-status='error'] {
+  color: var(--color-danger, #ff453a);
+}
+
+.pipelineDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-text-tertiary) 45%, transparent);
+  flex-shrink: 0;
+}
+
+.pipelineDot[data-status='active'] {
+  background: var(--color-system-blue, #0a84ff);
+  animation: feedPulse 1.4s ease-in-out infinite;
+}
+
+.pipelineDot[data-status='done'] {
+  background: var(--color-success, #32d74b);
+}
+
+.pipelineDot[data-status='error'] {
+  background: var(--color-danger, #ff453a);
+}
+
+.pipelineRound {
+  font-size: 10px;
+  color: var(--color-system-blue, #0a84ff);
+}
+
+.pipelineLink {
+  width: 12px;
+  height: 1px;
+  background: var(--color-separator);
+  flex-shrink: 0;
+}
+
+/* ── 对话流 ── */
+.messages {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.turnCaption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+}
+
+.roleAvatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--color-system-blue) 16%, transparent);
+  color: var(--color-system-blue, #0a84ff);
+}
+
+.roleAvatar[data-role='orchestrator'] {
+  background: color-mix(in srgb, var(--color-text-tertiary) 16%, transparent);
+  color: var(--color-text-tertiary);
+}
+
+.roleAvatar[data-role='sculptor'] {
+  background: color-mix(in srgb, #bf5af2 18%, transparent);
+  color: #bf5af2;
+}
+
+.roleAvatar[data-role='reviewer'] {
+  background: color-mix(in srgb, var(--color-success, #32d74b) 18%, transparent);
+  color: var(--color-success, #32d74b);
+}
+
+.modelBadge {
+  font-weight: 500;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  color: var(--color-text-tertiary);
+  line-height: 16px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
