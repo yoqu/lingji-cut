@@ -34,6 +34,7 @@ import {
   getFileNameFromPath,
 } from '../lib/utils';
 import { loadAISettings, useAIStore } from '../store/ai';
+import { useAgentFeedStore } from '../store/agent-feed';
 import { useAiEditStore } from '../store/ai-edit';
 import { useTimelineStore } from '../store/timeline';
 import { usePublishStore } from '../store/publish';
@@ -524,6 +525,40 @@ export function Editor({
       setCoverCandidates,
     ],
   );
+
+  // ── 生成观测视图停靠：编辑器在场时 openPanel 路由到右侧 Inspector 而非状态栏浮层 ──
+  useEffect(() => {
+    useAgentFeedStore.getState().setDockMounted(true);
+    return () => useAgentFeedStore.getState().setDockMounted(false);
+  }, []);
+
+  // 状态栏图标 / 任务行「查看过程」点击 → 切 Inspector 到观测视图
+  const feedFocusToken = useAgentFeedStore((s) => s.focusToken);
+  const handledFocusRef = useRef(feedFocusToken);
+  useEffect(() => {
+    if (feedFocusToken !== handledFocusRef.current) {
+      handledFocusRef.current = feedFocusToken;
+      setInspectorSelection({ type: 'agent-feed' });
+    }
+  }, [feedFocusToken]);
+
+  // 生成开始自动切入（false→true 边沿，一轮生成只抢占一次）
+  const feedHasActive = useAgentFeedStore((s) => s.hasActive);
+  const prevFeedActiveRef = useRef(false);
+  useEffect(() => {
+    if (feedHasActive && !prevFeedActiveRef.current) {
+      setInspectorSelection({ type: 'agent-feed' });
+    }
+    prevFeedActiveRef.current = feedHasActive;
+  }, [feedHasActive]);
+
+  // 清空记录 / 切项目后观测视图不悬空
+  const feedSessionCount = useAgentFeedStore((s) => s.sessions.size);
+  useEffect(() => {
+    if (feedSessionCount === 0 && inspectorSelection.type === 'agent-feed') {
+      setInspectorSelection({ type: 'empty' });
+    }
+  }, [feedSessionCount, inspectorSelection.type]);
 
   const handleOpenAICardInspector = useCallback((cardId: string) => {
     // Motion Card 编排模块已下线；所有卡片统一按 ai-card 类型打开 inspector

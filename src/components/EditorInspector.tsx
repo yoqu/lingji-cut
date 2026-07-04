@@ -1,4 +1,5 @@
 import { Button, EmptyState } from '../ui';
+import { AgentFeedView } from './agent-feed/AgentFeedView';
 import { AICardInspector } from './AICardInspector';
 import { AppIcon } from './AppIcon';
 import { OverlayInspector } from './OverlayInspector';
@@ -12,7 +13,8 @@ export type InspectorSelection =
   | { type: 'empty' }
   | { type: 'ai-card'; cardId: string }
   | { type: 'overlay'; overlayId: string }
-  | { type: 'subtitle-style' };
+  | { type: 'subtitle-style' }
+  | { type: 'agent-feed' };
 
 interface EditorInspectorProps {
   assetCount?: number;
@@ -56,7 +58,9 @@ export function EditorInspector({
       ? timeline.overlays.find((item) => item.id === selection.overlayId) ?? null
       : null;
   const headerTitle =
-    selection.type === 'subtitle-style'
+    selection.type === 'agent-feed'
+      ? '生成观测'
+      : selection.type === 'subtitle-style'
       ? '字幕样式'
       : selection.type === 'ai-card'
       ? 'AI 卡片'
@@ -71,6 +75,15 @@ export function EditorInspector({
   const indexLabel = selection.type === 'ai-card' ? cardSequenceLabel : null;
 
   const renderBody = () => {
+    if (selection.type === 'agent-feed') {
+      // AgentFeedView 根节点是 flex（内部自滚动），block 滚动容器 .body 内需撑满高度
+      return (
+        <div style={{ display: 'flex', height: '100%', minHeight: 0 }}>
+          <AgentFeedView />
+        </div>
+      );
+    }
+
     if (selection.type === 'subtitle-style') {
       return <SubtitleInspector />;
     }
