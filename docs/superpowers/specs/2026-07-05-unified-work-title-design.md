@@ -21,12 +21,11 @@
 ```ts
 export interface ProjectMetaSection {
   title: string
-  titleGeneratedAt?: string  // ISO 时间，AI 生成时打点；手动编辑清空
 }
 ```
 
-- `ProjectData` 增加 `meta?: ProjectMetaSection`；新增 `DEFAULT_PROJECT_META`、`extractMetaSection`、`mergeProjectSection` 支持 `'meta'` 段。
-- `electron/project-file.ts` 的段落白名单加入 `meta`，走既有 `save-project-section` 原子写。
+- `ProjectData` 增加 `meta?: ProjectMetaSection`；新增 `DEFAULT_PROJECT_META`、`extractMetaSection`、`resolveWorkTitle(data)`（meta.title → publish.title 回退）。
+- `saveProjectSection` 对 `ProjectSection` 泛型透传，`'meta'` 加入联合类型后主进程无需额外白名单改动。
 - 迁移：读取时若 `meta.title` 为空且 `publish.title` 非空，采用 `publish.title`（惰性迁移，不做批量重写）。
 
 镜像规则：发布 tab 持久化 publish 段时，`publish.title` 始终镜像 `meta.title`，保证现有各平台上传链路（读 `publish.title`）零改动。
@@ -37,23 +36,28 @@ export interface ProjectMetaSection {
 - `generatePublishMetadata`（`src/lib/publish-metadata.ts`）保持不变，仍产出 `{ title, desc, tags }`。
 - 发布 tab 标题输入框改为读写 `meta.title`（加载优先级：`meta.title` → `publish.title`），「生成」按钮行为不变（显式覆盖，当前标题作风格参考传入）。
 
-## 3. 流水线标题生成步骤
+## 3. 工作流标题生成
 
-- 新增 `electron/pipeline/runs/publish-metadata-run.ts`：
-  1. 加载 `analysisResult` + SRT（同 cover-run 的加载方式）。
-  2. `buildMetadataSource` 组料 → `generatePublishMetadata`。
-  3. 经 `HeadlessProjectContext.saveSection` 写 `meta` 段（title）与 `publish` 段（title 镜像 + desc + tagsInput）。
-- `headless-generation.ts` 注册新 kind `publish_metadata`；MCP 面新增 `lingji_generate_publish_metadata` 工具镜像该 run，供工作流（pi / lingji CLI）调用。
-- 编排位置：analyze → **publish_metadata** → covers → export（由流水线编排方接入，boke-pipeline skill 文档同步更新）。
-- 覆盖策略：`meta.title` 非空时跳过并返回 skipped（只填空不覆盖）；提供 `force` 参数供显式重新生成。
-- 接入统一任务进度系统（startTask/completeTask）。
+关键时序事实（精读代码后确认）：应用内一键工作流的封面提示词由 `analyzeSrt` 内部在 planning 完成后**并行**调用 `cover.regeneration` 产出（`ai-analysis.ts:1588`，Track C 直接消费）。要让封面拿到标题，标题必须在这次调用前就绪——独立的"analyze 之后"流水线步骤对应用内工作流来不及。
+
+因此拆成两层：
+
+**a) analyzeSrt 钩子（应用内工作流 + headless analyze 共用）**
+- `AnalyzeSrtOptions` 新增 `generateWorkTitle?: (planning) => Promise<string | null>`；planning 完成后立即触发（与卡片并行），`cover.regeneration` 调用 await 其结果注入 `{{title}}`；失败返回 null 不阻断封面。
+- 两个调用方（`analyze-srt` IPC handler、`electron/pipeline/runs/analyze-run.ts`）各自构造该回调：fill-if-empty（已有标题直接返回）→ `buildMetadataSource(planning)` → `generatePublishMetadata` → 落盘 `meta` + `publish`（title 镜像，desc/tags 只填空）→ `emitProjectUpdated(['meta','publish'])`。
+
+**b) 独立 `publish_metadata` run（手动/工作流单独触发）**
+- 新增 `electron/pipeline/runs/publish-metadata-run.ts`：加载 analysisResult + SRT → `buildMetadataSource` → `generatePublishMetadata` → 落盘同上。
+- 覆盖策略：`resolveWorkTitle` 非空时跳过返回 skipped；`force` 参数强制重生成。
+- `PIPELINE_TASK_KINDS` 加 `publish_metadata`，进度桥 KIND_MAP 补 label；MCP 面注册 `lingji_generate_publish_metadata`；lingji CLI 加 `publish meta` 子命令。
 
 ## 4. 封面标题变量
 
 - `COVER_REGENERATION` 模板（`src/lib/prompts/defaults.ts`）新增 `{{title}}` 变量，文案指导：标题作为封面主文案/语义锚点；无标题时按现有内容逻辑生成。**bump 模板 version** 以过覆盖版本门槛。
 - `src/lib/prompts/types.ts` 的 `cover.regeneration` 变量表注册 `title`。
-- `src/lib/ai-analysis.ts` `buildCoverRegenerationPrompt` 增加 `workTitle` 入参，空值渲染为 `无`（与 `globalPrompt` 同规）。
-- 调用方传值：renderer 侧 `regenerateCoverPrompt` 调用链从 `meta.title` 取值；headless 侧 `cover-run.ts` 从项目 `meta` 段读取。
+- `src/lib/ai-analysis.ts` `buildCoverPromptRegenerationPrompt` 增加 `workTitle` 入参，空值渲染为 `无`（与 `globalPrompt` 同规）；`RegenerateCoverPromptOptions` 透传。
+- 调用方传值（均不改 IPC 签名）：`regenerate-cover-prompt` 主进程 handler 用 `loadProjectWorkTitle(args.projectDir)`（仿 `loadProjectStylePresetId`）自取；headless `cover-run.ts` 用已加载的 `project` 取 `resolveWorkTitle`；`analyzeSrt` 内部调用用 `generateWorkTitle` 钩子结果。
+- 发布 tab 打开期间标题被后台生成：`PublishWorkbench` 监听 `onProjectUpdated`（meta/publish 段）做 fill-if-empty 回灌，避免防抖写回用空标题覆盖新生成值。
 
 ## 5. 错误处理
 
