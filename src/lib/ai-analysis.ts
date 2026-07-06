@@ -150,6 +150,9 @@ interface AnalyzeSrtOptions {
   /** 独立的 cover.regeneration LLM 调用完成时回调，prompts 已遵循 COVER_REGENERATION 视觉系统。
    * 失败时不调用；调用方应使用 onPlanningDone 的 coverPrompts 作为兜底或放弃封面生成。 */
   onCoverPromptsReady?: (prompts: string[]) => void;
+  /** planning 完成后生成/取回作品标题；返回值注入 cover.regeneration 的 {{title}}。
+   * 生成与落盘（fill-if-empty）由调用方负责；抛错或返回 null 时封面无标题继续。 */
+  generateWorkTitle?: (planning: SegmentPlanningResult) => Promise<string | null>;
   /** 单卡生成成功时回调（卡片流式回吐）。每张成功生成的卡片落入 cardSlots[index] 后恰好调用一次。
    * 失败卡片不调用（失败已通过 onProgress 的 card.status==='failed' 暴露）。
    * index 为 planning 顺序中的 segment 下标。 */
@@ -1529,6 +1532,7 @@ export async function analyzeSrt(
     telemetry,
     onPlanningDone,
     onCoverPromptsReady,
+    generateWorkTitle,
     onCardGenerated,
   } = options;
 
@@ -1578,6 +1582,11 @@ export async function analyzeSrt(
     // 回调出错不影响卡片生成
   }
 
+  // 作品标题：planning 一完成就并行生成，赶在下方 cover.regeneration 调用前就绪。
+  const workTitlePromise: Promise<string | null> = generateWorkTitle
+    ? generateWorkTitle(planning).catch(() => null)
+    : Promise.resolve(null);
+
   // 独立的 cover.regeneration LLM 调用，与卡片生成并行进行。
   // 完成后通过 onCoverPromptsReady 回吐给上层（Track C 等这条事件再触发封面图生成）。
   // 失败时静默退回 planning.coverPrompts（已经通过 onPlanningDone 给了上层）。
@@ -1589,6 +1598,7 @@ export async function analyzeSrt(
     const coverStart = Date.now();
     telemetry?.emit('stage.start', { stage: 'analyze.cover-prompt' });
     try {
+      const workTitle = await workTitlePromise;
       const prompts = await regenerateCoverPrompt(entries, settings, {
         generateStructuredData: requestStructuredData,
         globalPrompt: planning.globalPrompt ?? globalPrompt,
@@ -1596,6 +1606,7 @@ export async function analyzeSrt(
         defaultStylePresetId,
         coverTemplate,
         projectBindings,
+        workTitle: workTitle ?? undefined,
       });
       telemetry?.emit('stage.end', {
         stage: 'analyze.cover-prompt',

@@ -17,6 +17,7 @@ import type { MotionCardAgentProvider } from '../src/lib/ai-analysis';
 import type { SrtEntry } from '../src/types';
 import type { AICard, AISegment, AISegmentAnalysis, AISettings } from '../src/types/ai';
 import { generateStructuredData } from '../src/lib/llm';
+import { getBuiltinPromptTemplate } from '../src/lib/prompts';
 
 const makeSrtEntry = (index: number, startMs: number, endMs: number, text: string): SrtEntry => ({
   index,
@@ -598,6 +599,66 @@ describe('analyzeSrt', () => {
     ]);
     expect(planningCaller).toHaveBeenCalledTimes(1);
     expect(motionCaller).toHaveBeenCalledTimes(5);
+  });
+
+  it('generateWorkTitle 结果注入内部 cover.regeneration 调用的 {{title}}', async () => {
+    const structuredCaller = vi
+      .fn<typeof generateStructuredData>()
+      .mockResolvedValueOnce({
+        segments: [baseSegment],
+        coverPrompts: ['规划兜底封面'],
+        summary: '节目总结',
+        keywords: ['AI'],
+        globalPrompt: '',
+      })
+      .mockResolvedValueOnce({ coverPrompt: '带标题的封面提示词' });
+    const motionCaller = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
+    const generateWorkTitle = vi.fn().mockResolvedValue('爆款标题X');
+    const onCoverPromptsReady = vi.fn();
+
+    await analyzeSrt(baseEntries, settings, {
+      generateStructuredData: structuredCaller,
+      generateMotionCard: motionCaller,
+      coverTemplate: getBuiltinPromptTemplate('cover.regeneration'),
+      onCoverPromptsReady,
+      generateWorkTitle,
+    });
+
+    expect(generateWorkTitle).toHaveBeenCalledTimes(1);
+    expect(generateWorkTitle.mock.calls[0][0].summary).toBe('节目总结');
+    // 第二次 structured 调用即 cover.regeneration，其 prompt 参数应含标题
+    expect(structuredCaller).toHaveBeenCalledTimes(2);
+    expect(structuredCaller.mock.calls[1]?.[1]).toContain('爆款标题X');
+    expect(onCoverPromptsReady).toHaveBeenCalledWith(['带标题的封面提示词']);
+  });
+
+  it('generateWorkTitle 抛错时封面调用照常进行（{{title}} 为"无"）', async () => {
+    const structuredCaller = vi
+      .fn<typeof generateStructuredData>()
+      .mockResolvedValueOnce({
+        segments: [baseSegment],
+        coverPrompts: ['规划兜底封面'],
+        summary: '节目总结',
+        keywords: ['AI'],
+        globalPrompt: '',
+      })
+      .mockResolvedValueOnce({ coverPrompt: '无标题封面提示词' });
+    const motionCaller = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
+
+    await analyzeSrt(baseEntries, settings, {
+      generateStructuredData: structuredCaller,
+      generateMotionCard: motionCaller,
+      coverTemplate: getBuiltinPromptTemplate('cover.regeneration'),
+      onCoverPromptsReady: vi.fn(),
+      generateWorkTitle: vi.fn().mockRejectedValue(new Error('LLM 超时')),
+    });
+
+    expect(structuredCaller).toHaveBeenCalledTimes(2);
+    expect(structuredCaller.mock.calls[1]?.[1]).not.toContain('爆款标题X');
   });
 });
 
