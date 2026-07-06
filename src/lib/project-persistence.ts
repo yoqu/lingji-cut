@@ -106,6 +106,11 @@ export interface ProjectPublishMeta {
   overrides?: Record<string, ProjectPublishOverride>;
 }
 
+/** 作品级元信息。title 是作品标题唯一真源；发布/封面/流水线均引用它。 */
+export interface ProjectMetaSection {
+  title: string;
+}
+
 export interface ProjectData {
   version: 1;
   createdAt: string;
@@ -116,6 +121,8 @@ export interface ProjectData {
   workflowMeta?: ProjectWorkflowMeta;
   /** 发布选项卡文案元数据；缺省视为空。 */
   publish?: ProjectPublishMeta;
+  /** 作品级元信息（标题真源）；缺省视为空。 */
+  meta?: ProjectMetaSection;
   /** 项目级默认风格预设 id；缺省继承全局 */
   stylePresetId?: string;
 }
@@ -126,6 +133,7 @@ export type ProjectSection =
   | 'script'
   | 'workflowMeta'
   | 'publish'
+  | 'meta'
   | 'stylePresetId';
 
 export const DEFAULT_WORKFLOW_META: ProjectWorkflowMeta = {
@@ -140,6 +148,10 @@ export const DEFAULT_PUBLISH_META: ProjectPublishMeta = {
   tagsInput: '',
   thumbnail: '',
   bilibiliTid: '',
+};
+
+export const DEFAULT_PROJECT_META: ProjectMetaSection = {
+  title: '',
 };
 
 /** 单调递增时间戳，保证在同一毫秒内多次调用也不重复 */
@@ -194,6 +206,15 @@ export function extractWorkflowMetaSection(data: ProjectData): ProjectWorkflowMe
 
 export function extractPublishSection(data: ProjectData): ProjectPublishMeta {
   return { ...DEFAULT_PUBLISH_META, ...(data.publish ?? {}) };
+}
+
+export function extractMetaSection(data: ProjectData): ProjectMetaSection {
+  return { ...DEFAULT_PROJECT_META, ...(data.meta ?? {}) };
+}
+
+/** 作品标题：meta.title 为真源，旧工程回退 publish.title（惰性迁移）。 */
+export function resolveWorkTitle(data: ProjectData): string {
+  return data.meta?.title?.trim() || data.publish?.title?.trim() || '';
 }
 
 export function mergeProjectSection<S extends ProjectSection>(

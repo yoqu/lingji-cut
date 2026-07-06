@@ -8,6 +8,8 @@ import {
   extractAIAnalysisSection,
   extractScriptSection,
   extractPublishSection,
+  extractMetaSection,
+  resolveWorkTitle,
   mergeProjectSection,
 } from '../src/lib/project-persistence';
 
@@ -125,5 +127,29 @@ describe('project-persistence', () => {
     // 默认结构不写入 stylePresetId，模拟旧工程读取
     const roundTripped = JSON.parse(JSON.stringify(data)) as ProjectData;
     expect(roundTripped.stylePresetId).toBeUndefined();
+  });
+
+  it('extractMetaSection 对旧工程缺 meta 段补默认值', () => {
+    const data = createDefaultProjectData();
+    expect(extractMetaSection(data)).toEqual({ title: '' });
+  });
+
+  it('mergeProjectSection 合并 meta 段并经序列化保留', () => {
+    const data = createDefaultProjectData();
+    const merged = mergeProjectSection(data, 'meta', { title: '爆款标题' });
+    const roundTrip = JSON.parse(JSON.stringify(merged));
+    expect(extractMetaSection(roundTrip)).toEqual({ title: '爆款标题' });
+  });
+
+  it('resolveWorkTitle 优先 meta.title，回退 publish.title，两者皆空返回空串', () => {
+    const data = createDefaultProjectData();
+    expect(resolveWorkTitle(data)).toBe('');
+    const withPublish = mergeProjectSection(data, 'publish', {
+      ...DEFAULT_PUBLISH_META,
+      title: '发布段旧标题',
+    });
+    expect(resolveWorkTitle(withPublish)).toBe('发布段旧标题');
+    const withMeta = mergeProjectSection(withPublish, 'meta', { title: '  真源标题  ' });
+    expect(resolveWorkTitle(withMeta)).toBe('真源标题');
   });
 });
