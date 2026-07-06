@@ -13,6 +13,7 @@ import { loadAISettings, useAIStore } from '../../store/ai';
 import { useTimelineStore } from '../../store/timeline';
 import type { PublishAccount, PublishShared, PublishTarget } from '../../lib/electron-api';
 import {
+  extractMetaSection,
   extractPublishSection,
   PUBLISH_HISTORY_MAX,
   type ProjectData,
@@ -495,16 +496,20 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
     let cancelled = false;
     void (async () => {
       let saved: ProjectPublishMeta | null = null;
+      let savedMetaTitle = '';
       try {
         const raw = await window.electronAPI.loadProject(projectDir);
-        saved = extractPublishSection(JSON.parse(raw) as ProjectData);
+        const data = JSON.parse(raw) as ProjectData;
+        saved = extractPublishSection(data);
+        savedMetaTitle = extractMetaSection(data).title;
       } catch {
         saved = null;
       }
       if (cancelled) return;
       if (saved) {
-        // 已存文案优先于派生预填（派生预填仍用 prev|| 兜底空值）
-        if (saved.title) setTitle((prev) => prev || saved!.title);
+        // 已存文案优先于派生预填（派生预填仍用 prev|| 兜底空值）；标题以 meta 真源优先
+        const savedTitle = savedMetaTitle || saved.title;
+        if (savedTitle) setTitle((prev) => prev || savedTitle);
         if (saved.desc) setDesc((prev) => prev || saved!.desc);
         if (saved.tagsInput) setTagsInput((prev) => prev || saved!.tagsInput);
         if (saved.thumbnail) setThumbnail((prev) => prev || saved!.thumbnail);
@@ -545,9 +550,35 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
       window.electronAPI
         .saveProjectSection(projectDir, 'publish', JSON.stringify(meta))
         .catch(() => {});
+      // 镜像写回 meta 真源（publish.title 保持同步，平台上传链路无需改动）
+      window.electronAPI
+        .saveProjectSection(projectDir, 'meta', JSON.stringify({ title }))
+        .catch(() => {});
     }, 600);
     return () => clearTimeout(timer);
   }, [projectDir, title, desc, tagsInput, thumbnail, covers, bilibiliTid, historyEntries]);
+
+  // ── 后台（工作流/流水线）生成标题后回灌本地态，避免防抖写回用空标题覆盖新值。 ──
+  useEffect(() => {
+    if (!projectDir || !window.electronAPI?.onProjectUpdated) return;
+    return window.electronAPI.onProjectUpdated((payload) => {
+      if (payload.projectPath !== projectDir) return;
+      if (!payload.sections.includes('meta') && !payload.sections.includes('publish')) return;
+      void (async () => {
+        try {
+          const raw = await window.electronAPI.loadProject(projectDir);
+          const data = JSON.parse(raw) as ProjectData;
+          const metaTitle = extractMetaSection(data).title;
+          const saved = extractPublishSection(data);
+          if (metaTitle) setTitle((prev) => prev || metaTitle);
+          if (saved.desc) setDesc((prev) => prev || saved.desc);
+          if (saved.tagsInput) setTagsInput((prev) => prev || saved.tagsInput);
+        } catch {
+          // 刷新失败忽略，下次打开自然回填
+        }
+      })();
+    });
+  }, [projectDir]);
 
   const handleGenerateMeta = async () => {
     setMetaError(null);
