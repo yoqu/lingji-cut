@@ -51,6 +51,7 @@ import {
 import { makeMainTelemetry } from './telemetry/main-telemetry';
 import { startMcpServer, stopMcpServer, getSonarInboxStore, getSonarBridgeInfo } from './mcp/server';
 import { loadProjectFile, saveProjectSection } from './project-file';
+import type { ProjectSection } from '../src/lib/project-persistence';
 import { materializePreviewMotionCardDataUris } from './remotion/motion-card-assets';
 import {
   scanProjectDirectory,
@@ -578,7 +579,7 @@ ipcMain.handle(
     const parsed = JSON.parse(data);
     await saveProjectSection(
       projectDir,
-      section as 'timeline' | 'aiAnalysis' | 'script' | 'workflowMeta' | 'publish' | 'stylePresetId',
+      section as ProjectSection,
       parsed,
     );
   },

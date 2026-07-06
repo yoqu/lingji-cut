@@ -152,4 +152,13 @@ describe('project-persistence', () => {
     const withMeta = mergeProjectSection(withPublish, 'meta', { title: '  真源标题  ' });
     expect(resolveWorkTitle(withMeta)).toBe('真源标题');
   });
+
+  it('resolveWorkTitle 对纯空白 meta.title 回退 publish.title', () => {
+    const withPublish = mergeProjectSection(createDefaultProjectData(), 'publish', {
+      ...DEFAULT_PUBLISH_META,
+      title: '发布段旧标题',
+    });
+    const blankMeta = mergeProjectSection(withPublish, 'meta', { title: '   ' });
+    expect(resolveWorkTitle(blankMeta)).toBe('发布段旧标题');
+  });
 });
