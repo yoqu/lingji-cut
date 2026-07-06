@@ -26,8 +26,10 @@ export type PipelineTaskKind =
   | 'generate_cards'
   | 'generate_motion'
   | 'sculpt_card'
+  | 'publish_metadata'
   | 'export_video'
-  | 'import_video_source';
+  | 'import_video_source'
+  | 'publish';
 
 export interface PipelineTaskSnapshot {
   taskId: string;
@@ -64,8 +66,10 @@ const KIND_MAP: Record<PipelineTaskKind, { category: PipelineTaskCategory; label
   generate_cards: { category: 'ai-analyze', label: '生成卡片' },
   generate_motion: { category: 'ai-analyze', label: 'Motion 卡片' },
   sculpt_card: { category: 'ai-analyze', label: '精雕卡片' },
+  publish_metadata: { category: 'ai-write', label: '生成发布文案' },
   export_video: { category: 'export', label: '导出视频' },
   import_video_source: { category: 'import', label: '导入视频' },
+  publish: { category: 'export', label: '发布视频' },
 };
 
 export function mapKindToCategoryLabel(
