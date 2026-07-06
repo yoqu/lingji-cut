@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolRegistrar } from '../control/registry';
 import { getPipelineService, type TaskHandle } from '.';
 import type { PipelineTaskKind } from './types';
 import { runTtsHeadless } from './runs/tts-run';
@@ -11,6 +11,7 @@ import {
   runCoversHeadless,
 } from './runs/cover-run';
 import { runExportHeadless } from './runs/export-run';
+import { runPublishMetadataHeadless } from './runs/publish-metadata-run';
 import {
   runRegenerateCard,
   runRegenerateCardMedia,
@@ -64,7 +65,7 @@ export function emitProjectUpdated(
 
 /** 注册一个 headless 生成工具：createTask → 后台 run → 发刷新信号 → 返回 taskId */
 export function registerGenerationTool(
-  server: McpServer,
+  server: ToolRegistrar,
   getMainWindow: () => BrowserWindow | null,
   getUserDataPath: () => string,
   config: GenerationToolConfig,
@@ -102,7 +103,7 @@ export function registerGenerationTool(
 
 /** 注册全部 headless 生成工具（本计划：音频；后续计划追加） */
 export function registerGenerationTools(
-  server: McpServer,
+  server: ToolRegistrar,
   getMainWindow: () => BrowserWindow | null,
   getUserDataPath: () => string,
 ): void {
@@ -122,7 +123,8 @@ export function registerGenerationTools(
     description:
       '读取 podcast-subtitles.srt，做语义分段并批量生成 AI 卡片与封面提示词，写入 project.json 的 aiAnalysis 节；返回 taskId。注意：本应用中卡片随分析一并产出（cards gen 与 subtitle analyze 等价）。',
     kind: 'analyze_subtitles',
-    sections: ['aiAnalysis'],
+    // analyze 现在会顺带生成作品标题（meta/publish 段）
+    sections: ['aiAnalysis', 'meta', 'publish'],
     run: (ctx) => runAnalyzeHeadless(ctx),
   });
 
@@ -152,6 +154,17 @@ export function registerGenerationTools(
     kind: 'generate_covers',
     sections: ['aiAnalysis'],
     run: (ctx) => runCoversHeadless(ctx),
+  });
+
+  registerGenerationTool(server, getMainWindow, getUserDataPath, {
+    name: 'lingji_generate_publish_metadata',
+    title: '生成作品标题与发布文案',
+    description:
+      '基于分析结果/字幕生成作品标题+描述+标签，写入 project.json 的 meta 与 publish 节；默认已有标题时跳过（force 强制重新生成）。返回 taskId（fire-and-poll）。',
+    kind: 'publish_metadata',
+    sections: ['meta', 'publish'],
+    extraInput: { force: z.boolean().optional().describe('已有标题时也强制重新生成') },
+    run: (ctx) => runPublishMetadataHeadless(ctx),
   });
 
   registerGenerationTool(server, getMainWindow, getUserDataPath, {
