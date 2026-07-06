@@ -7,12 +7,19 @@ import { handleGenerateCardImage } from '../../card-media-handlers';
 import { assertCardRenders } from '../../remotion/smoke-render';
 import { createMotionCardAgentProvider } from '../motion-agent-run';
 import { makeAgentFeedCallback } from '../agent-feed';
-import type { MotionCardAgentProvider } from '../../../src/lib/ai-analysis';
+import type { MotionCardAgentProvider, SegmentPlanningResult } from '../../../src/lib/ai-analysis';
 import { loadFullHeadlessAISettings, loadHeadlessProjectBindings } from '../headless-settings';
 import { GenerationError } from '../generation-error';
 import { HeadlessProjectContext } from '../context';
 import { loadCardTemplates, loadEffectivePromptTemplate } from '../../prompts-io';
 import { loadProjectFile } from '../../project-file';
+import { buildMetadataSource, generatePublishMetadata } from '../../../src/lib/publish-metadata';
+import { resolvePromptBinding } from '../../../src/lib/llm/binding-resolver';
+import {
+  extractMetaSection,
+  extractPublishSection,
+  resolveWorkTitle,
+} from '../../../src/lib/project-persistence';
 import type { GenerationRunCtx } from '../headless-generation';
 import type { SrtEntry } from '../../../src/types';
 import type { AISettings, AIAnalysisResult } from '../../../src/types/ai';
@@ -56,11 +63,12 @@ export async function runAnalyzeHeadless(
   }
 
   // 模板与样式（mirror electron/main.ts 的 analyze-srt 处理体；kind 以源码为准）
-  const [planningTemplate, { cardTemplate, imageTemplate, animationTemplate }, coverTemplate] =
+  const [planningTemplate, { cardTemplate, imageTemplate, animationTemplate }, coverTemplate, publishTemplate] =
     await Promise.all([
       loadEffectivePromptTemplate('planning.segment', { userDataPath, projectDir: projectPath }),
       loadCardTemplates({ userDataPath, projectDir: projectPath }),
       loadEffectivePromptTemplate('cover.regeneration', { userDataPath, projectDir: projectPath }),
+      loadEffectivePromptTemplate('publish.metadata', { userDataPath, projectDir: projectPath }),
     ]);
   const projectStylePresetId = (await loadProjectFile(projectPath)).stylePresetId;
 
@@ -77,6 +85,35 @@ export async function runAnalyzeHeadless(
       onAgentEvent: makeAgentFeedCallback(`pipeline:${handle.taskId}`),
     });
     return provider(mctx);
+  };
+
+  // 作品标题：planning 完成后生成（fill-if-empty），落盘 meta + publish（title 镜像）。
+  const generateWorkTitle = async (planning: SegmentPlanningResult): Promise<string | null> => {
+    try {
+      const project = await loadProjectFile(projectPath);
+      const existing = resolveWorkTitle(project);
+      if (existing) return existing;
+      const sourceText = buildMetadataSource(planning, '');
+      if (!sourceText.trim()) return null;
+      const binding = resolvePromptBinding('publish.metadata', settings, projectBindings);
+      const md = await generatePublishMetadata(
+        settings,
+        { sourceText },
+        { template: publishTemplate, binding },
+      );
+      const headless = new HeadlessProjectContext(projectPath);
+      await headless.saveSection('meta', { ...extractMetaSection(project), title: md.title });
+      const publish = extractPublishSection(project);
+      await headless.saveSection('publish', {
+        ...publish,
+        title: md.title,
+        desc: publish.desc || md.desc,
+        tagsInput: publish.tagsInput || md.tags.join(', '),
+      });
+      return md.title;
+    } catch {
+      return null; // 标题失败不阻断分析与封面
+    }
   };
 
   // 默认 analyzeSrt 装配：复刻 main.ts analyze-srt 的 LLM 注入。
@@ -117,6 +154,7 @@ export async function runAnalyzeHeadless(
     animationTemplate,
     coverTemplate,
     projectBindings,
+    generateWorkTitle,
     onProgress: (p: { phase?: string; percent?: number }) =>
       handle.update({ phase: p.phase ?? '分析', percent: Math.min(95, 20 + (p.percent ?? 0) * 0.75) }),
   });
