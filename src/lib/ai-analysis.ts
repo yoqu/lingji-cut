@@ -211,7 +211,7 @@ function maybeResolveBinding(
   return resolvePromptBinding(kind, settings, projectBindings);
 }
 
-interface SegmentPlanningResult {
+export interface SegmentPlanningResult {
   segments: AISegmentAnalysis[];
   coverPrompts: string[];
   summary: string;

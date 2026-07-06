@@ -8,6 +8,7 @@ import {
   materializeImageCard,
   regenerateAICard,
   regenerateCoverPrompt,
+  type SegmentPlanningResult,
   type SubtitleCardDraftInput,
 } from '../src/lib/ai-analysis';
 import { resolveStylePresetId } from '../src/lib/card-style';
@@ -15,7 +16,7 @@ import { assertCardRenders } from './remotion/smoke-render';
 import { createMotionCardAgentProvider, resolveMotionCardModels } from './pipeline/motion-agent-run';
 import { makeAgentFeedCallback } from './pipeline/agent-feed';
 import { generateCoverCandidates } from '../src/lib/cover-generation';
-import { generatePublishMetadata } from '../src/lib/publish-metadata';
+import { buildMetadataSource, generatePublishMetadata } from '../src/lib/publish-metadata';
 import { recommendBilibiliPartition } from '../src/lib/publish-partition-recommend';
 import { resolvePromptBinding } from '../src/lib/llm/binding-resolver';
 import {
@@ -35,8 +36,13 @@ import type {
   PromptBindingMap,
 } from '../src/types/ai';
 import { loadCardTemplates, loadEffectivePromptTemplate } from './prompts-io';
-import { loadProjectFile } from './project-file';
-import { resolveWorkTitle } from '../src/lib/project-persistence';
+import { loadProjectFile, saveProjectSection } from './project-file';
+import {
+  extractMetaSection,
+  extractPublishSection,
+  resolveWorkTitle,
+} from '../src/lib/project-persistence';
+import { emitProjectUpdated } from './pipeline/headless-generation';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
 
 export interface AiGenerationIpcContext {
@@ -149,6 +155,55 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           userDataPath,
           projectDir: args.projectDir,
         });
+        const publishTemplate = await loadEffectivePromptTemplate('publish.metadata', {
+          userDataPath,
+          projectDir: args.projectDir,
+        });
+        // 作品标题：planning 完成后生成（fill-if-empty），落盘 meta + publish（title 镜像）。
+        const generateWorkTitle = args.projectDir
+          ? async (planning: SegmentPlanningResult): Promise<string | null> => {
+              const projectDir = args.projectDir!;
+              try {
+                const existing = await loadProjectWorkTitle(projectDir);
+                if (existing) return existing;
+                const sourceText = buildMetadataSource(planning, '');
+                if (!sourceText.trim()) return null;
+                const binding = resolvePromptBinding(
+                  'publish.metadata',
+                  args.settings,
+                  args.projectBindings ?? null,
+                );
+                const md = await generatePublishMetadata(
+                  args.settings,
+                  { sourceText },
+                  { template: publishTemplate, binding },
+                );
+                const data = await loadProjectFile(projectDir);
+                await saveProjectSection(projectDir, 'meta', {
+                  ...extractMetaSection(data),
+                  title: md.title,
+                });
+                const publish = extractPublishSection(data);
+                await saveProjectSection(projectDir, 'publish', {
+                  ...publish,
+                  title: md.title,
+                  desc: publish.desc || md.desc,
+                  tagsInput: publish.tagsInput || md.tags.join(', '),
+                });
+                emitProjectUpdated(getMainWindow, projectDir, ['meta', 'publish']);
+                writeAppLog('info', 'publish', '作品标题已生成', md.title);
+                return md.title;
+              } catch (error) {
+                writeAppLog(
+                  'warn',
+                  'publish',
+                  '作品标题生成失败（封面将无标题继续）',
+                  error instanceof Error ? error.message : String(error),
+                );
+                return null;
+              }
+            }
+          : undefined;
         const projectStylePresetId = await loadProjectStylePresetId(args.projectDir);
         // 仅当 renderer 提供了 projectDir 时，才把 image 卡片物化能力注入；
         // 否则 LLM 仍可吐出 image 类型 prompt，但保留 generationStatus='pending'，
@@ -198,6 +253,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             args.feedId,
           ),
           validateMotionSource: assertCardRenders,
+          generateWorkTitle,
           onProgress: (progress) => {
             getMainWindow()?.webContents.send('analyze-progress', progress);
           },
