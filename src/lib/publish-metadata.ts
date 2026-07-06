@@ -6,6 +6,13 @@ import type { AISettings } from '../types/ai';
 import { generateStructuredData } from './llm';
 import type { ResolvedBinding } from './llm/binding-resolver';
 import { renderUserPromptWithLock, type PromptTemplate } from './prompts';
+import {
+  extractMetaSection,
+  extractPublishSection,
+  type ProjectData,
+  type ProjectMetaSection,
+  type ProjectPublishMeta,
+} from './project-persistence';
 
 /** buildMetadataSource 接受的最小结构：AIAnalysisResult 与 planning 结果均满足。 */
 export interface MetadataSourceInput {
@@ -128,4 +135,21 @@ export async function generatePublishMetadata(
     label: 'publish-metadata',
   });
   return parsePublishMetadata(payload);
+}
+
+/** 由生成结果组装 meta/publish 两段落盘 payload：title 双写镜像，desc/tags 只填空。 */
+export function buildWorkTitlePatch(
+  project: ProjectData,
+  md: PublishMetadata,
+): { meta: ProjectMetaSection; publish: ProjectPublishMeta } {
+  const publish = extractPublishSection(project);
+  return {
+    meta: { ...extractMetaSection(project), title: md.title },
+    publish: {
+      ...publish,
+      title: md.title,
+      desc: publish.desc || md.desc,
+      tagsInput: publish.tagsInput || md.tags.join(', '),
+    },
+  };
 }

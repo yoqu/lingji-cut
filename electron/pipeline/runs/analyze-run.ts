@@ -13,13 +13,13 @@ import { GenerationError } from '../generation-error';
 import { HeadlessProjectContext } from '../context';
 import { loadCardTemplates, loadEffectivePromptTemplate } from '../../prompts-io';
 import { loadProjectFile } from '../../project-file';
-import { buildMetadataSource, generatePublishMetadata } from '../../../src/lib/publish-metadata';
-import { resolvePromptBinding } from '../../../src/lib/llm/binding-resolver';
 import {
-  extractMetaSection,
-  extractPublishSection,
-  resolveWorkTitle,
-} from '../../../src/lib/project-persistence';
+  buildMetadataSource,
+  buildWorkTitlePatch,
+  generatePublishMetadata,
+} from '../../../src/lib/publish-metadata';
+import { resolvePromptBinding } from '../../../src/lib/llm/binding-resolver';
+import { resolveWorkTitle } from '../../../src/lib/project-persistence';
 import type { GenerationRunCtx } from '../headless-generation';
 import type { SrtEntry } from '../../../src/types';
 import type { AISettings, AIAnalysisResult } from '../../../src/types/ai';
@@ -102,14 +102,9 @@ export async function runAnalyzeHeadless(
         { template: publishTemplate, binding },
       );
       const headless = new HeadlessProjectContext(projectPath);
-      await headless.saveSection('meta', { ...extractMetaSection(project), title: md.title });
-      const publish = extractPublishSection(project);
-      await headless.saveSection('publish', {
-        ...publish,
-        title: md.title,
-        desc: publish.desc || md.desc,
-        tagsInput: publish.tagsInput || md.tags.join(', '),
-      });
+      const patch = buildWorkTitlePatch(project, md);
+      await headless.saveSection('meta', patch.meta);
+      await headless.saveSection('publish', patch.publish);
       return md.title;
     } catch {
       return null; // 标题失败不阻断分析与封面

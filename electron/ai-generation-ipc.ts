@@ -16,7 +16,11 @@ import { assertCardRenders } from './remotion/smoke-render';
 import { createMotionCardAgentProvider, resolveMotionCardModels } from './pipeline/motion-agent-run';
 import { makeAgentFeedCallback } from './pipeline/agent-feed';
 import { generateCoverCandidates } from '../src/lib/cover-generation';
-import { buildMetadataSource, generatePublishMetadata } from '../src/lib/publish-metadata';
+import {
+  buildMetadataSource,
+  buildWorkTitlePatch,
+  generatePublishMetadata,
+} from '../src/lib/publish-metadata';
 import { recommendBilibiliPartition } from '../src/lib/publish-partition-recommend';
 import { resolvePromptBinding } from '../src/lib/llm/binding-resolver';
 import {
@@ -37,11 +41,7 @@ import type {
 } from '../src/types/ai';
 import { loadCardTemplates, loadEffectivePromptTemplate } from './prompts-io';
 import { loadProjectFile, saveProjectSection } from './project-file';
-import {
-  extractMetaSection,
-  extractPublishSection,
-  resolveWorkTitle,
-} from '../src/lib/project-persistence';
+import { resolveWorkTitle } from '../src/lib/project-persistence';
 import { emitProjectUpdated } from './pipeline/headless-generation';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
 
@@ -179,17 +179,9 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
                   { template: publishTemplate, binding },
                 );
                 const data = await loadProjectFile(projectDir);
-                await saveProjectSection(projectDir, 'meta', {
-                  ...extractMetaSection(data),
-                  title: md.title,
-                });
-                const publish = extractPublishSection(data);
-                await saveProjectSection(projectDir, 'publish', {
-                  ...publish,
-                  title: md.title,
-                  desc: publish.desc || md.desc,
-                  tagsInput: publish.tagsInput || md.tags.join(', '),
-                });
+                const patch = buildWorkTitlePatch(data, md);
+                await saveProjectSection(projectDir, 'meta', patch.meta);
+                await saveProjectSection(projectDir, 'publish', patch.publish);
                 emitProjectUpdated(getMainWindow, projectDir, ['meta', 'publish']);
                 writeAppLog('info', 'publish', '作品标题已生成', md.title);
                 return md.title;

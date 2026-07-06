@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildMetadataSource,
   buildPublishMetadataMessages,
+  buildWorkTitlePatch,
   generatePublishMetadata,
   parsePublishMetadata,
 } from '../src/lib/publish-metadata';
 import { getBuiltinPromptTemplate } from '../src/lib/prompts';
+import { createDefaultProjectData } from '../src/lib/project-persistence';
 import type { AISettings } from '../src/types/ai';
 
 const FAKE_SETTINGS = {} as AISettings;
@@ -127,5 +129,19 @@ describe('buildMetadataSource', () => {
     const source = buildMetadataSource({ segments }, '');
     expect(source).toContain('16. 段16');
     expect(source).not.toContain('17. 段17');
+  });
+});
+
+describe('buildWorkTitlePatch', () => {
+  it('title 双写镜像，desc/tags 只填空', () => {
+    const project = {
+      ...createDefaultProjectData(),
+      publish: { title: '', desc: '已有描述', tagsInput: '', thumbnail: '', bilibiliTid: '' },
+    };
+    const patch = buildWorkTitlePatch(project, { title: '新', desc: '新描', tags: ['a', 'b'] });
+    expect(patch.meta.title).toBe('新');
+    expect(patch.publish.title).toBe('新');
+    expect(patch.publish.desc).toBe('已有描述');
+    expect(patch.publish.tagsInput).toBe('a, b');
   });
 });

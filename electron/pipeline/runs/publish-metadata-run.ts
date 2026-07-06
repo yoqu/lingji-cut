@@ -2,14 +2,11 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   buildMetadataSource,
+  buildWorkTitlePatch,
   generatePublishMetadata,
 } from '../../../src/lib/publish-metadata';
 import { resolvePromptBinding } from '../../../src/lib/llm/binding-resolver';
-import {
-  extractMetaSection,
-  extractPublishSection,
-  resolveWorkTitle,
-} from '../../../src/lib/project-persistence';
+import { resolveWorkTitle } from '../../../src/lib/project-persistence';
 import { parseSrt } from '../../../src/lib/srt-parser';
 import { loadFullHeadlessAISettings, loadHeadlessProjectBindings } from '../headless-settings';
 import { GenerationError } from '../generation-error';
@@ -74,14 +71,9 @@ export async function runPublishMetadataHeadless(
 
   handle.update({ phase: '写入', percent: 90 });
   const headless = new HeadlessProjectContext(projectPath);
-  await headless.saveSection('meta', { ...extractMetaSection(project), title: md.title });
-  const publish = extractPublishSection(project);
-  await headless.saveSection('publish', {
-    ...publish,
-    title: md.title,
-    desc: publish.desc || md.desc,
-    tagsInput: publish.tagsInput || md.tags.join(', '),
-  });
+  const patch = buildWorkTitlePatch(project, md);
+  await headless.saveSection('meta', patch.meta);
+  await headless.saveSection('publish', patch.publish);
   handle.update({ phase: '完成', percent: 100 });
   return { skipped: false, title: md.title };
 }
