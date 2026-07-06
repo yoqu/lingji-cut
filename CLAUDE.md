@@ -76,6 +76,7 @@ npm run dist:mac     # 构建并打包 macOS .app
 - `timeline`：时间线与素材编排。
 - `aiAnalysis`：AI 分析、封面候选、Motion Card、Storyboard。
 - `script`：模板、批注、审稿状态、脚本工作台状态。
+- `meta`：作品级元信息（作品标题真源 `meta.title`；发布 tab / 封面 / 流水线均引用，`publish.title` 保持镜像）。
 
 主进程读写入口：
 
@@ -278,7 +279,7 @@ MCP Server：
 
 - 服务器 ID：`lingji-editor`。
 - 可注册到 Claude Code、Codex、Gemini。
-- 工具包括读取编辑器状态、读写脚本、提交审稿批注、列项目文件、获取项目上下文、导入抖音视频、查询导入状态。
+- 工具包括读取编辑器状态、读写脚本、提交审稿批注、列项目文件、获取项目上下文、导入抖音视频、查询导入状态、生成作品标题与发布文案。
 
 Claude ACP 连接时会向用户项目目录写入 / 更新 `CLAUDE.md` 中的 MCP 工具使用指引。这是为了让外部 Claude Code 在脚本编辑场景中通过 `lingji_*` 工具操作编辑器，而不是直接 Read / Write 文件。
 
