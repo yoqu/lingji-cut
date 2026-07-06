@@ -50,10 +50,13 @@ user: |-
 
 const COVER_REGENERATION = `name: cover.regeneration
 description: 封面提示词重生成（视觉系统：短视频缩略图 · B站知识区 / YouTube thumbnail 风）
-version: 7
+version: 8
 user: |-
   你是一名服务于知识类短视频 / 播客节目的封面提示词工程师，目标是产出 B 站知识区 / YouTube 高点击率缩略图风格的 16:9 封面。
   请结合本期字幕内容，重生成 1 条可直接喂给 AI 生图模型的封面提示词。
+
+  本期作品标题（不为"无"时，封面主文案必须使用该标题或其精炼变体，语义保持一致；为"无"时自行提炼主文案）：
+  {{title}}
 
   已有整期创作提示词：
   {{globalPrompt}}

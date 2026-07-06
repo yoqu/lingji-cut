@@ -186,6 +186,8 @@ interface RegenerateCoverPromptOptions {
   currentPrompt?: string;
   coverTemplate?: PromptTemplate;
   projectBindings?: PromptBindingMap | null;
+  /** 作品标题；注入 cover.regeneration 的 {{title}}，空值渲染为"无"。 */
+  workTitle?: string;
 }
 
 /**
@@ -943,6 +945,7 @@ export function buildCoverPromptRegenerationPrompt(
     globalPrompt?: string;
     currentPrompt?: string;
     stylePresetId?: string;
+    workTitle?: string;
   } = {},
   template?: PromptTemplate,
 ): string {
@@ -950,6 +953,7 @@ export function buildCoverPromptRegenerationPrompt(
   const globalPrompt = options.globalPrompt?.trim();
   const currentPrompt = options.currentPrompt?.trim();
   return renderUserPromptWithLock('cover.regeneration', tpl, {
+    title: options.workTitle?.trim() || '无',
     globalPrompt: globalPrompt || '无',
     currentPrompt: currentPrompt || '无',
     styleSystemBlock: getStyleFacetBlock(options.stylePresetId, 'cover'),
@@ -2036,6 +2040,7 @@ export async function regenerateCoverPrompt(
     currentPrompt,
     coverTemplate,
     projectBindings,
+    workTitle,
   } = options;
 
   if (entries.length === 0) {
@@ -2054,6 +2059,7 @@ export async function regenerateCoverPrompt(
           global: defaultStylePresetId,
         }),
         currentPrompt,
+        workTitle,
       },
       coverTemplate,
     ),

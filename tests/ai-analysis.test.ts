@@ -29,8 +29,6 @@ const settings: AISettings = {
   llmBaseUrl: 'https://api.openai.com/v1',
   llmApiKey: 'sk-test',
   llmModel: 'gpt-4o-mini',
-  jimengApiUrl: '',
-  jimengSessionId: '',
 };
 
 const baseEntries = [
@@ -805,5 +803,15 @@ describe('generateCardForSegment motion agent context', () => {
 
     expect(generateMotionCard.mock.calls[0]?.[0]?.validate).toBe(validateMotionSource);
     expect(validateMotionSource).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildCoverPromptRegenerationPrompt', () => {
+  it('workTitle 注入 {{title}}；缺省渲染为"无"', () => {
+    const withTitle = buildCoverPromptRegenerationPrompt({ workTitle: '爆款标题X' });
+    expect(withTitle).toContain('爆款标题X');
+    const withoutTitle = buildCoverPromptRegenerationPrompt({});
+    expect(withoutTitle).toContain('本期作品标题');
+    expect(withoutTitle).toMatch(/本期作品标题[\s\S]{0,80}无/);
   });
 });

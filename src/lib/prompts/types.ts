@@ -239,6 +239,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
     description: '根据字幕与现有提示词重生成单条 16:9 播客封面提示词',
     group: 'ai-analysis',
     variables: [
+      { name: 'title', description: '作品标题（为空填"无"）；封面主文案应使用该标题或其精炼变体' },
       { name: 'globalPrompt', description: '整期创作提示词（为空填"无"）' },
       { name: 'currentPrompt', description: '当前封面提示词（为空填"无"）' },
       { name: 'styleSystemBlock', description: '系统风格库注入的视觉系统块；由所选风格预设的对应 facet 决定' },
