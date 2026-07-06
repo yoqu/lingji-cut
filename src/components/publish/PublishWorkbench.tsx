@@ -12,7 +12,6 @@ import { usePublishStore, type PublishResult } from '../../store/publish';
 import { loadAISettings, useAIStore } from '../../store/ai';
 import { useTimelineStore } from '../../store/timeline';
 import type { PublishAccount, PublishShared, PublishTarget } from '../../lib/electron-api';
-import type { AIAnalysisResult } from '../../types/ai';
 import {
   extractPublishSection,
   PUBLISH_HISTORY_MAX,
@@ -22,6 +21,7 @@ import {
   type PublishHistoryResult,
   type PublishHistoryTarget,
 } from '../../lib/project-persistence';
+import { buildMetadataSource } from '../../lib/publish-metadata';
 import { PublishCoverPanel } from './PublishCoverPanel';
 import { autoFillCovers, useCoverStudio } from './useCoverStudio';
 import { isInsideDir } from '../../lib/publish/resolve-video-file';
@@ -41,24 +41,6 @@ function formatRelativeTime(ts: number): string {
   if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
   return `${days} 天前`;
-}
-
-/** 拼接 AI 分析摘要 / 关键词 / 段落，兜底用字幕原文，作为发布文案生成素材。 */
-function buildMetadataSource(analysis: AIAnalysisResult | null, srtText: string): string {
-  const parts: string[] = [];
-  if (analysis?.summary) parts.push(`节目总结：${analysis.summary}`);
-  if (analysis?.keywords?.length) parts.push(`关键词：${analysis.keywords.join('、')}`);
-  if (analysis?.segments?.length) {
-    const segs = analysis.segments
-      .slice(0, 16)
-      .map((s, i) => `${i + 1}. ${s.title}${s.summary ? `：${s.summary}` : ''}`)
-      .join('\n');
-    parts.push(`段落概要：\n${segs}`);
-  }
-  if (parts.length === 0 && srtText.trim()) {
-    parts.push(`字幕内容：${srtText.trim().slice(0, 3000)}`);
-  }
-  return parts.join('\n\n');
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

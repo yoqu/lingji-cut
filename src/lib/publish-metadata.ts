@@ -7,6 +7,31 @@ import { generateStructuredData } from './llm';
 import type { ResolvedBinding } from './llm/binding-resolver';
 import { renderUserPromptWithLock, type PromptTemplate } from './prompts';
 
+/** buildMetadataSource 接受的最小结构：AIAnalysisResult 与 planning 结果均满足。 */
+export interface MetadataSourceInput {
+  summary?: string;
+  keywords?: string[];
+  segments?: Array<{ title: string; summary?: string }>;
+}
+
+/** 拼接 AI 分析摘要 / 关键词 / 段落，兜底用字幕原文，作为发布文案生成素材。 */
+export function buildMetadataSource(analysis: MetadataSourceInput | null, srtText: string): string {
+  const parts: string[] = [];
+  if (analysis?.summary) parts.push(`节目总结：${analysis.summary}`);
+  if (analysis?.keywords?.length) parts.push(`关键词：${analysis.keywords.join('、')}`);
+  if (analysis?.segments?.length) {
+    const segs = analysis.segments
+      .slice(0, 16)
+      .map((s, i) => `${i + 1}. ${s.title}${s.summary ? `：${s.summary}` : ''}`)
+      .join('\n');
+    parts.push(`段落概要：\n${segs}`);
+  }
+  if (parts.length === 0 && srtText.trim()) {
+    parts.push(`字幕内容：${srtText.trim().slice(0, 3000)}`);
+  }
+  return parts.join('\n\n');
+}
+
 export interface PublishMetadataInput {
   /** 节目内容素材：摘要 / 关键词 / 字幕摘录拼接而成。 */
   sourceText: string;

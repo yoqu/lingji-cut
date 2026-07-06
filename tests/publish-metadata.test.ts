@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildMetadataSource,
   buildPublishMetadataMessages,
   generatePublishMetadata,
   parsePublishMetadata,
@@ -97,5 +98,34 @@ describe('generatePublishMetadata', () => {
       ),
     ).rejects.toThrow();
     expect(fake).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildMetadataSource', () => {
+  it('拼接分析摘要/关键词/段落概要', () => {
+    const source = buildMetadataSource(
+      {
+        summary: '本期讲AI',
+        keywords: ['AI', '播客'],
+        segments: [{ title: '开场', summary: '引入话题' }],
+      },
+      '',
+    );
+    expect(source).toContain('节目总结：本期讲AI');
+    expect(source).toContain('关键词：AI、播客');
+    expect(source).toContain('1. 开场：引入话题');
+  });
+
+  it('分析为空时回退字幕原文（截断 3000 字符）', () => {
+    const source = buildMetadataSource(null, 'x'.repeat(4000));
+    expect(source).toContain('字幕内容：');
+    expect(source.length).toBeLessThan(3100);
+  });
+
+  it('段落最多取 16 条', () => {
+    const segments = Array.from({ length: 20 }, (_, i) => ({ title: `段${i + 1}` }));
+    const source = buildMetadataSource({ segments }, '');
+    expect(source).toContain('16. 段16');
+    expect(source).not.toContain('17. 段17');
   });
 });
