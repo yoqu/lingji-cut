@@ -36,6 +36,7 @@ import type {
 } from '../src/types/ai';
 import { loadCardTemplates, loadEffectivePromptTemplate } from './prompts-io';
 import { loadProjectFile } from './project-file';
+import { resolveWorkTitle } from '../src/lib/project-persistence';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
 
 export interface AiGenerationIpcContext {
@@ -53,6 +54,16 @@ async function loadProjectStylePresetId(projectDir?: string): Promise<string | u
   try {
     const data = await loadProjectFile(projectDir);
     return data.stylePresetId;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 读取作品标题（meta.title → publish.title 回退）；无 projectDir 或读取失败返回 undefined。 */
+async function loadProjectWorkTitle(projectDir?: string): Promise<string | undefined> {
+  if (!projectDir) return undefined;
+  try {
+    return resolveWorkTitle(await loadProjectFile(projectDir)) || undefined;
   } catch {
     return undefined;
   }
@@ -549,6 +560,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           currentPrompt: args.currentPrompt,
           coverTemplate,
           projectBindings: args.projectBindings ?? null,
+          workTitle: await loadProjectWorkTitle(args.projectDir),
         });
       } catch (error) {
         logAiError('封面提示词重生成失败', error);

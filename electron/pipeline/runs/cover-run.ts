@@ -10,6 +10,7 @@ import { GenerationError } from '../generation-error';
 import { HeadlessProjectContext } from '../context';
 import { loadEffectivePromptTemplate } from '../../prompts-io';
 import { loadProjectFile } from '../../project-file';
+import { resolveWorkTitle } from '../../../src/lib/project-persistence';
 import type { GenerationRunCtx } from '../headless-generation';
 import type { SrtEntry } from '../../../src/types';
 import type { AISettings, CoverCandidate, ImageProvider } from '../../../src/types/ai';
@@ -74,6 +75,7 @@ export async function runCoverPromptHeadless(
     currentPrompt: analysisResult.coverPrompts?.[0],
     coverTemplate,
     projectBindings,
+    workTitle: resolveWorkTitle(project) || undefined,
   });
 
   handle.update({ phase: '写入', percent: 90 });

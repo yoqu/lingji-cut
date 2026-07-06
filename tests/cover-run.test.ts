@@ -69,6 +69,32 @@ describe('runCoverPromptHeadless', () => {
     }
   });
 
+  it('passes workTitle resolved from project.json meta.title into regenerate opts', async () => {
+    const dir = project(true);
+    const u = ud();
+    try {
+      const projectJsonPath = path.join(dir, 'project.json');
+      const data = JSON.parse(readFileSync(projectJsonPath, 'utf-8'));
+      data.meta = { title: '标题真源' };
+      writeFileSync(projectJsonPath, JSON.stringify(data));
+
+      let capturedOpts: unknown;
+      await runCoverPromptHeadless(
+        { projectPath: dir, userDataPath: u, handle: handle() as never },
+        {
+          regenerate: async (_entries, _settings, opts) => {
+            capturedOpts = opts;
+            return ['新封面提示词'];
+          },
+        },
+      );
+      expect((capturedOpts as { workTitle?: string }).workTitle).toBe('标题真源');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(u, { recursive: true, force: true });
+    }
+  });
+
   it('throws need_analysis when analysisResult is null', async () => {
     const dir = project(false);
     const u = ud();
