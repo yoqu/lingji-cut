@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import { z } from 'zod';
-import type { ToolRegistrar } from '../control/registry';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getPipelineService, type TaskHandle } from '.';
 import type { PipelineTaskKind } from './types';
 import { runTtsHeadless } from './runs/tts-run';
@@ -65,7 +65,7 @@ export function emitProjectUpdated(
 
 /** 注册一个 headless 生成工具：createTask → 后台 run → 发刷新信号 → 返回 taskId */
 export function registerGenerationTool(
-  server: ToolRegistrar,
+  server: McpServer,
   getMainWindow: () => BrowserWindow | null,
   getUserDataPath: () => string,
   config: GenerationToolConfig,
@@ -103,7 +103,7 @@ export function registerGenerationTool(
 
 /** 注册全部 headless 生成工具（本计划：音频；后续计划追加） */
 export function registerGenerationTools(
-  server: ToolRegistrar,
+  server: McpServer,
   getMainWindow: () => BrowserWindow | null,
   getUserDataPath: () => string,
 ): void {
