@@ -11,7 +11,8 @@ interface AICoverPanelProps {
   isGenerating: boolean;
   isRegeneratingPrompt: boolean;
   selectedCandidateId?: string;
-  onGenerateCovers: (prompts: string[]) => void;
+  onGenerateCovers: (prompts: string[]) => void | Promise<unknown>;
+  onSavePrompt: (prompts: string[]) => void | Promise<unknown>;
   onRegeneratePrompt: () => void;
   onSelectCover: (candidateId: string) => void;
   onAddToTimeline: (candidateId: string) => void;
@@ -25,6 +26,7 @@ export function AICoverPanel({
   isRegeneratingPrompt,
   selectedCandidateId,
   onGenerateCovers,
+  onSavePrompt,
   onRegeneratePrompt,
   onSelectCover,
   onAddToTimeline,
@@ -32,6 +34,7 @@ export function AICoverPanel({
 }: AICoverPanelProps) {
   const [editablePrompt, setEditablePrompt] = useState('');
   const [isEditing, setIsEditing] = useState(false);
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
   const selectedCandidate =
     candidates.find((candidate) => candidate.id === selectedCandidateId) ??
     candidates.find((candidate) => candidate.selected) ??
@@ -54,6 +57,35 @@ export function AICoverPanel({
 
   const prompt = isEditing ? editablePrompt : coverPrompts[0] ?? '';
   const prompts = prompt.trim() ? [prompt.trim()] : [];
+  const savedPrompt = coverPrompts[0]?.trim() ?? '';
+  const editedPrompt = editablePrompt.trim();
+  const hasPromptChanges = editedPrompt !== savedPrompt;
+  const isBusy = isGenerating || isRegeneratingPrompt || isSavingPrompt;
+
+  const handleSavePrompt = async () => {
+    if (prompts.length === 0) {
+      return;
+    }
+
+    setIsSavingPrompt(true);
+    try {
+      await onSavePrompt(prompts);
+      setIsEditing(false);
+    } catch {
+      // 父级已负责展示错误；这里保留编辑态，方便继续修改。
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
+
+  const handleGenerateCoversClick = async () => {
+    if (prompts.length === 0) {
+      return;
+    }
+
+    await onGenerateCovers(prompts);
+    setIsEditing(false);
+  };
 
   return (
     <div className={styles.root} data-ai-cover-root="true">
@@ -73,15 +105,41 @@ export function AICoverPanel({
 
         <div className={styles.promptCard}>
           {isEditing ? (
-            <Textarea
-              value={editablePrompt}
-              onChange={(event) => setEditablePrompt(event.target.value)}
-              rows={4}
-              size="sm"
-              resize="vertical"
-              className={styles.promptTextarea}
-              placeholder="描述你想生成的封面氛围和构图方向…"
-            />
+            <>
+              <Textarea
+                value={editablePrompt}
+                onChange={(event) => setEditablePrompt(event.target.value)}
+                rows={4}
+                size="sm"
+                resize="vertical"
+                className={styles.promptTextarea}
+                placeholder="描述你想生成的封面氛围和构图方向…"
+              />
+              <div className={styles.editActions}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setEditablePrompt(coverPrompts[0] ?? '');
+                    setIsEditing(false);
+                  }}
+                  disabled={isBusy}
+                >
+                  取消
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleSavePrompt}
+                  disabled={isBusy || prompts.length === 0 || !hasPromptChanges}
+                  loading={isSavingPrompt}
+                  loadingText="保存中"
+                >
+                  <AppIcon name="save" size={12} />
+                  保存提示词
+                </Button>
+              </div>
+            </>
           ) : (
             <>
               <div className={styles.promptText}>{prompt}</div>
@@ -91,12 +149,12 @@ export function AICoverPanel({
                   size="sm"
                   className={styles.inlineAction}
                   onClick={onRegeneratePrompt}
-                  disabled={isRegeneratingPrompt || isGenerating}
+                  disabled={isRegeneratingPrompt || isGenerating || isSavingPrompt}
                   aria-label="AI 重新生成提示词"
                   title="AI 重新生成提示词"
                 >
                   <AppIcon name="sparkles" size={12} />
-                  {isRegeneratingPrompt ? '生成中...' : '重新生成'}
+                  {isRegeneratingPrompt ? '生成中...' : 'AI 重写提示词'}
                 </Button>
               </div>
             </>
@@ -108,14 +166,11 @@ export function AICoverPanel({
         variant="primary"
         size="sm"
         className={styles.generateButton}
-        onClick={() => {
-          onGenerateCovers(prompts);
-          setIsEditing(false);
-        }}
-        disabled={isGenerating || prompts.length === 0}
+        onClick={() => void handleGenerateCoversClick()}
+        disabled={isBusy || prompts.length === 0}
       >
         <AppIcon name="image" size={14} />
-        <span>{isGenerating ? '生成中...' : '重新生成'}</span>
+        <span>{isGenerating ? '生成中...' : '生成封面图'}</span>
       </Button>
 
       {candidates.length > 0 ? (

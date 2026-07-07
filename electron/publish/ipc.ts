@@ -10,7 +10,7 @@ import { registerDownloadIpc } from './download-ipc';
 import type { PublishJob, PublishPlatform, PublishSettings } from './types';
 
 let store: AccountStore | null = null;
-function getStore(): AccountStore {
+export function getPublishStore(): AccountStore {
   if (!store) store = new AccountStore(join(app.getPath('userData'), 'publish'));
   return store;
 }
@@ -19,14 +19,14 @@ function getStore(): AccountStore {
 let cancelled = false;
 
 export function registerPublishIpc(): void {
-  ipcMain.handle('publish:list-accounts', () => getStore().list());
+  ipcMain.handle('publish:list-accounts', () => getPublishStore().list());
   ipcMain.handle('publish:delete-account', (_e, id: string) => {
-    getStore().remove(id);
+    getPublishStore().remove(id);
   });
   ipcMain.handle(
     'publish:login',
     async (e, platform: PublishPlatform, accountName: string, headless?: boolean) => {
-      const s = getStore();
+      const s = getPublishStore();
       const sp = s.storageStatePath(platform, accountName);
       const res = await getPlatform(platform).login({
         storageStatePath: sp,
@@ -37,12 +37,12 @@ export function registerPublishIpc(): void {
       return res;
     },
   );
-  ipcMain.handle('publish:get-settings', () => getStore().getSettings());
+  ipcMain.handle('publish:get-settings', () => getPublishStore().getSettings());
   ipcMain.handle('publish:set-settings', (_e, patch: Partial<PublishSettings>) =>
-    getStore().setSettings(patch),
+    getPublishStore().setSettings(patch),
   );
   ipcMain.handle('publish:check', async (_e, id: string) => {
-    const s = getStore();
+    const s = getPublishStore();
     const { platform } = parseAccountId(id);
     const acc = s.list().find((a) => a.id === id);
     if (!acc) return false;
@@ -54,11 +54,13 @@ export function registerPublishIpc(): void {
   // ─── publish:run ────────────────────────────────────────────────────────────
   ipcMain.handle('publish:run', async (e, job: PublishJob, headless = true) => {
     cancelled = false;
-    try {
-      await runPublishJob(job, getStore(), e.sender, () => cancelled, headless);
-    } catch (err) {
-      throw err;
-    }
+    await runPublishJob(
+      job,
+      getPublishStore(),
+      (payload) => e.sender.send('publish:progress', payload),
+      () => cancelled,
+      headless,
+    );
   });
 
   // ─── publish:cancel ─────────────────────────────────────────────────────────

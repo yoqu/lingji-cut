@@ -2,12 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadAISettings, saveAISettings } from '../../store/ai';
 import { Field, Divider, Select, SaveButton, SettingsPageHeader, Textarea } from '../../ui';
 import type { SelectOption } from '../../ui';
-import {
-  DEFAULT_JIMENG_MODEL,
-  type ImageProvider,
-  type LLMProvider,
-  type VideoProvider,
-} from '../../types/ai';
+import type { ImageProvider, LLMProvider, VideoProvider } from '../../types/ai';
 import { ProviderListSection } from './ProviderListSection';
 import { ImageProviderListSection } from './ImageProviderListSection';
 import { VideoProviderListSection } from './VideoProviderListSection';
@@ -28,10 +23,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
-  // 旧 jimeng* 字段（UI 已下线，仅保留原值用于向后兼容持久化）
-  const [legacyJimengApiUrl, setLegacyJimengApiUrl] = useState('');
-  const [legacyJimengSessionId, setLegacyJimengSessionId] = useState('');
-  const [legacyJimengModel, setLegacyJimengModel] = useState(DEFAULT_JIMENG_MODEL);
   // 新：图像 Provider
   const [imageProviders, setImageProviders] = useState<ImageProvider[]>([]);
   const [defaultImageProviderId, setDefaultImageProviderId] = useState<string | null>(null);
@@ -49,9 +40,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
   useEffect(() => {
     void loadAISettings().then((settings) => {
       const nextProviders = settings?.llmProviders ?? [];
-      const nextJimengApiUrl = settings?.jimengApiUrl ?? '';
-      const nextJimengSessionId = settings?.jimengSessionId ?? '';
-      const nextJimengModel = settings?.jimengModel ?? DEFAULT_JIMENG_MODEL;
       const nextImageProviders = settings?.imageProviders ?? [];
       const nextDefaultImageProviderId = settings?.defaultImageProviderId ?? null;
       const nextDefaultImageModel = settings?.defaultImageModel ?? null;
@@ -68,9 +56,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
       setProviders(nextProviders);
       setDefaultProviderId(selection.defaultProviderId);
       setDefaultModel(selection.defaultModel);
-      setLegacyJimengApiUrl(nextJimengApiUrl);
-      setLegacyJimengSessionId(nextJimengSessionId);
-      setLegacyJimengModel(nextJimengModel);
       setImageProviders(nextImageProviders);
       setDefaultImageProviderId(nextDefaultImageProviderId);
       setDefaultImageModel(nextDefaultImageModel);
@@ -83,9 +68,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
           providers: nextProviders,
           defaultProviderId: selection.defaultProviderId,
           defaultModel: selection.defaultModel,
-          jimengApiUrl: nextJimengApiUrl,
-          jimengSessionId: nextJimengSessionId,
-          jimengModel: nextJimengModel,
           imageProviders: nextImageProviders,
           defaultImageProviderId: nextDefaultImageProviderId,
           defaultImageModel: nextDefaultImageModel,
@@ -114,9 +96,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
         providers,
         defaultProviderId,
         defaultModel,
-        jimengApiUrl: legacyJimengApiUrl,
-        jimengSessionId: legacyJimengSessionId,
-        jimengModel: legacyJimengModel,
         imageProviders,
         defaultImageProviderId,
         defaultImageModel,
@@ -129,9 +108,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
       providers,
       defaultProviderId,
       defaultModel,
-      legacyJimengApiUrl,
-      legacyJimengSessionId,
-      legacyJimengModel,
       imageProviders,
       defaultImageProviderId,
       defaultImageModel,
@@ -162,9 +138,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
       providers: normalizedProviders,
       defaultProviderId: selection.defaultProviderId,
       defaultModel: selection.defaultModel,
-      jimengApiUrl: legacyJimengApiUrl,
-      jimengSessionId: legacyJimengSessionId,
-      jimengModel: legacyJimengModel,
       imageProviders,
       defaultImageProviderId,
       defaultImageModel,
@@ -197,9 +170,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
         llmProviders: normalizedProviders,
         defaultProviderId: selection.defaultProviderId,
         defaultModel: selection.defaultModel,
-        jimengApiUrl: legacyJimengApiUrl,
-        jimengSessionId: legacyJimengSessionId,
-        jimengModel: legacyJimengModel,
         imageProviders,
         defaultImageProviderId,
         defaultImageModel,
@@ -227,9 +197,6 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
     providers,
     defaultProviderId,
     defaultModel,
-    legacyJimengApiUrl,
-    legacyJimengSessionId,
-    legacyJimengModel,
     imageProviders,
     defaultImageProviderId,
     defaultImageModel,

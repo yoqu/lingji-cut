@@ -253,6 +253,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('pipeline:task-update', handler);
     return () => ipcRenderer.removeListener('pipeline:task-update', handler);
   },
+  onControlOpEvent: (
+    callback: (ev: { op: string; title: string; phase: 'start' | 'success' | 'error'; error?: string; ts: number }) => void,
+  ) => {
+    const handler = (
+      _event: unknown,
+      ev: { op: string; title: string; phase: 'start' | 'success' | 'error'; error?: string; ts: number },
+    ) => callback(ev);
+    ipcRenderer.on('control:op-event', handler);
+    return () => ipcRenderer.removeListener('control:op-event', handler);
+  },
   onAgentFeedEvent: (callback: (ev: AgentFeedEvent) => void) => {
     const handler = (_event: unknown, ev: AgentFeedEvent) => callback(ev);
     ipcRenderer.on('agent-feed:event', handler);
@@ -647,18 +657,7 @@ contextBridge.exposeInMainWorld('conversationAPI', {
 // ─── MCP API ─────────────────────────────────────────────
 
 contextBridge.exposeInMainWorld('mcpAPI', {
-  // 服务管理
-  getStatus: () => ipcRenderer.invoke('mcp:get-status'),
-  start: (port: number) => ipcRenderer.invoke('mcp:start', port),
-  stop: () => ipcRenderer.invoke('mcp:stop'),
-
-  // 配置管理
-  scanLocal: () => ipcRenderer.invoke('mcp:scan-local'),
-  registerToApp: (app: string) => ipcRenderer.invoke('mcp:register-to-app', app),
-  removeFromApp: (app: string) => ipcRenderer.invoke('mcp:remove-from-app', app),
-  isRegistered: (app: string) => ipcRenderer.invoke('mcp:is-registered', app),
-
-  // MCP Tool 事件监听（Main → Renderer）
+  // 控制服务工具事件桥（Main → Renderer；lingji_* 编辑器类工具的落地通道）
   onGetEditorState: (handler: (payload: unknown) => void) => {
     const listener = (_event: unknown, payload: unknown) => handler(payload);
     ipcRenderer.on('mcp:get-editor-state', listener);

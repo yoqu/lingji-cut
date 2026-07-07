@@ -1,6 +1,6 @@
 import type { BrowserWindow } from 'electron';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolRegistrar } from '../control/registry';
 import { listCards, getCard, updateCard, deleteCard, getCardContext, validateCard } from './card-ops';
 import { emitProjectUpdated } from './headless-generation';
 import type { AICard } from '../../src/types/ai';
@@ -19,7 +19,7 @@ function err(e: unknown) {
 }
 
 export function registerCardTools(
-  server: McpServer,
+  server: ToolRegistrar,
   getMainWindow: () => BrowserWindow | null,
   getUserDataPath: () => string,
 ): void {

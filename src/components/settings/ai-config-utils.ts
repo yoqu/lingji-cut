@@ -60,9 +60,6 @@ interface AIConfigSnapshotInput {
   providers: LLMProvider[];
   defaultProviderId: string | null;
   defaultModel: string | null;
-  jimengApiUrl: string;
-  jimengSessionId: string;
-  jimengModel: string;
   imageProviders?: ImageProvider[];
   defaultImageProviderId?: string | null;
   defaultImageModel?: string | null;
@@ -167,9 +164,6 @@ export function createAIConfigSnapshot({
   providers,
   defaultProviderId,
   defaultModel,
-  jimengApiUrl,
-  jimengSessionId,
-  jimengModel,
   imageProviders,
   defaultImageProviderId,
   defaultImageModel,
@@ -195,9 +189,6 @@ export function createAIConfigSnapshot({
     providers: normalizedProviders,
     defaultProviderId: selection.defaultProviderId,
     defaultModel: selection.defaultModel,
-    jimengApiUrl: jimengApiUrl.trim(),
-    jimengSessionId: jimengSessionId.trim(),
-    jimengModel: jimengModel.trim(),
     imageProviders: normalizedImageProviders,
     defaultImageProviderId: defaultImageProviderId ?? null,
     defaultImageModel: defaultImageModel ?? null,

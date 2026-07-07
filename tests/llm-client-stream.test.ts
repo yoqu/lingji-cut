@@ -40,8 +40,6 @@ function makeSettings(providerOverrides: Record<string, unknown> = {}): AISettin
     ],
     defaultProviderId: 'p1',
     defaultModel: 'gpt-4o-mini',
-    jimengApiUrl: '',
-    jimengSessionId: '',
   } as AISettings;
 }
 
@@ -134,8 +132,6 @@ describe('streamText', () => {
       llmProviders: [],
       defaultProviderId: null,
       defaultModel: null,
-      jimengApiUrl: '',
-      jimengSessionId: '',
     } as unknown as AISettings;
 
     await expect(streamText(empty, '系统提示', '用户输入', vi.fn())).rejects.toThrow(

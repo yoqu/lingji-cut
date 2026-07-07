@@ -7,11 +7,6 @@ function baseSettings(): AISettings {
     llmProviders: [],
     defaultProviderId: null,
     defaultModel: null,
-    llmBaseUrl: '',
-    llmApiKey: '',
-    llmModel: '',
-    jimengApiUrl: '',
-    jimengSessionId: '',
     minimaxApiKey: '',
     minimaxVoiceId: '',
     minimaxSpeed: 1,
@@ -35,57 +30,22 @@ describe('migrateImageProviders', () => {
     expect(migrateImageProviders(s)).toBe(s);
   });
 
-  it('无即梦配置：返回空 imageProviders 列表', () => {
-    const s = baseSettings();
+  it('imageProviders 缺失：补空列表与默认值', () => {
+    const s = { ...baseSettings(), imageProviders: undefined } as unknown as AISettings;
     const next = migrateImageProviders(s);
     expect(next.imageProviders).toEqual([]);
     expect(next.defaultImageProviderId).toBeNull();
     expect(next.defaultImageModel).toBeNull();
   });
 
-  it('已是空 imageProviders + 默认值且无 jimeng 配置：返回同引用（幂等）', () => {
+  it('已是空 imageProviders + 默认值：返回同引用（幂等）', () => {
     const s = baseSettings();
     expect(migrateImageProviders(s)).toBe(s);
-  });
-
-  it('有即梦配置：迁移成 imageProviders[0] 并清空旧字段', () => {
-    const s: AISettings = {
-      ...baseSettings(),
-      jimengApiUrl: 'https://api.jimeng.com',
-      jimengSessionId: 'sess-abc',
-      jimengModel: 'jimeng-5.0',
-    };
-    const next = migrateImageProviders(s);
-    expect(next.imageProviders).toHaveLength(1);
-    expect(next.imageProviders[0]).toMatchObject({
-      id: 'jimeng-default',
-      name: '即梦',
-      type: 'jimeng',
-      baseUrl: 'https://api.jimeng.com',
-      apiKey: 'sess-abc',
-      models: ['jimeng-5.0'],
-    });
-    expect(next.defaultImageProviderId).toBe('jimeng-default');
-    expect(next.defaultImageModel).toBe('jimeng-5.0');
-    expect(next.jimengApiUrl).toBe('');
-    expect(next.jimengSessionId).toBe('');
-    expect(next.jimengModel).toBe('');
-  });
-
-  it('jimengModel 缺失时使用 DEFAULT_JIMENG_MODEL', () => {
-    const s: AISettings = {
-      ...baseSettings(),
-      jimengApiUrl: 'https://api.jimeng.com',
-      jimengSessionId: 'sess-abc',
-    };
-    const next = migrateImageProviders(s);
-    expect(next.imageProviders[0].models).toEqual(['jimeng-5.0']);
-    expect(next.defaultImageModel).toBe('jimeng-5.0');
   });
 });
 
 describe('migrateImageProvidersV2', () => {
-  it('既有 jimeng 配置，extras 缺失 → 补 extras: {}', () => {
+  it('extras 缺失 → 补 extras: {}', () => {
     const s: AISettings = {
       ...baseSettings(),
       imageProviders: [{
@@ -143,22 +103,5 @@ describe('migrateImageProvidersV2', () => {
     };
     const next = migrateImageProvidersV2(s);
     expect(next.imageProviders[0].models).toEqual(['custom']);
-  });
-
-  it('旧路径（jimengApiUrl 存在但 imageProviders 空）→ 完成迁移并通过 V2 兜底', () => {
-    // 旧字段有配置、imageProviders 为空 → migrateImageProviders 负责 V1 迁移，然后串联 V2
-    const s: AISettings = {
-      ...baseSettings(),
-      jimengApiUrl: 'https://api.jimeng.com',
-      jimengSessionId: 'sess-xyz',
-      jimengModel: 'jimeng-5.0',
-    };
-    const next = migrateImageProviders(s);
-    // V1 迁移生成的 jimeng provider 无 extras，V2 应补上
-    expect(next.imageProviders).toHaveLength(1);
-    expect(next.imageProviders[0].extras).toEqual({});
-    expect(next.imageProviders[0].models).toEqual(['jimeng-5.0']);
-    expect(next.jimengApiUrl).toBe('');
-    expect(next.jimengSessionId).toBe('');
   });
 });

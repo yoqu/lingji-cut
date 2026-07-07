@@ -82,7 +82,7 @@ export async function openProject(input: { path: string }): Promise<{ ok: true }
   return { ok: true };
 }
 
-import { loadGlobalSettings } from '../../global-settings';
+import { loadGlobalSettings, saveGlobalSettings, type GlobalSettingsFile } from '../../global-settings';
 
 export interface SettingsSnapshot {
   defaultProvider: string | null;
@@ -151,4 +151,47 @@ export async function getSettings(opts: { userDataPath: string }): Promise<Setti
     ttsDefaults: pickTtsDefaults(ai),
     promptBindings: stripSecrets(ai?.promptBindings as Record<string, unknown> | undefined),
   };
+}
+
+/** 可通过控制服务写入的全局设置白名单（永不包含密钥类字段） */
+const UPDATABLE_SETTINGS_KEYS = new Set([
+  'defaultProviderId',
+  'defaultModel',
+  'defaultImageProviderId',
+  'defaultImageModel',
+  'defaultVideoProviderId',
+  'defaultVideoModel',
+  'minimaxVoiceId',
+  'minimaxSpeed',
+  'minimaxVol',
+  'minimaxPitch',
+  'minimaxEmotion',
+  'minimaxModel',
+]);
+
+export async function updateSettings(opts: {
+  userDataPath: string;
+  updates: Record<string, string | number | boolean>;
+}): Promise<{ updated: string[]; rejected: string[] }> {
+  const updated: string[] = [];
+  const rejected: string[] = [];
+  const filtered: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(opts.updates)) {
+    if (UPDATABLE_SETTINGS_KEYS.has(key) && !SECRET_KEY_RE.test(key)) {
+      filtered[key] = value;
+      updated.push(key);
+    } else {
+      rejected.push(key);
+    }
+  }
+  if (updated.length === 0) {
+    throw new PipelineError(
+      'invalid_settings_key',
+      `没有可更新的字段（白名单: ${[...UPDATABLE_SETTINGS_KEYS].join(', ')}）`,
+    );
+  }
+  const file = (await loadGlobalSettings(opts.userDataPath)) ?? ({} as GlobalSettingsFile);
+  const ai = { ...(file.aiSettings ?? {}), ...filtered } as GlobalSettingsFile['aiSettings'];
+  await saveGlobalSettings(opts.userDataPath, { ...file, aiSettings: ai });
+  return { updated, rejected };
 }

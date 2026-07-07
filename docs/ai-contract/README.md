@@ -1,6 +1,6 @@
 # 灵机剪影 · 文件契约（file-first 编辑）
 
-本目录是一套**与 agent 无关**的文件契约。任何能读写本地文件的 AI agent（Claude Code / Codex / Gemini 等）都可以照此**直接读写项目目录里的文件**来修改视频与文稿，无需调用任何 MCP / IPC 工具。
+本目录是一套**与 agent 无关**的文件契约。任何能读写本地文件的 AI agent（Claude Code / Codex / Gemini 等）都可以照此**直接读写项目目录里的文件**来修改视频与文稿，无需调用任何应用内工具接口。
 
 ## 这是什么
 
@@ -87,12 +87,12 @@
 
 改完 `project.json` 后读 `edit-result.json`：若 `ok:false`，按 `errors[].field` / `errors[].message` 定位并修复，然后**重写文件再读一次**，直到 `ok:true`。
 
-这是 agent 无关的反馈通道，**不需要调用任何 MCP 工具**。（注：`script.md` / `original.md` 是纯 Markdown，不走这套 JSON 校验。）
+这是 agent 无关的反馈通道，**不需要调用任何应用内工具接口**。（注：`script.md` / `original.md` 是纯 Markdown，不走这套 JSON 校验。）
 
 ## 边界（铁律）
 
 - **只做纯编辑**：编辑「已有数据」。
-- **不要触发重新生成**：封面、卡片配图、TTS 配音、AI 文/图/视频生成都不在本契约内。需要这些请让用户在 App 内操作，或使用现有 `lingji_*` MCP 工具。
+- **不要触发重新生成**：封面、卡片配图、TTS 配音、AI 文/图/视频生成都不在本契约内。需要这些请使用 `lingji` CLI（`audio gen` / `subtitle analyze` / `cover gen` / `export` 等），或让用户在 App 内操作。
 - **不要触发重新导出 MP4**：导出请让用户在 App 内执行。
 - **不要碰产物文件**：`podcast-audio.mp3`、`podcast-subtitles*.srt`、`covers/`、`ai-cards/<id>/image.png` 等是生成产物，手改会被下一次生成覆盖且可能与 `project.json` 失配。
 - **视频域**：只改 [video-editing.md](./video-editing.md) 列出的字段。

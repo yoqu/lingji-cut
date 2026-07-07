@@ -3,34 +3,52 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { resolveServerUrl } from '../cli/src/endpoint';
+import { resolveEndpoint } from '../cli/src/endpoint';
 
-describe('resolveServerUrl', () => {
-  it('prefers --server flag and appends /mcp when missing', () => {
-    expect(resolveServerUrl({ serverFlag: 'http://127.0.0.1:9000', env: {}, endpointFile: '/no' }))
-      .toBe('http://127.0.0.1:9000/mcp');
-    expect(resolveServerUrl({ serverFlag: 'http://127.0.0.1:9000/mcp', env: {}, endpointFile: '/no' }))
-      .toBe('http://127.0.0.1:9000/mcp');
+describe('resolveEndpoint', () => {
+  it('prefers --server flag and normalizes legacy suffixes', () => {
+    expect(resolveEndpoint({ serverFlag: 'http://127.0.0.1:9000/', env: {}, endpointFile: '/no' }).url)
+      .toBe('http://127.0.0.1:9000');
+    expect(resolveEndpoint({ serverFlag: 'http://127.0.0.1:9000/mcp', env: {}, endpointFile: '/no' }).url)
+      .toBe('http://127.0.0.1:9000');
+    expect(resolveEndpoint({ serverFlag: 'http://127.0.0.1:9000/invoke', env: {}, endpointFile: '/no' }).url)
+      .toBe('http://127.0.0.1:9000');
   });
 
-  it('falls back to LINGJI_MCP_URL env', () => {
-    expect(resolveServerUrl({ env: { LINGJI_MCP_URL: 'http://h:1/mcp' }, endpointFile: '/no' }))
-      .toBe('http://h:1/mcp');
+  it('falls back to LINGJI_CONTROL_URL / LINGJI_CONTROL_TOKEN env', () => {
+    const ep = resolveEndpoint({
+      env: { LINGJI_CONTROL_URL: 'http://h:1', LINGJI_CONTROL_TOKEN: 'tk-env' },
+      endpointFile: '/no',
+    });
+    expect(ep.url).toBe('http://h:1');
+    expect(ep.token).toBe('tk-env');
   });
 
-  it('reads url from endpoint file', () => {
+  it('reads url and token from endpoint file', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'lingji-rf-'));
-    const file = path.join(dir, 'mcp-endpoint.json');
+    const file = path.join(dir, 'control-endpoint.json');
     try {
-      writeFileSync(file, JSON.stringify({ url: 'http://127.0.0.1:7777/mcp', port: 7777 }));
-      expect(resolveServerUrl({ env: {}, endpointFile: file })).toBe('http://127.0.0.1:7777/mcp');
+      writeFileSync(file, JSON.stringify({ url: 'http://127.0.0.1:7777', port: 7777, token: 'tk-file' }));
+      const ep = resolveEndpoint({ env: {}, endpointFile: file });
+      expect(ep.url).toBe('http://127.0.0.1:7777');
+      expect(ep.token).toBe('tk-file');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('defaults to 19820 when nothing else resolves', () => {
-    expect(resolveServerUrl({ env: {}, endpointFile: '/definitely/missing' }))
-      .toBe('http://127.0.0.1:19820/mcp');
+  it('--token flag beats env and file token', () => {
+    const ep = resolveEndpoint({
+      tokenFlag: 'tk-flag',
+      env: { LINGJI_CONTROL_TOKEN: 'tk-env' },
+      endpointFile: '/no',
+    });
+    expect(ep.token).toBe('tk-flag');
+  });
+
+  it('defaults to 19820 base url with no token when nothing else resolves', () => {
+    const ep = resolveEndpoint({ env: {}, endpointFile: '/definitely/missing' });
+    expect(ep.url).toBe('http://127.0.0.1:19820');
+    expect(ep.token).toBeUndefined();
   });
 });

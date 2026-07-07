@@ -68,8 +68,6 @@ function makeSettings(providerOverrides: Record<string, unknown> = {}): AISettin
     ],
     defaultProviderId: 'p1',
     defaultModel: 'qwen3.6-plus',
-    jimengApiUrl: '',
-    jimengSessionId: '',
   } as AISettings;
 }
 

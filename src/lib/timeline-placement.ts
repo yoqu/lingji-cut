@@ -1,4 +1,4 @@
-import type { OverlayItem, TimelineTrack } from '../types';
+import type { OverlayItem } from '../types';
 
 // ── Type Definitions ──
 
@@ -13,19 +13,6 @@ export interface FindNearestArgs {
   trackId: string;
   excludeOverlayId?: string;
   overlays: OverlayItem[];
-}
-
-export interface PlacementTrackResult {
-  trackId: string | null;
-  startMs: number;
-}
-
-export interface FindAvailableTrackArgs {
-  targetStartMs: number;
-  durationMs: number;
-  excludeOverlayId?: string;
-  overlays: OverlayItem[];
-  tracks: TimelineTrack[];
 }
 
 export interface ClampDurationArgs {
@@ -77,21 +64,6 @@ export function canPlaceAt(args: CanPlaceAtArgs): CanPlaceAtResult {
     }
   }
   return { ok: true };
-}
-
-/**
- * 返回与候选区间碰撞的所有受管 overlay（按现有顺序，不排序）。
- */
-export function findCollidingItems(args: CanPlaceAtArgs): OverlayItem[] {
-  const { trackId, startMs, durationMs, excludeOverlayId, overlays } = args;
-  const candidate = { startMs, durationMs };
-  return overlays.filter(
-    (o) =>
-      o.trackId === trackId
-      && o.id !== excludeOverlayId
-      && isOverlayTrackManaged(o)
-      && overlaysOverlap(candidate, o),
-  );
 }
 
 /**
@@ -202,32 +174,6 @@ export function findNearestAvailablePlacement(args: FindNearestArgs): PlacementR
   }
 
   return { startMs: targetStartMs, fits: false };
-}
-
-/**
- * 在所有视觉轨道中寻找可放置的轨道
- */
-export function findAvailableTrack(args: FindAvailableTrackArgs): PlacementTrackResult {
-  const { targetStartMs, durationMs, excludeOverlayId, overlays, tracks } = args;
-  const visualTracks = tracks
-    .filter((t) => t.kind === 'visual')
-    .sort((a, b) => a.order - b.order);
-
-  for (const track of visualTracks) {
-    const result = findNearestAvailablePlacement({
-      targetStartMs,
-      durationMs,
-      trackId: track.id,
-      excludeOverlayId,
-      overlays,
-    });
-
-    if (result.fits) {
-      return { trackId: track.id, startMs: result.startMs };
-    }
-  }
-
-  return { trackId: null, startMs: targetStartMs };
 }
 
 /**

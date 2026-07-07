@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useToast } from './ui';
 import { AgentSidebar } from './components/agent/AgentSidebar';
 import { AppStatusBar } from './components/AppStatusBar';
+import { AgentOpOverlay } from './components/agent/AgentOpOverlay';
 import { Toolbar } from './components/Toolbar';
 import type { AppPage, MenuAction, MenuEvent, RecentProjectEntry } from './lib/electron-api';
 import { getAISettingsIssue } from './lib/ai-settings';
@@ -1088,6 +1089,7 @@ export default function App() {
         </AnimatePresence>
       </div>
       <AppStatusBar />
+      <AgentOpOverlay />
       <ImportProjectDialog
         open={importProjectDialogOpen}
         onOpenChange={setImportProjectDialogOpen}

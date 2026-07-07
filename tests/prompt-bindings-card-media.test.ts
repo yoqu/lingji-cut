@@ -25,8 +25,6 @@ function makeSettings(overrides: Partial<AISettings> = {}): AISettings {
     llmBaseUrl: '',
     llmApiKey: '',
     llmModel: '',
-    jimengApiUrl: '',
-    jimengSessionId: '',
     minimaxApiKey: '',
     minimaxVoiceId: '',
     minimaxSpeed: 1,

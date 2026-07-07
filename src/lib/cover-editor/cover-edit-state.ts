@@ -1,4 +1,4 @@
-import type { CoverEditState, CoverTextOverlay } from './contracts';
+import type { CoverEditState } from './contracts';
 
 export function createEmptyEditState(): CoverEditState {
   return {
@@ -7,24 +7,6 @@ export function createEmptyEditState(): CoverEditState {
     textOverlays: [],
     filters: { preset: 'none' },
     transform: {},
-  };
-}
-
-export function mergeTextOverlay(
-  state: CoverEditState,
-  overlay: CoverTextOverlay,
-): CoverEditState {
-  const list = state.textOverlays ?? [];
-  const idx = list.findIndex((t) => t.id === overlay.id);
-  const nextList =
-    idx >= 0 ? list.map((t, i) => (i === idx ? overlay : t)) : [...list, overlay];
-  return { ...state, textOverlays: nextList };
-}
-
-export function removeTextOverlay(state: CoverEditState, id: string): CoverEditState {
-  return {
-    ...state,
-    textOverlays: (state.textOverlays ?? []).filter((t) => t.id !== id),
   };
 }
 

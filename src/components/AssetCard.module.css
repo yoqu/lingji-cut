@@ -38,6 +38,22 @@
   border-color: var(--color-text-muted);
 }
 
+.clickable:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-system-blue) 72%, transparent);
+  outline-offset: 2px;
+}
+
+.selected {
+  border-color: var(--color-system-blue);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-system-blue) 64%, transparent),
+    0 4px 12px rgba(0, 0, 0, 0.22);
+}
+
+.selected .name {
+  color: var(--color-text-primary);
+}
+
 /* compact 模式下保持方形大小不变 */
 .compact {
   width: 96px;

@@ -86,7 +86,7 @@ export function registerAgentIpc(getMainWindow: () => BrowserWindow | null): voi
 
     // 注入 LINGJI_CLI：指向打包内 lingji CLI 入口（dist-cli/lingji.mjs）。
     // skill 用 `node "$LINGJI_CLI" <cmd>` 直接驱动运行中的 App —— CLI 内部读
-    // ~/.lingji/mcp-endpoint.json 连本地 MCP server，无需 agent 会话注册 MCP 工具。
+    // ~/.lingji/control-endpoint.json 连本地控制服务（含 token）。
     // dev 解析到仓库 dist-cli；打包解析到 app.asar.unpacked/dist-cli。
     const lingjiCli = resolvePiEntry('dist-cli/lingji.mjs');
     if (lingjiCli) env.LINGJI_CLI = lingjiCli;

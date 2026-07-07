@@ -8,8 +8,6 @@ const settings: AISettings = {
   llmBaseUrl: 'https://api.openai.com/v1',
   llmApiKey: 'sk-test',
   llmModel: 'gpt-4o-mini',
-  jimengApiUrl: '',
-  jimengSessionId: '',
 } as AISettings;
 
 const entries: SrtEntry[] = [

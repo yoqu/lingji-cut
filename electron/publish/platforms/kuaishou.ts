@@ -7,6 +7,7 @@
  */
 import type { Page } from 'playwright';
 import { withContext } from '../engine';
+import { LoginExpiredError } from '../errors';
 import {
   formatScheduleDate,
   qrcodePngPath,
@@ -33,6 +34,10 @@ const KUAISHOU_MANAGE_URL_PATTERN = '**/article/manage/video?status=2&from=publi
 
 const KUAISHOU_COOKIE_INVALID_SELECTOR =
   "div.names div.container div.name:text('机构服务')";
+
+/** 登录态失效时给用户的可操作提示（区别于「页面结构变化」的兜底报错）。 */
+const KUAISHOU_LOGIN_EXPIRED_MESSAGE =
+  '快手登录态已失效（上传页渲染为未登录介绍页），请在「发布账号」中重新登录该快手账号后再发布';
 
 // ─── Cookie-validity helpers ──────────────────────────────────────────────────
 
@@ -131,22 +136,45 @@ async function _saveKsQrcode(
 // ─── Upload helpers ───────────────────────────────────────────────────────────
 
 /**
- * close_guide_overlay
- * port of KSBaseUploader.close_guide_overlay
- * Closes the Joyride tutorial overlay if present.
+ * 关闭 react-joyride 新手引导遮罩（幂等，可在任意时点重复调用）。
+ * 遮罩在上传开始后 ~2s 才挂载且 pointer-events:auto 拦截整页点击；
+ * 先点 Skip 正常结束引导，再兜底直接摘除遮罩节点（引导纯装饰，不影响页面功能）。
  */
 async function _closeGuideOverlay(page: Page): Promise<void> {
-  const joyrideTooltip = page.locator('div[id^="react-joyride-step"] div[role="alertdialog"]');
   try {
-    if ((await joyrideTooltip.count()) > 0 && (await joyrideTooltip.first().isVisible())) {
-      const closeButton = page
-        .locator('div[role="alertdialog"]')
-        .locator('[aria-label="Skip"], [data-action="skip"], button[title="Skip"]');
-      await closeButton.click({ force: true });
-      await joyrideTooltip.waitFor({ state: 'hidden', timeout: 5000 });
-    }
+    const skip = page.locator('div[id^="react-joyride-step"] [data-action="skip"]').first();
+    if (await skip.count()) await skip.click({ force: true, timeout: 2000 });
   } catch {
-    /* guide overlay absent or already dismissed */
+    /* fall through to hard removal */
+  }
+  try {
+    await page.evaluate(() => {
+      document.querySelector('#react-joyride-portal')?.remove();
+      document.querySelectorAll('[id^="react-joyride-step"]').forEach((el) => el.remove());
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** 收集当前页面可见的弹窗/提示文案，超时报错时还原现场，便于远程诊断。 */
+async function _describeVisibleBlockers(page: Page): Promise<string> {
+  try {
+    const texts = await page.evaluate(() => {
+      const els = [
+        ...document.querySelectorAll(
+          '[role="dialog"], [role="alertdialog"], .ant-modal, .cp-dialog-wrapper, [class*="toast"], [id^="react-joyride-step"]',
+        ),
+      ] as HTMLElement[];
+      const visible = els
+        .filter((el) => el.offsetWidth || el.offsetHeight)
+        .map((el) => el.innerText.trim().replace(/\s+/g, ' ').slice(0, 80))
+        .filter(Boolean);
+      return [...new Set(visible)].slice(0, 3).join(' / ');
+    });
+    return typeof texts === 'string' ? texts : '';
+  } catch {
+    return '';
   }
 }
 
@@ -240,7 +268,14 @@ export async function uploadKuaishouVideo(page: Page, opts: UploadVideoOptions):
   // 2. Click upload button → file chooser → set video file
   //    port of: async with page.expect_file_chooser() as fc_info: / file_chooser.set_files(...)
   const uploadButton = page.locator("button[class^='_upload-btn']");
-  await uploadButton.waitFor({ state: 'visible', timeout: 10_000 });
+  try {
+    await uploadButton.waitFor({ state: 'visible', timeout: 10_000 });
+  } catch (err) {
+    // 快手登录态失效时 URL 不变，但页面渲染成未登录介绍页（含「机构服务」标记），
+    // 上传按钮永不出现。区分「登录失效」与「页面结构变化」，前者给可操作提示。
+    if (await _isKsCookieInvalid(page)) throw new LoginExpiredError(KUAISHOU_LOGIN_EXPIRED_MESSAGE);
+    throw err;
+  }
 
   const fileChooserPromise = page.waitForEvent('filechooser');
   await uploadButton.click();
@@ -263,7 +298,17 @@ export async function uploadKuaishouVideo(page: Page, opts: UploadVideoOptions):
   await _closeGuideOverlay(page);
 
   // 5. Fill description and tags (port of fill-desc + tags loop)
-  await page.getByText('描述').locator('xpath=following-sibling::div').click();
+  //    新版页面描述区是 #work-description-edit（contenteditable）；旧版结构回退到 label 兄弟节点
+  const descEditor = (await page.locator('#work-description-edit').count())
+    ? page.locator('#work-description-edit')
+    : page.getByText('描述').locator('xpath=following-sibling::div');
+  try {
+    await descEditor.click({ timeout: 5_000 });
+  } catch {
+    // 引导遮罩可能在上一次关闭之后才挂载并拦截点击：再关一次重试
+    await _closeGuideOverlay(page);
+    await descEditor.click({ timeout: 10_000 });
+  }
   await page.keyboard.press('Backspace');
   await page.keyboard.press('Control+KeyA');
   await page.keyboard.press('Delete');
@@ -311,25 +356,39 @@ export async function uploadKuaishouVideo(page: Page, opts: UploadVideoOptions):
   }
 
   // 9. Publish: click 发布 → optional confirm 确认发布 → wait for manage URL
-  //    port of the publish while True loop
+  //    有界重试：页面异常（遮罩拦截/结构变化/跳转失败）时抛可读错误，而非无限挂起
+  const publishDeadline = Date.now() + 120_000;
+  let lastError = '';
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      // 引导遮罩可能中途再弹出并拦截点击，每轮先清一次
+      await _closeGuideOverlay(page);
+
       const publishButton = page.getByText('发布', { exact: true });
       if ((await publishButton.count()) > 0) {
-        await publishButton.click();
+        // 显式短超时：单轮点击被拦时快速进入下一轮（下一轮会再清遮罩）
+        await publishButton.click({ timeout: 10_000 });
       }
 
       await sleep(1000);
 
       const confirmButton = page.getByText('确认发布');
       if ((await confirmButton.count()) > 0) {
-        await confirmButton.click();
+        await confirmButton.click({ timeout: 5_000 });
       }
 
       await page.waitForURL(KUAISHOU_MANAGE_URL_PATTERN, { timeout: 5000 });
       break;
-    } catch {
+    } catch (err) {
+      lastError = err instanceof Error ? err.message.split('\n').slice(0, 4).join(' | ') : String(err);
+      if (Date.now() > publishDeadline) {
+        const blockers = await _describeVisibleBlockers(page);
+        throw new Error(
+          `快手发布确认超时：点击发布后未跳转到作品管理页。最后一轮异常: ${lastError}` +
+            (blockers ? `；页面可见弹窗/提示: ${blockers}` : ''),
+        );
+      }
       await sleep(1000);
     }
   }

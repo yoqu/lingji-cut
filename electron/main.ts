@@ -30,7 +30,6 @@ import { compileCards } from './remotion/compile-card-node';
 import { renderVideoHeadless, type RenderVideoArgs } from './remotion/render-video-headless';
 import { registerAgentIpc } from './acp/ipc';
 import { registerConversationIpc } from './conversations/ipc';
-import { registerMcpIpc } from './mcp/ipc';
 import { registerScriptHistoryIpc } from './script-history/ipc';
 import { registerPublishIpc } from './publish/ipc';
 import { configureBiliupRoot } from './publish/biliup-runtime';
@@ -49,7 +48,7 @@ import {
   type AutoRunEvent,
 } from './telemetry/auto-run-logger';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
-import { startMcpServer, stopMcpServer, getSonarInboxStore, getSonarBridgeInfo } from './mcp/server';
+import { startControlServer, stopControlServer, getSonarInboxStore, getSonarBridgeInfo } from './control/server';
 import { loadProjectFile, saveProjectSection } from './project-file';
 import type { ProjectSection } from '../src/lib/project-persistence';
 import { materializePreviewMotionCardDataUris } from './remotion/motion-card-assets';
@@ -1138,7 +1137,6 @@ if (process.env.NODE_ENV_ELECTRON_VITE === 'development') {
 
 registerAgentIpc(() => mainWindow);
 registerConversationIpc(() => mainWindow);
-registerMcpIpc(() => mainWindow);
 registerScriptHistoryIpc();
 registerPublishIpc();
 
@@ -1188,7 +1186,7 @@ app.whenReady().then(async () => {
   });
   // 启动 MCP Server
   try {
-    await startMcpServer(19820, () => mainWindow);
+    await startControlServer(19820, () => mainWindow);
   } catch (err) {
     console.error('[MCP] Failed to start server:', err);
   }
@@ -1206,6 +1204,6 @@ app.on('activate', () => {
 
 app.on('window-all-closed', async () => {
   fileWatcher?.close();
-  await stopMcpServer();
+  await stopControlServer();
   app.quit();
 });

@@ -4,7 +4,7 @@ import { readPromptBindings } from '../prompt-bindings-io';
 import { GenerationError } from './generation-error';
 import { migrateToProviders } from '../../src/lib/llm/provider-utils';
 import { migrateImageProviders } from '../../src/lib/llm/migrate-image-providers';
-import { DEFAULT_JIMENG_MODEL, DEFAULT_STYLE_PRESET_ID } from '../../src/types/ai';
+import { DEFAULT_STYLE_PRESET_ID } from '../../src/types/ai';
 import type { AISettings, TTSProvider, TTSVoicePreset, PromptBindingMap } from '../../src/types/ai';
 
 /** 读取全局 AISettings（明文，含 keys）；无则返回 null */
@@ -49,9 +49,6 @@ export function defaultAISettings(): AISettings {
     defaultProviderId: null,
     defaultModel: null,
     enableThinking: true,
-    jimengApiUrl: '',
-    jimengSessionId: '',
-    jimengModel: DEFAULT_JIMENG_MODEL,
     minimaxApiKey: '',
     minimaxVoiceId: 'male-qn-qingse',
     minimaxSpeed: 1.0,

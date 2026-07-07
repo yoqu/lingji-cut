@@ -106,11 +106,20 @@ describe('accent 字色对比度守卫', () => {
     );
   };
 
-  it('浅色预设（hand-sketch）accent 对底色对比不足，字色回落 ink，条/面仍用 accent', () => {
+  it('hand-sketch accent（红马克笔）对纸底与便利贴黄都达标，字色保持 accent、便利贴仍黄', () => {
     const html = renderCard(HAND_SKETCH.motionTokens);
-    expect(html).not.toContain('color:#FFD84D');
-    expect(html).toContain('color:#2B2B2B');
+    expect(html).toContain('color:#D0342C');
     expect(html).toContain('background:#FFD84D');
+  });
+
+  it('accent 对页面底达标但与 surface 面色撞色时，字色回落 ink', () => {
+    const html = renderCard({
+      palette: { bg: '#0E0E10', ink: '#ECE7DA', muted: '#8A8478', accent: '#FFD84D', track: 'rgba(236,231,218,0.12)' },
+      fonts: { display: 'serif', body: 'sans-serif', mono: 'monospace' },
+      surface: { kind: 'panel', bg: '#FFD84D' },
+    });
+    expect(html).not.toContain('color:#FFD84D');
+    expect(html).toContain('color:#ECE7DA');
   });
 
   it('深色预设（mono-bold）accent 对比充足，字色保持 accent', () => {

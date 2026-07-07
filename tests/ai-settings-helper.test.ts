@@ -19,8 +19,6 @@ function makeSettings(overrides: Partial<AISettings> = {}): AISettings {
     llmProviders: [],
     defaultProviderId: null,
     defaultModel: null,
-    jimengApiUrl: '',
-    jimengSessionId: '',
     ...overrides,
   } as AISettings;
 }

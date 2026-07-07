@@ -10,7 +10,6 @@ import styles from './AgentSidebar.module.css';
 import { ConversationWorkspaceProvider } from '../../contexts/conversation-workspace-context';
 import { AcpConnectionsProvider, useAcpConnections } from '../../contexts/acp-connections-context';
 import { ConversationRuntimeProvider } from '../../contexts/conversation-runtime-context';
-import { QUICK_ACTION_CONVERSATION_EVENT } from '../../lib/quick-action-conversation';
 
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 700;
@@ -98,29 +97,6 @@ export function SidebarWorkspaceShell({
     }
     await deleteConversation(conversationId);
   }
-
-  useEffect(() => {
-    const onActivate = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        projectId: string;
-        conversationId: number;
-        explicit: boolean;
-      }>).detail;
-      if (!detail || detail.projectId !== projectDir) {
-        return;
-      }
-
-      if (detail.explicit) {
-        setExplicitConversationId(detail.conversationId);
-      }
-      void setActiveConversation(detail.conversationId);
-    };
-
-    window.addEventListener(QUICK_ACTION_CONVERSATION_EVENT, onActivate);
-    return () => {
-      window.removeEventListener(QUICK_ACTION_CONVERSATION_EVENT, onActivate);
-    };
-  }, [projectDir, setActiveConversation]);
 
   return (
     <div className="flex-1 min-w-0 min-h-0 flex">

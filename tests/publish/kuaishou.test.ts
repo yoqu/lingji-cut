@@ -1,5 +1,6 @@
 import { it, expect, vi } from 'vitest';
 import { uploadKuaishouVideo } from '../../electron/publish/platforms/kuaishou';
+import { LoginExpiredError } from '../../electron/publish/errors';
 
 /**
  * Mock page where every page.locator() / getByText() / getByRole() returns the same
@@ -84,3 +85,76 @@ it(
   },
   10_000, // 10s timeout: real sleep(2000) + sleep(1000) in publish loop
 );
+
+const UPLOAD_OPTS = {
+  storageStatePath: '/c.json',
+  filePath: '/tmp/v.mp4',
+  title: '标题',
+  desc: '描述',
+  tags: [],
+  headless: true,
+} as const;
+
+it('上传按钮超时且页面呈未登录态（机构服务标记存在）→ 抛 LoginExpiredError', async () => {
+  const page = makeMockPage();
+  // 上传按钮 waitFor 超时（快手未登录时 URL 不变，渲染成介绍页，按钮永不出现）
+  page.locator('x').waitFor.mockRejectedValue(
+    new Error("locator.waitFor: Timeout 10000ms exceeded"),
+  );
+  // waitForSelector 默认 resolve → 「机构服务」未登录标记存在
+
+  await expect(uploadKuaishouVideo(page as any, UPLOAD_OPTS as any)).rejects.toBeInstanceOf(
+    LoginExpiredError,
+  );
+});
+
+it('新版描述编辑器 #work-description-edit 存在时优先点击它填写描述', async () => {
+  const page = makeMockPage();
+  const sharedLocator = page.locator('x');
+  // 专用 desc 编辑器 locator：count=1 表示新版结构存在
+  const descLocator: any = {
+    ...sharedLocator,
+    count: vi.fn().mockResolvedValue(1),
+    click: vi.fn().mockResolvedValue(undefined),
+  };
+  page.locator = vi.fn((sel: string) =>
+    sel === '#work-description-edit' ? descLocator : sharedLocator,
+  );
+
+  await uploadKuaishouVideo(page as any, UPLOAD_OPTS as any);
+
+  expect(descLocator.click).toHaveBeenCalled();
+}, 10_000);
+
+it('发布点击后始终未跳转到管理页 → 有界超时抛错而非无限挂起', async () => {
+  vi.useFakeTimers();
+  try {
+    const page = makeMockPage();
+    // 首次 waitForURL（进上传页）成功，发布循环里的 waitForURL 永远失败
+    page.waitForURL = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error('nav timeout'));
+
+    const promise = uploadKuaishouVideo(page as any, UPLOAD_OPTS as any);
+    // 报错必须携带现场证据（最后一轮异常），便于远程诊断
+    const assertion = expect(promise).rejects.toThrow(/快手发布确认超时.*最后一轮异常/);
+    await vi.runAllTimersAsync();
+    await assertion;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('上传按钮超时但未登录标记不存在（页面结构变化）→ 原样抛出超时错误', async () => {
+  const page = makeMockPage();
+  page.locator('x').waitFor.mockRejectedValue(
+    new Error("locator.waitFor: Timeout 10000ms exceeded"),
+  );
+  // 「机构服务」标记不存在 → waitForSelector 超时 reject
+  page.waitForSelector.mockRejectedValue(new Error('waitForSelector: Timeout 5000ms exceeded'));
+
+  await expect(uploadKuaishouVideo(page as any, UPLOAD_OPTS as any)).rejects.toThrow(
+    'locator.waitFor: Timeout 10000ms exceeded',
+  );
+});

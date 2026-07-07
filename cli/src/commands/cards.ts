@@ -38,8 +38,6 @@ export async function runCardsCommand(
       if (typeof flags['visual-type'] === 'string') payload.visualType = flags['visual-type'];
       return client.call('lingji_get_card_context', payload);
     }
-    case 'gen':
-      return runGenerationCommand({ toolName: 'lingji_analyze_subtitles', flags, client });
     case 'list': {
       const projectPath = await resolveProjectPath(flags, client);
       return client.call('lingji_list_cards', { projectPath });
@@ -86,6 +84,6 @@ export async function runCardsCommand(
       return runGenerationCommand({ toolName: 'lingji_convert_card', flags, client, extraArgs: { cardId: requireId(positionals), to } });
     }
     default:
-      throw new CliError(`未知 cards 子命令: ${action ?? '(空)'}（支持 context/gen/list/show/update/validate/regenerate/sculpt/regen-media/convert/delete）`, 'bad_args', 2);
+      throw new CliError(`未知 cards 子命令: ${action ?? '(空)'}（支持 context/list/show/update/validate/regenerate/sculpt/regen-media/convert/delete；生成卡片用 subtitle analyze）`, 'bad_args', 2);
   }
 }

@@ -17,8 +17,6 @@ function settings(): AISettings {
     llmBaseUrl: '',
     llmApiKey: '',
     llmModel: '',
-    jimengApiUrl: '',
-    jimengSessionId: '',
     minimaxApiKey: '',
     minimaxVoiceId: '',
     minimaxSpeed: 1,

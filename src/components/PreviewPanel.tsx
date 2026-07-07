@@ -7,6 +7,10 @@ import { Button, Card, Tooltip, TooltipContent, TooltipTrigger } from '../ui';
 import { AppIcon } from './AppIcon';
 import { CanvasInteractionLayer } from './CanvasInteractionLayer';
 import { RemotionPreviewPlayer, type RemotionPreviewHandle } from './RemotionPreviewPlayer';
+import {
+  SourceAssetPreviewPlayer,
+  type SourcePreviewAsset,
+} from './SourceAssetPreviewPlayer';
 import type { OverlayPosition } from '../types';
 import styles from './PreviewPanel.module.css';
 
@@ -24,6 +28,8 @@ interface PreviewPanelProps {
   durationMs: number;
   compact: boolean;
   selectedOverlayId?: string | null;
+  sourcePreviewAsset?: SourcePreviewAsset | null;
+  onCloseSourcePreview?: () => void;
   onSelectOverlay?: (overlayId: string | null) => void;
   onUpdateOverlayPosition?: (overlayId: string, position: OverlayPosition) => void;
   onPreviewTimeUpdate: (timeMs: number) => void;
@@ -43,6 +49,8 @@ function PreviewPanelComponent({
   durationMs,
   compact,
   selectedOverlayId,
+  sourcePreviewAsset,
+  onCloseSourcePreview,
   onSelectOverlay,
   onUpdateOverlayPosition,
   onPreviewTimeUpdate,
@@ -75,6 +83,8 @@ function PreviewPanelComponent({
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [progressHover, setProgressHover] = useState<{ timeMs: number; x: number } | null>(null);
+  const [sourceTimeMs, setSourceTimeMs] = useState(0);
+  const [sourceIsPlaying, setSourceIsPlaying] = useState(false);
   const progressTrackRef = useRef<HTMLDivElement>(null);
   const isSeekingRef = useRef(false);
   const volumeTrackRef = useRef<HTMLDivElement>(null);
@@ -103,6 +113,11 @@ function PreviewPanelComponent({
     return () => cancelAnimationFrame(raf);
   }, [playerRef, volume, muted]);
 
+  useEffect(() => {
+    setSourceTimeMs(0);
+    setSourceIsPlaying(false);
+  }, [sourcePreviewAsset?.path]);
+
   const handleToggleMute = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
@@ -125,19 +140,29 @@ function PreviewPanelComponent({
   const computeSeekMsFromEvent = useCallback(
     (clientX: number) => {
       const track = progressTrackRef.current;
-      if (!track || durationMs <= 0) return null;
+      const activeDurationMs = sourcePreviewAsset
+        ? sourcePreviewAsset.type === 'video'
+          ? sourcePreviewAsset.durationMs
+          : 0
+        : durationMs;
+      if (!track || activeDurationMs <= 0) return null;
       const rect = track.getBoundingClientRect();
       if (rect.width <= 0) return null;
       const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      return ratio * durationMs;
+      return ratio * activeDurationMs;
     },
-    [durationMs],
+    [durationMs, sourcePreviewAsset],
   );
 
   const updateProgressHoverFromEvent = useCallback(
     (clientX: number) => {
       const track = progressTrackRef.current;
-      if (!track || durationMs <= 0) {
+      const activeDurationMs = sourcePreviewAsset
+        ? sourcePreviewAsset.type === 'video'
+          ? sourcePreviewAsset.durationMs
+          : 0
+        : durationMs;
+      if (!track || activeDurationMs <= 0) {
         setProgressHover(null);
         return;
       }
@@ -148,35 +173,62 @@ function PreviewPanelComponent({
       }
       const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
       const ratio = offsetX / rect.width;
-      setProgressHover({ timeMs: ratio * durationMs, x: offsetX });
+      setProgressHover({ timeMs: ratio * activeDurationMs, x: offsetX });
     },
-    [durationMs],
+    [durationMs, sourcePreviewAsset],
+  );
+
+  const handleActiveSeek = useCallback(
+    (targetMs: number) => {
+      if (sourcePreviewAsset) {
+        playerRef.current?.seekToMs(targetMs);
+        setSourceTimeMs(targetMs);
+        return;
+      }
+
+      onSeek?.(targetMs);
+    },
+    [onSeek, playerRef, sourcePreviewAsset],
   );
 
   const handleProgressPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!onSeek || durationMs <= 0) return;
+      const activeDurationMs = sourcePreviewAsset
+        ? sourcePreviewAsset.type === 'video'
+          ? sourcePreviewAsset.durationMs
+          : 0
+        : durationMs;
+      if (activeDurationMs <= 0) return;
       event.preventDefault();
       const target = event.currentTarget;
       target.setPointerCapture(event.pointerId);
       isSeekingRef.current = true;
-      onSeekStart?.();
+      if (!sourcePreviewAsset) {
+        onSeekStart?.();
+      }
 
       const seekFrom = computeSeekMsFromEvent(event.clientX);
-      if (seekFrom !== null) onSeek(seekFrom);
+      if (seekFrom !== null) handleActiveSeek(seekFrom);
       updateProgressHoverFromEvent(event.clientX);
     },
-    [computeSeekMsFromEvent, durationMs, onSeek, onSeekStart, updateProgressHoverFromEvent],
+    [
+      computeSeekMsFromEvent,
+      durationMs,
+      handleActiveSeek,
+      onSeekStart,
+      sourcePreviewAsset,
+      updateProgressHoverFromEvent,
+    ],
   );
 
   const handleProgressPointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       updateProgressHoverFromEvent(event.clientX);
-      if (!isSeekingRef.current || !onSeek) return;
+      if (!isSeekingRef.current) return;
       const next = computeSeekMsFromEvent(event.clientX);
-      if (next !== null) onSeek(next);
+      if (next !== null) handleActiveSeek(next);
     },
-    [computeSeekMsFromEvent, onSeek, updateProgressHoverFromEvent],
+    [computeSeekMsFromEvent, handleActiveSeek, updateProgressHoverFromEvent],
   );
 
   const handleProgressPointerUp = useCallback(
@@ -187,9 +239,11 @@ function PreviewPanelComponent({
       if (target.hasPointerCapture(event.pointerId)) {
         target.releasePointerCapture(event.pointerId);
       }
-      onSeekEnd?.();
+      if (!sourcePreviewAsset) {
+        onSeekEnd?.();
+      }
     },
-    [onSeekEnd],
+    [onSeekEnd, sourcePreviewAsset],
   );
 
   const handleProgressPointerEnter = useCallback(
@@ -247,7 +301,17 @@ function PreviewPanelComponent({
     [],
   );
 
-  const progressPercent = durationMs > 0 ? Math.max(0, Math.min(100, (currentTimeMs / durationMs) * 100)) : 0;
+  const activeTimeMs = sourcePreviewAsset ? sourceTimeMs : currentTimeMs;
+  const activeDurationMs = sourcePreviewAsset
+    ? sourcePreviewAsset.type === 'video'
+      ? sourcePreviewAsset.durationMs
+      : 0
+    : durationMs;
+  const activeIsPlaying = sourcePreviewAsset ? sourceIsPlaying : isPlaying;
+  const canPlayActivePreview = !sourcePreviewAsset || sourcePreviewAsset.type === 'video';
+  const progressPercent = activeDurationMs > 0
+    ? Math.max(0, Math.min(100, (activeTimeMs / activeDurationMs) * 100))
+    : 0;
   const volumePercent = (muted ? 0 : volume) * 100;
   const volumeIconName = muted || volume === 0
     ? 'volume-x'
@@ -264,6 +328,13 @@ function PreviewPanelComponent({
       document.exitFullscreen();
     }
   }, []);
+
+  const stageFrameStyle = sourcePreviewAsset
+    ? { width: '100%', height: '100%' }
+    : {
+        width: Math.max(0, stageSize.width),
+        height: Math.max(0, stageSize.height),
+      };
 
   useEffect(() => {
     const container = previewAreaRef.current;
@@ -297,23 +368,49 @@ function PreviewPanelComponent({
     <Card ref={cardRef} className={styles.root}>
       {/* Header */}
       <div className={styles.header}>
-        <span className={styles.headerTitle}>预览</span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className={styles.resolutionPill}
-              aria-label={`分辨率 ${timeline.width}×${timeline.height}，帧率 ${fps}`}
-            >
-              <AppIcon name="monitor" size={12} />
-              <span>{timeline.width}×{timeline.height}</span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {`分辨率: ${timeline.width}×${timeline.height} · ${fps}fps`}
-          </TooltipContent>
-        </Tooltip>
+        <div className={styles.headerTitleGroup}>
+          <span className={styles.headerTitle}>
+            {sourcePreviewAsset ? '素材预览' : '预览'}
+          </span>
+          {sourcePreviewAsset ? (
+            <span className={styles.sourceTitle} title={sourcePreviewAsset.name}>
+              {sourcePreviewAsset.name}
+            </span>
+          ) : null}
+        </div>
+        {sourcePreviewAsset ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={styles.closeSourceButton}
+                aria-label="关闭素材预览"
+                onClick={onCloseSourcePreview}
+              >
+                <AppIcon name="x" size={14} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">关闭素材预览</TooltipContent>
+          </Tooltip>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={styles.resolutionPill}
+                aria-label={`分辨率 ${timeline.width}×${timeline.height}，帧率 ${fps}`}
+              >
+                <AppIcon name="monitor" size={12} />
+                <span>{timeline.width}×{timeline.height}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {`分辨率: ${timeline.width}×${timeline.height} · ${fps}fps`}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
       {/* Stage 区域 */}
@@ -325,25 +422,37 @@ function PreviewPanelComponent({
         <div
           ref={stageFrameRef}
           className={styles.stageFrame}
-          style={{
-            width: Math.max(0, stageSize.width),
-            height: Math.max(0, stageSize.height),
-          }}
+          style={stageFrameStyle}
         >
-          <RemotionPreviewPlayer
-            key={timeline.podcast.audioPath || 'empty'}
-            ref={playerRef}
-            timeline={timeline}
-            srtEntries={srtEntries}
-            projectDir={projectDir}
-            currentTimeMs={currentTimeMs}
-            isPlaying={isPlaying}
-            onTimeUpdate={onPreviewTimeUpdate}
-            onPlay={onPreviewPlay}
-            onPause={onPreviewPause}
-            onEnded={onPreviewEnded}
-          />
-          {onSelectOverlay && (
+          {sourcePreviewAsset ? (
+            <SourceAssetPreviewPlayer
+              key={sourcePreviewAsset.path}
+              ref={playerRef}
+              asset={sourcePreviewAsset}
+              onTimeUpdate={setSourceTimeMs}
+              onPlay={() => setSourceIsPlaying(true)}
+              onPause={() => setSourceIsPlaying(false)}
+              onEnded={() => {
+                setSourceIsPlaying(false);
+                setSourceTimeMs(sourcePreviewAsset.durationMs);
+              }}
+            />
+          ) : (
+            <RemotionPreviewPlayer
+              key={timeline.podcast.audioPath || 'empty'}
+              ref={playerRef}
+              timeline={timeline}
+              srtEntries={srtEntries}
+              projectDir={projectDir}
+              currentTimeMs={currentTimeMs}
+              isPlaying={isPlaying}
+              onTimeUpdate={onPreviewTimeUpdate}
+              onPlay={onPreviewPlay}
+              onPause={onPreviewPause}
+              onEnded={onPreviewEnded}
+            />
+          )}
+          {!sourcePreviewAsset && onSelectOverlay && (
             <CanvasInteractionLayer
               overlays={timeline.overlays}
               selectedOverlayId={selectedOverlayId ?? null}
@@ -367,8 +476,8 @@ function PreviewPanelComponent({
           role="slider"
           aria-label="播放进度"
           aria-valuemin={0}
-          aria-valuemax={Math.max(0, Math.round(durationMs))}
-          aria-valuenow={Math.round(currentTimeMs)}
+          aria-valuemax={Math.max(0, Math.round(activeDurationMs))}
+          aria-valuenow={Math.round(activeTimeMs)}
           onPointerDown={handleProgressPointerDown}
           onPointerMove={handleProgressPointerMove}
           onPointerUp={handleProgressPointerUp}
@@ -378,7 +487,7 @@ function PreviewPanelComponent({
         >
           <div className={styles.progressFilled} style={{ width: `${progressPercent}%` }} />
           <div className={styles.progressThumb} style={{ left: `${progressPercent}%` }} />
-          {progressHover && durationMs > 0 ? (
+          {progressHover && activeDurationMs > 0 ? (
             <div
               className={styles.progressHoverTooltip}
               style={{ left: `${progressHover.x}px` }}
@@ -437,9 +546,9 @@ function PreviewPanelComponent({
                 </div>
               </div>
             </div>
-            <span className={styles.timeCurrentLabel}>{formatTime(currentTimeMs)}</span>
+            <span className={styles.timeCurrentLabel}>{formatTime(activeTimeMs)}</span>
             <span className={styles.timeSeparator}>/</span>
-            <span className={styles.timeTotalLabel}>{formatTime(durationMs)}</span>
+            <span className={styles.timeTotalLabel}>{formatTime(activeDurationMs)}</span>
           </div>
 
         {/* 中段 — 播放控件 */}
@@ -459,15 +568,16 @@ function PreviewPanelComponent({
                 size="icon"
                 className={styles.playButton}
                 onClick={onTogglePlay}
-                aria-label={isPlaying ? '暂停' : '播放'}
+                aria-label={activeIsPlaying ? '暂停' : '播放'}
+                disabled={!canPlayActivePreview}
               >
-                {isPlaying
+                {activeIsPlaying
                   ? <AppIcon name="pause" size={18} className={styles.playIcon} />
                   : <AppIcon name="play" size={18} className={styles.playIcon} />
                 }
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">{isPlaying ? '暂停' : '播放'}</TooltipContent>
+            <TooltipContent side="top">{activeIsPlaying ? '暂停' : '播放'}</TooltipContent>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>

@@ -115,8 +115,6 @@ describe('AI type definitions', () => {
       llmBaseUrl: 'https://api.openai.com/v1',
       llmApiKey: 'sk-test',
       llmModel: 'gpt-4o',
-      jimengApiUrl: 'https://jimeng.example.com',
-      jimengSessionId: 'session-test',
     };
 
     expect(settings.llmBaseUrl).toContain('openai');

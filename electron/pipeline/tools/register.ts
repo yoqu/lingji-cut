@@ -1,12 +1,13 @@
 import path from 'node:path';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ToolRegistrar } from '../../control/registry';
 import { getPipelineService } from '..';
 import {
   createProject,
   openProject,
   getProjectState,
   getSettings,
+  updateSettings,
 } from './project-tools';
 import { buildTaskTools } from './task-tools';
 import { getActiveProjectPath } from '../context';
@@ -49,7 +50,7 @@ function pipelineErrorMessage(err: unknown): string {
 }
 
 export function registerPipelineMcpTools(
-  server: McpServer,
+  server: ToolRegistrar,
   getMainWindow: () => import('electron').BrowserWindow | null,
   getUserDataPath: () => string,
 ): void {
@@ -137,6 +138,27 @@ export function registerPipelineMcpTools(
     async () => {
       try {
         return jsonResult(await getSettings({ userDataPath: getUserDataPath() }));
+      } catch (err) {
+        return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    'lingji_update_settings',
+    {
+      title: '更新应用默认设置',
+      description:
+        '白名单字段写入全局设置（默认 Provider/模型、TTS 参数）；拒绝密钥类字段。已打开的设置页需重新进入后可见。',
+      inputSchema: {
+        updates: z
+          .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+          .describe('要更新的字段键值对（仅白名单字段生效）'),
+      },
+    },
+    async ({ updates }) => {
+      try {
+        return jsonResult(await updateSettings({ userDataPath: getUserDataPath(), updates }));
       } catch (err) {
         return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
       }

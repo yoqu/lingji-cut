@@ -1,8 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  buildPathWithRuntimeBinaries,
-  resolveChromePath,
   resolveFfmpegPath,
   resolveFfprobePath,
   resolveGsapPath,
@@ -122,85 +120,5 @@ describe('runtime binary resolution', () => {
     });
 
     expect(resolved).toBe(ffprobePath);
-  });
-
-  it('prepends unique binary directories to PATH', () => {
-    const nextPath = buildPathWithRuntimeBinaries('/usr/bin', [
-      '/runtime/ffmpeg-static/ffmpeg',
-      '/runtime/ffmpeg-static/ffmpeg',
-      '/runtime/@ffprobe-installer/darwin-arm64/ffprobe',
-      null,
-    ]);
-
-    expect(nextPath).toBe(
-      [
-        '/runtime/ffmpeg-static',
-        '/runtime/@ffprobe-installer/darwin-arm64',
-        '/usr/bin',
-      ].join(path.delimiter),
-    );
-  });
-
-  it('resolves Chrome from HyperFrames browser environment first', () => {
-    const chromePath = '/portable/chrome-headless-shell';
-    const resolved = resolveChromePath({
-      appPath: '/workspace',
-      resourcesPath: '',
-      cwd: '/workspace',
-      moduleDir: '/workspace/dist-electron',
-      env: { HYPERFRAMES_BROWSER_PATH: chromePath },
-      existsSync: (candidate) => candidate === chromePath,
-    });
-
-    expect(resolved).toEqual({ executablePath: chromePath, source: 'env' });
-  });
-
-  it('resolves Chrome Headless Shell from the user cache', () => {
-    const chromePath = path.join(
-      '/home/demo',
-      '.cache',
-      'puppeteer',
-      'chrome-headless-shell',
-      '148.0.7778.97',
-      'chrome-headless-shell-linux64',
-      'chrome-headless-shell',
-    );
-    const resolved = resolveChromePath({
-      appPath: '/workspace',
-      resourcesPath: '',
-      cwd: '/workspace',
-      moduleDir: '/workspace/dist-electron',
-      platform: 'linux',
-      arch: 'x64',
-      homeDir: '/home/demo',
-      env: {},
-      existsSync: (candidate) => candidate === chromePath,
-      readdirSync: (candidate) =>
-        candidate.endsWith('chrome-headless-shell') ? ['120.0.0.0', '148.0.7778.97'] : [],
-    });
-
-    expect(resolved).toEqual({ executablePath: chromePath, source: 'cache' });
-  });
-
-  it('resolves system Chrome candidates on Windows', () => {
-    const chromePath = path.join(
-      'C:/Program Files',
-      'Google',
-      'Chrome',
-      'Application',
-      'chrome.exe',
-    );
-    const resolved = resolveChromePath({
-      appPath: 'C:/app/resources/app.asar',
-      resourcesPath: 'C:/app/resources',
-      cwd: 'C:/workspace',
-      moduleDir: 'C:/app/resources/app.asar/dist-electron',
-      platform: 'win32',
-      arch: 'x64',
-      env: { PROGRAMFILES: 'C:/Program Files' },
-      existsSync: (candidate) => candidate === chromePath,
-    });
-
-    expect(resolved).toEqual({ executablePath: chromePath, source: 'system' });
   });
 });

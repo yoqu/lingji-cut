@@ -13,7 +13,6 @@ import { normalizeTTSSettings } from '../lib/tts-settings';
 import { loadGlobalSettingsFile, updateGlobalSettingsFile } from '../lib/global-settings-client';
 import {
   DEFAULT_CARD_STYLE,
-  DEFAULT_JIMENG_MODEL,
   DEFAULT_STYLE_PRESET_ID,
   getDefaultTemplate,
   buildAICardTimelineDraft,
@@ -78,8 +77,6 @@ export const DEFAULT_WORKFLOW: WorkflowState = {
   canCancel: false,
   failedStep: null,
 };
-
-const AI_SETTINGS_LEGACY_KEY = 'podcast-editor-ai-settings';
 
 const MEDIA_DEFAULT_DURATION_MS: Record<'image' | 'video', number> = {
   image: 5_000,
@@ -169,9 +166,6 @@ export function buildDefaultAISettings(): AISettings {
     defaultProviderId: null,
     defaultModel: null,
     enableThinking: true,
-    jimengApiUrl: '',
-    jimengSessionId: '',
-    jimengModel: DEFAULT_JIMENG_MODEL,
     minimaxApiKey: '',
     minimaxVoiceId: 'male-qn-qingse',
     minimaxSpeed: 1.0,
@@ -1043,7 +1037,6 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
     defaultProviderId: raw.defaultProviderId ?? null,
     defaultModel: raw.defaultModel ?? null,
     enableThinking: raw.enableThinking ?? true,
-    jimengModel: raw.jimengModel?.trim() || DEFAULT_JIMENG_MODEL,
     minimaxApiKey: raw.minimaxApiKey ?? '',
     minimaxVoiceId: raw.minimaxVoiceId ?? 'male-qn-qingse',
     minimaxSpeed: raw.minimaxSpeed ?? 1.0,
@@ -1073,48 +1066,25 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
 }
 
 export async function loadAISettings(): Promise<AISettings | null> {
-  // 优先从 Electron 全局存储读取
-  if (typeof window !== 'undefined' && window.electronAPI) {
-    try {
-      const file = await loadGlobalSettingsFile();
-      if (file?.aiSettings) {
-        const settings = normalizeRawAISettings(file.aiSettings);
-        // 迁移链改变了持久化形态时回写一次。归一化会新建数组，引用比较永真，
-        // 这里用结构比较；加载每次仅一回，序列化开销可忽略。
-        if (JSON.stringify(settings) !== JSON.stringify(file.aiSettings)) {
-          void saveAISettings(settings);
-        }
-        return settings;
-      }
-    } catch {
-      // fallthrough to legacy
+  if (typeof window === 'undefined' || !window.electronAPI) return null;
+  try {
+    const file = await loadGlobalSettingsFile();
+    if (!file?.aiSettings) return null;
+    const settings = normalizeRawAISettings(file.aiSettings);
+    // 迁移链改变了持久化形态时回写一次。归一化会新建数组，引用比较永真，
+    // 这里用结构比较；加载每次仅一回，序列化开销可忽略。
+    if (JSON.stringify(settings) !== JSON.stringify(file.aiSettings)) {
+      void saveAISettings(settings);
     }
+    return settings;
+  } catch (error) {
+    console.warn('[ai-settings] 读取全局设置失败', error);
+    return null;
   }
-
-  // 兼容：从 localStorage 读取旧数据并自动迁移
-  if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
-    const rawValue = window.localStorage.getItem(AI_SETTINGS_LEGACY_KEY);
-    if (rawValue) {
-      try {
-        const settings = normalizeRawAISettings(JSON.parse(rawValue) as AISettings);
-        // 自动迁移到 Electron 全局存储（saveAISettings 会刷新缓存）
-        await saveAISettings(settings);
-        window.localStorage.removeItem(AI_SETTINGS_LEGACY_KEY);
-        return settings;
-      } catch {
-        return null;
-      }
-    }
-  }
-
-  return null;
 }
 
 export async function saveAISettings(settings: AISettings): Promise<void> {
-  const normalized: AISettings = normalizeTTSSettings({
-    ...settings,
-    jimengModel: settings.jimengModel?.trim() || DEFAULT_JIMENG_MODEL,
-  });
+  const normalized: AISettings = normalizeTTSSettings(settings);
   if (typeof window !== 'undefined' && window.electronAPI) {
     await updateGlobalSettingsFile((current) => ({
       ...current,

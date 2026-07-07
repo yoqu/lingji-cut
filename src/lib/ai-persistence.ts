@@ -67,8 +67,6 @@ function isAICard(value: unknown): value is AICard {
     return false;
   }
 
-  // 历史工程中可能遗留 renderMode === 'web-card' 的卡片：直接视为合法读入，
-  // 随后由调用方在规范化层按 legacy 处理——用户已明确不保留 Web Card 兼容性。
   return (
     typeof value.id === 'string' &&
     typeof value.segmentId === 'string' &&

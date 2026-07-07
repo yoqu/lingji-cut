@@ -444,21 +444,6 @@
   animation: cursorFadeIn 0.3s ease-out;
 }
 
-/* AI 铁律：审稿浮动指针标签，绿色 #34d399 保留 */
-.aiReviewCursorLabel {
-  position: absolute;
-  bottom: -2px;
-  left: 14px;
-  font-size: var(--font-size-xs);
-  font-weight: 700;
-  color: var(--color-text-primary);
-  background: rgba(52, 211, 153, 0.85);
-  padding: 1px 4px;
-  border-radius: var(--radius-sm);
-  line-height: 1.2;
-  letter-spacing: 0.5px;
-}
-
 @keyframes cursorFadeIn {
   from {
     opacity: 0;

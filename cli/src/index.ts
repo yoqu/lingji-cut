@@ -1,8 +1,9 @@
 // cli/src/index.ts
 import { parseArgs } from './args';
-import { resolveServerUrl } from './endpoint';
+import { resolveEndpoint } from './endpoint';
 import { connectClient, type ToolCaller } from './client';
 import { output } from './format';
+import { buildHelp } from './manifest';
 import { runProjectCommand } from './commands/project';
 import { runTaskCommand } from './commands/task';
 import { runAudioCommand } from './commands/audio';
@@ -11,31 +12,13 @@ import { runCardsCommand } from './commands/cards';
 import { runCoverCommand } from './commands/cover';
 import { runEditCommand } from './commands/edit';
 import { runExportCommand } from './commands/export';
+import { runStateCommand } from './commands/state';
+import { runImportCommand } from './commands/import';
+import { runScriptCommand } from './commands/script';
+import { runSettingsCommand } from './commands/settings';
+import { runRunCommand } from './commands/run';
+import { runPublishCommand } from './commands/publish';
 import { CliError } from './errors';
-
-const HELP = `灵机 CLI (lingji)
-
-用法:
-  lingji project current            显示应用当前活动项目
-  lingji project list               列出最近项目
-  lingji project open <path>        校验并显示项目状态
-  lingji task status <id>           查询任务状态
-  lingji task list [--project <p>]  列出任务
-  lingji task cancel <id>           取消任务
-  lingji task wait <id>             轮询任务直到完成
-  lingji audio gen [--project <p>] [--wait]   生成口播音频(TTS)
-  lingji subtitle analyze [--wait]            字幕分析 + 卡片生成
-  lingji edit lock --scope video|script [--project <p>] [--reason <text>]
-  lingji edit unlock|heartbeat|status [--project <p>]
-  lingji cards context [--card <id>|--segment <id>] [--visual-type motion|image]
-  lingji cards gen|list|show|update|validate|regenerate|regen-media|convert|delete [<cardId>] [字段/--to/--wait]
-  lingji cover prompt|image|gen [--wait]      封面提示词 / 出图 / 一次性
-  lingji export [--out <file>] [--wait]       导出 MP4
-
-全局开关:
-  --json                JSON 输出
-  --server <url>        覆盖 MCP 服务地址
-`;
 
 async function dispatch(
   group: string,
@@ -46,7 +29,7 @@ async function dispatch(
 ): Promise<unknown> {
   switch (group) {
     case 'project':
-      return runProjectCommand(action, positionals, client);
+      return runProjectCommand(action, positionals, flags, client);
     case 'task':
       return runTaskCommand(action, positionals, flags, client);
     case 'audio':
@@ -61,8 +44,24 @@ async function dispatch(
       return runEditCommand(action, flags, client);
     case 'export':
       return runExportCommand(flags, client);
+    case 'state':
+      return runStateCommand(flags, client);
+    case 'import':
+      return runImportCommand(action, flags, client);
+    case 'script':
+      return runScriptCommand(action, positionals, client);
+    case 'settings':
+      return runSettingsCommand(action, positionals, client);
+    case 'run':
+      return runRunCommand(flags, client);
+    case 'publish':
+      return runPublishCommand(action, positionals, flags, client);
     default:
-      throw new CliError(`未知命令组: ${group}（支持 project/task/audio/subtitle/edit/cards/cover/export）`, 'bad_args', 2);
+      throw new CliError(
+        `未知命令组: ${group}（支持 project/state/import/script/task/audio/subtitle/edit/cards/cover/publish/settings/run/export）`,
+        'bad_args',
+        2,
+      );
   }
 }
 
@@ -82,17 +81,18 @@ export async function main(argv: string[]): Promise<number> {
   const json = parsed.flags.json === true;
 
   if (!parsed.group || parsed.group === 'help' || parsed.flags.help === true) {
-    process.stdout.write(HELP);
+    process.stdout.write(buildHelp());
     return 0;
   }
 
-  const url = resolveServerUrl({
+  const endpoint = resolveEndpoint({
     serverFlag: typeof parsed.flags.server === 'string' ? parsed.flags.server : undefined,
+    tokenFlag: typeof parsed.flags.token === 'string' ? parsed.flags.token : undefined,
   });
 
   let client: ToolCaller;
   try {
-    client = await connectClient(url);
+    client = await connectClient(endpoint);
   } catch (err) {
     return fail(err, json);
   }

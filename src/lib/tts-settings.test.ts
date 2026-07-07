@@ -10,8 +10,6 @@ function baseSettings(overrides: Partial<AISettings> = {}): AISettings {
     llmBaseUrl: '',
     llmApiKey: '',
     llmModel: '',
-    jimengApiUrl: '',
-    jimengSessionId: '',
     minimaxApiKey: 'legacy-key',
     minimaxVoiceId: 'male-qn-qingse',
     minimaxSpeed: 1.2,

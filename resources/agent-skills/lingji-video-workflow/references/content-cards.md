@@ -100,7 +100,7 @@ node "$LINGJI_CLI" cards validate <cardId> --project <projectDir> --json
 修改 Motion Card 内容后，编辑器必须实时呈现最新卡片，无需重开项目。两条修改路径各自的刷新方式：
 
 - **精雕 motion 卡**：`cards sculpt <cardId> [--notes "<要求>"] --wait`（→ `lingji_sculpt_card`）对现有 motion 卡做多 agent 精雕：导演诊断现有 motionCard.tsx 的编排问题 → 雕刻修改 → 渲染验证 → 审查回炉（≤2 轮）。适合"动画像 PPT / 缓动单调 / 节奏不跟口播"这类质量问题；重生成（regenerate）同样走多 agent 引擎，但从头出卡。耗时分钟级，务必 `--wait` 或轮询 task。
-- **CLI / MCP 卡片工具**（`cards regenerate` / `cards convert` / `cards update` → `lingji_regenerate_card` / `lingji_convert_card` / `lingji_update_card`）：工具写回 `aiAnalysis` 后会自动发出 `pipeline:project-updated` 信号，编辑器据此把更新后的卡片重新灌回已放置的 timeline overlay（含 `motionCard.tsx`、时间、展示模式）。**优先使用这些工具改卡**，刷新全自动。
+- **CLI 卡片命令**（`cards regenerate` / `cards convert` / `cards update`）：工具写回 `aiAnalysis` 后会自动发出 `pipeline:project-updated` 信号，编辑器据此把更新后的卡片重新灌回已放置的 timeline overlay（含 `motionCard.tsx`、时间、展示模式）。**优先使用这些命令改卡**，刷新全自动。
 - **file-first 直接改 `ai-cards/<overlayId>/motionCard.tsx`**：编辑器在项目打开期间常驻文件监听，保存即触发对应 overlay 的预览热重载。路径必须用 **overlayId**（见 `video-editing.md`），否则改了不生效。
 
 刷新失败的排查顺序：① 路径是否用了 overlayId 而非 cardId；② 该卡是否已放置到时间轴（未放置的卡只更新列表数据，时间轴无对应 overlay）；③ 改动是否落盘成功（`cards validate` 复核）。

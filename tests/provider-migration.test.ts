@@ -10,8 +10,6 @@ const baseSettings: AISettings = {
   llmApiKey: '',
   llmModel: '',
   enableThinking: true,
-  jimengApiUrl: '',
-  jimengSessionId: '',
   minimaxApiKey: '',
   minimaxVoiceId: 'male-qn-qingse',
   minimaxSpeed: 1.0,

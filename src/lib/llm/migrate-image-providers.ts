@@ -1,4 +1,4 @@
-import { DEFAULT_JIMENG_MODEL, type AISettings, type ImageProvider, type ImageProviderType } from '../../types/ai';
+import type { AISettings, ImageProviderType } from '../../types/ai';
 
 // 各 provider 类型的默认模型列表（避免跨越 web ↔ node 边界依赖 image-gen registry）
 const DEFAULT_MODELS: Record<ImageProviderType, string[]> = {
@@ -49,44 +49,16 @@ export function migrateImageProvidersV2(settings: AISettings): AISettings {
 export function migrateImageProviders(settings: AISettings): AISettings {
   if (settings.imageProviders?.length) return migrateImageProvidersV2(settings);
 
-  const hasJimengConfig = Boolean(
-    settings.jimengApiUrl?.trim() || settings.jimengSessionId?.trim(),
-  );
-
-  if (!hasJimengConfig) {
-    const alreadyHasDefaults =
-      Array.isArray(settings.imageProviders) &&
-      settings.imageProviders.length === 0 &&
-      settings.defaultImageProviderId === null &&
-      settings.defaultImageModel === null;
-    if (alreadyHasDefaults) return settings;
-    return {
-      ...settings,
-      imageProviders: [],
-      defaultImageProviderId: null,
-      defaultImageModel: null,
-    };
-  }
-
-  const model = settings.jimengModel?.trim() || DEFAULT_JIMENG_MODEL;
-  const jimeng: ImageProvider = {
-    id: 'jimeng-default',
-    name: '即梦',
-    type: 'jimeng',
-    baseUrl: settings.jimengApiUrl ?? '',
-    apiKey: settings.jimengSessionId ?? '',
-    models: [model],
-  };
-
-  const result: AISettings = {
+  const alreadyHasDefaults =
+    Array.isArray(settings.imageProviders) &&
+    settings.imageProviders.length === 0 &&
+    settings.defaultImageProviderId === null &&
+    settings.defaultImageModel === null;
+  if (alreadyHasDefaults) return settings;
+  return {
     ...settings,
-    imageProviders: [jimeng],
-    defaultImageProviderId: jimeng.id,
-    defaultImageModel: model,
-    jimengApiUrl: '',
-    jimengSessionId: '',
-    jimengModel: '',
+    imageProviders: [],
+    defaultImageProviderId: null,
+    defaultImageModel: null,
   };
-
-  return migrateImageProvidersV2(result);
 }

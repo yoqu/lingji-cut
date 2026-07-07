@@ -4,10 +4,10 @@
 
 ## 可编辑文件
 
-- `<projectDir>/project.json` → only the `timeline` section.
-- `<projectDir>/ai-cards/<overlayId>/motionCard.tsx` → Motion Card Remotion source.
+- `<projectDir>/project.json` → 仅 `timeline` 段。
+- `<projectDir>/ai-cards/<overlayId>/motionCard.tsx` → Motion Card Remotion 源码。
 
-Do not edit generated media artifacts: `podcast-audio.mp3`, `podcast-subtitles*.srt`, `covers/`, `ai-cards/<id>/image.png`, or rendered MP4 files.
+不要编辑生成产物：`podcast-audio.mp3`、`podcast-subtitles*.srt`、`covers/`、`ai-cards/<id>/image.png`、渲染出的 MP4。
 
 ## CLI 锁定与结果协议
 
@@ -31,23 +31,21 @@ node "$LINGJI_CLI" edit unlock --project <projectDir> --json
 
 锁定后，应用会禁用内容编辑界面，AI 面板仍可查看。`.lingji/edit-lock.json` 只是应用写出的兼容信号，不再由 agent 直接维护。
 
-After editing `project.json`, read `<projectDir>/.lingji/edit-result.json`. If `ok:false`, fix the listed `errors[].field` / `errors[].message`, rewrite `project.json`, and check again until `ok:true`. Editing `motionCard.tsx` does not produce this result file.
+写入 `project.json` 后读取 `<projectDir>/.lingji/edit-result.json`；若 `ok:false`，按 `errors[].field` / `errors[].message` 修复并重写，直到 `ok:true`。编辑 `motionCard.tsx` 不产生该结果文件。
 
-## Project JSON Boundaries
+## project.json 边界
 
-Only edit `timeline`. Do not hand-edit top-level `aiAnalysis` or `script` while doing video-domain work.
+只编辑 `timeline`。做视频域工作时不要手改顶层 `aiAnalysis` 或 `script`。`timeline.overlays[]` 常用可编辑字段：
 
-Common editable fields in `timeline.overlays[]`:
+- `startMs`、`durationMs`：毫秒；`startMs >= 0`，`durationMs > 0`。
+- `position`：`{ "x", "y", "width", "height" }`，画布像素。
+- `motion`：overlay 进/出/循环动画。
+- `textData`：文字 overlay 的内容、字体、颜色、阴影、描边、透明度、旋转与文字动画。
+- `audioData`：音频 overlay 的音量、淡入淡出、裁剪起点、源时长、静音。
 
-- `startMs`, `durationMs`: milliseconds; `startMs >= 0`, `durationMs > 0`.
-- `position`: `{ "x": number, "y": number, "width": number, "height": number }` in canvas pixels.
-- `motion`: overlay enter/exit/loop animation.
-- `textData`: text content, font, color, shadow, stroke, opacity, rotation, and text animation for text overlays.
-- `audioData`: volume, fades, trim start, source duration, mute state for audio overlays.
+不要改 `id`（对应 `ai-cards/<id>/` 目录），除非明确迁移并同步所有依赖。
 
-Do not change `id` unless explicitly migrating dependencies; it maps to `ai-cards/<id>/`.
-
-## Animation Values
+## 动画取值
 
 `motion.enter`:
 
@@ -80,9 +78,9 @@ Overlay `motion.loop`:
 
 `textData.animation.loop` also allows `typewriter`.
 
-## Subtitle Style
+## 字幕样式
 
-Edit `timeline.subtitle` for global voiceover subtitle styling:
+全局口播字幕样式编辑 `timeline.subtitle`：
 
 - `fontSize`
 - `color`
@@ -103,7 +101,7 @@ Edit `<projectDir>/ai-cards/<overlayId>/motionCard.tsx` directly. 文件名用 t
 
 保存即生效：项目打开期间编辑器常驻文件监听，写入 `motionCard.tsx` 会自动热重载对应 overlay 的预览，无需重开项目。若改了无反应，先确认路径用的是 overlayId、且该卡已放置到时间轴。
 
-Hard constraints:
+硬约束：
 
 - No Markdown code fence; the file is raw TSX.
 - Export a default React function component.
@@ -111,7 +109,7 @@ Hard constraints:
 - Prefer Remotion frame-driven animation with `useCurrentFrame()`, `useVideoConfig()`, `interpolate`, `spring`, `AbsoluteFill`, and `Sequence`.
 - Keep the component pure: no side effects, no external network requests, no timers.
 
-### Images inside a Motion Card
+### Motion Card 内引用图片
 
 Reference project images through the injected global `cardAsset(relativePath)` — never with absolute paths, `staticFile()` on an absolute path, or large inline `base64` data URIs (these break export: `staticFile() does not support absolute paths`, or multi-MB cards that crash the headless render with out-of-memory).
 

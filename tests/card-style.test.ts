@@ -72,3 +72,28 @@ describe('AISettings 默认风格', () => {
     expect(buildDefaultAISettings().defaultStylePresetId).toBe(DEFAULT_STYLE_PRESET_ID);
   });
 });
+
+import { VISUAL_STYLE_PRESETS } from '../src/lib/card-style-presets';
+import { accentTextColor } from '../src/remotion/motion-kit';
+
+describe('预设调色板撞色防回归', () => {
+  it('任何预设的 motion accent 不得与 surface 面色同色（面内 accent 元素会隐形）', () => {
+    for (const preset of VISUAL_STYLE_PRESETS) {
+      const t = preset.motionTokens;
+      const surfaceBg = t?.surface && t.surface.kind !== 'none' ? t.surface.bg : undefined;
+      if (!t || !surfaceBg) continue;
+      expect(t.palette.accent.toLowerCase(), `${preset.id} accent == surface.bg`).not.toBe(
+        surfaceBg.toLowerCase(),
+      );
+    }
+  });
+
+  it('每个预设 accentTextColor 产出的字色对页面底可读（守卫回落 ink 或 accent 本身达标）', () => {
+    for (const preset of VISUAL_STYLE_PRESETS) {
+      const t = preset.motionTokens;
+      if (!t) continue;
+      const color = accentTextColor(t);
+      expect([t.palette.accent, t.palette.ink], preset.id).toContain(color);
+    }
+  });
+});

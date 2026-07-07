@@ -29,8 +29,6 @@ function buildFallbackSettings(): AISettings {
     llmProviders: [],
     defaultProviderId: null,
     defaultModel: null,
-    jimengApiUrl: '',
-    jimengSessionId: '',
     minimaxApiKey: '',
     minimaxVoiceId: 'male-qn-qingse',
     minimaxSpeed: 1,

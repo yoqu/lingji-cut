@@ -1,0 +1,127 @@
+/* 全局 AI 操作反馈层：虚拟鼠标 + 锚点光环 + 状态标签（绿色 #34d399 铁律色） */
+
+.cursor {
+  position: fixed;
+  z-index: 99999;
+  pointer-events: none;
+  transition:
+    left 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    top 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  filter: drop-shadow(0 2px 6px rgba(52, 211, 153, 0.4));
+  animation: agentCursorIn 0.3s ease-out;
+}
+
+.cursorError {
+  animation: agentCursorShake 0.4s ease-in-out;
+}
+
+.chip {
+  position: absolute;
+  top: 22px;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 320px;
+  padding: 3px 8px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-bg-elevated, #1e1e1e) 88%, rgba(52, 211, 153, 0.5));
+  border: 1px solid rgba(52, 211, 153, 0.55);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  animation: agentChipIn 0.25s ease-out;
+}
+
+.chipIcon {
+  color: rgba(52, 211, 153, 1);
+  font-weight: 700;
+}
+
+.chipSuccess .chipIcon,
+.chipSuccess {
+  border-color: rgba(52, 211, 153, 0.9);
+}
+
+.chipError {
+  border-color: rgba(255, 99, 99, 0.7);
+  background: color-mix(in srgb, var(--color-bg-elevated, #1e1e1e) 88%, rgba(255, 99, 99, 0.5));
+}
+
+.chipError .chipIcon {
+  color: rgb(255, 120, 120);
+}
+
+.ring {
+  position: fixed;
+  z-index: 99998;
+  pointer-events: none;
+  border: 1.5px solid rgba(52, 211, 153, 0.75);
+  border-radius: 10px;
+  transition:
+    left 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    top 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    height 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  animation: agentRingPulse 1.2s ease-out infinite;
+}
+
+@keyframes agentCursorIn {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes agentChipIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes agentRingPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(52, 211, 153, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
+  }
+}
+
+@keyframes agentCursorShake {
+  0%,
+  100% {
+    margin-left: 0;
+  }
+  25% {
+    margin-left: -5px;
+  }
+  75% {
+    margin-left: 5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor,
+  .ring {
+    transition: none;
+    animation: none;
+  }
+}

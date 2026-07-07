@@ -1,4 +1,4 @@
-import type { DragEventHandler } from 'react';
+import type { DragEventHandler, KeyboardEvent } from 'react';
 import type { AssetItem, AssetType } from '../types';
 import { useThumbnail } from '../hooks/useThumbnail';
 import { AppIcon, type AppIconName } from './AppIcon';
@@ -10,8 +10,10 @@ interface AssetCardProps {
   compact: boolean;
   usageCount: number;
   onDragStart: DragEventHandler<HTMLDivElement>;
+  onDragEnd?: DragEventHandler<HTMLDivElement>;
   onRemove: (path: string) => void;
   onClick?: () => void;
+  selected?: boolean;
 }
 
 /** 每种类型的视觉配置 */
@@ -76,7 +78,16 @@ export function AddTextCard({ onClick }: { onClick?: () => void }) {
   );
 }
 
-export function AssetCard({ asset, compact, usageCount: _usageCount, onDragStart, onRemove, onClick }: AssetCardProps) {
+export function AssetCard({
+  asset,
+  compact,
+  usageCount: _usageCount,
+  onDragStart,
+  onDragEnd,
+  onRemove,
+  onClick,
+  selected = false,
+}: AssetCardProps) {
   const meta = TYPE_META[asset.type];
   const isDraggable =
     !asset.locked &&
@@ -86,17 +97,29 @@ export function AssetCard({ asset, compact, usageCount: _usageCount, onDragStart
       asset.type === 'audio');
   const thumbnail = useThumbnail(asset.path, asset.type);
   const canRemove = !asset.locked;
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onClick) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    onClick();
+  };
 
   return (
     <div
       draggable={isDraggable}
       onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       onClick={onClick}
+      onKeyDown={handleKeyDown}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-pressed={onClick ? selected : undefined}
       className={[
         styles.root,
         compact ? styles.compact : styles.regular,
         isDraggable ? styles.draggable : '',
         onClick ? styles.clickable : '',
+        selected ? styles.selected : '',
         thumbnail ? styles.hasThumbnail : meta.className,
       ].filter(Boolean).join(' ')}
     >

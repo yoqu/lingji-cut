@@ -4,12 +4,12 @@
 
 ## 范围
 
-Editable files:
+可编辑文件：
 
-- `<projectDir>/original.md`: raw source material.
-- `<projectDir>/script.md`: final voiceover script used for TTS/subtitles.
+- `<projectDir>/original.md`：原始素材。
+- `<projectDir>/script.md`：用于 TTS/字幕的最终口播稿。
 
-Do not edit video timeline, cards, audio, subtitles, covers, or rendered media in this mode.
+此模式下不要动时间轴、卡片、音频、字幕、封面或渲染产物。
 
 ## CLI 锁定协议
 
@@ -33,18 +33,18 @@ node "$LINGJI_CLI" edit unlock --project <projectDir> --json
 
 脚本编辑不产生 `.lingji/edit-result.json`。`.lingji/edit-lock.json` 只是应用写出的兼容信号，不再由 agent 直接维护。
 
-## Save Behavior
+## 保存行为
 
-- Saving `script.md` externally reloads the script workspace and creates a version history entry with source `external`.
-- Saving `original.md` externally reloads the corresponding workspace tab.
-- If audio/subtitles should reflect a changed script, rerun generation via the CLI: `node "$LINGJI_CLI" audio gen --wait` then `node "$LINGJI_CLI" subtitle analyze --wait` (see `cli-workflow.md`).
+- 外部保存 `script.md` 会重载脚本工作台，并创建一条来源为 `external` 的版本历史。
+- 外部保存 `original.md` 会重载对应工作台标签页。
+- 改稿后要让音频/字幕跟上：`node "$LINGJI_CLI" audio gen --wait`，再 `node "$LINGJI_CLI" subtitle analyze --wait`（见 `cli-workflow.md`）。
 
-## Direct Edit Steps
+## 直接编辑步骤
 
-1. Confirm `<projectDir>` contains the Lingji project files.
+1. 确认 `<projectDir>` 是灵机项目目录。
 2. 执行 `lingji edit lock --scope script`。
-3. Read the target Markdown file.
-4. Apply the requested rewrite or polish.
-5. Write the complete updated Markdown file.
+3. 读取目标 Markdown 文件。
+4. 完成改写或润色。
+5. 写回完整更新后的文件。
 6. 执行 `lingji edit unlock`。
-7. Report that downstream generated artifacts may need regeneration.
+7. 提示下游生成产物（音频/字幕等）可能需要重跑。

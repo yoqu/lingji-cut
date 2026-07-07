@@ -45,8 +45,6 @@ function makeSettingsWithProvider(): any {
     llmBaseUrl: '',
     llmApiKey: '',
     llmModel: '',
-    jimengApiUrl: '',
-    jimengSessionId: '',
     minimaxApiKey: '',
     minimaxVoiceId: '',
     minimaxSpeed: 1,

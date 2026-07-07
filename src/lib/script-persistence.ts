@@ -44,29 +44,16 @@ export function createPersistedScriptState(
 // 与 timeline store 共享同一个 key，统一工作目录
 
 const SHARED_PROJECT_DIR_KEY = 'podcast-editor-project-dir';
-const LEGACY_SCRIPT_DIR_KEY = 'podcast-editor-script-project-dir';
 
 export function persistScriptProjectDir(dir: string | null): void {
   if (dir) {
     localStorage.setItem(SHARED_PROJECT_DIR_KEY, dir);
-    // 清理遗留 key
-    localStorage.removeItem(LEGACY_SCRIPT_DIR_KEY);
   }
   // dir 为 null 时不清除共享 key（Editor 侧可能仍在使用）
 }
 
 export function loadPersistedScriptProjectDir(): string | null {
-  // 优先读共享 key，兼容读取遗留 key 后自动迁移
-  const shared = localStorage.getItem(SHARED_PROJECT_DIR_KEY);
-  if (shared) return shared;
-
-  const legacy = localStorage.getItem(LEGACY_SCRIPT_DIR_KEY);
-  if (legacy) {
-    localStorage.setItem(SHARED_PROJECT_DIR_KEY, legacy);
-    localStorage.removeItem(LEGACY_SCRIPT_DIR_KEY);
-    return legacy;
-  }
-  return null;
+  return localStorage.getItem(SHARED_PROJECT_DIR_KEY);
 }
 
 // --- 保存所有 dirty 文件 ---

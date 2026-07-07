@@ -922,6 +922,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
 
   return (
     <div
+      data-agent-zone="publish"
       style={{
         height: '100%',
         overflow: 'auto',

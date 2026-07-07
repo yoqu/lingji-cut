@@ -1,86 +1,47 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadAISettings, saveAISettings, useAIStore } from '../src/store/ai';
 
-const AI_SETTINGS_KEY = 'podcast-editor-ai-settings';
-
-function createStorageMock() {
-  const storage = new Map<string, string>();
-
-  return {
-    getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      storage.set(key, value);
-    },
-    removeItem: (key: string) => {
-      storage.delete(key);
-    },
-    clear: () => {
-      storage.clear();
-    },
-  };
+function stubElectronSettings(aiSettings: Record<string, unknown>) {
+  const loadGlobalSettings = vi.fn().mockResolvedValue(JSON.stringify({ aiSettings }));
+  const saveGlobalSettings = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('window', { electronAPI: { loadGlobalSettings, saveGlobalSettings } });
+  return { loadGlobalSettings, saveGlobalSettings };
 }
 
 describe('AI settings store helpers', () => {
   beforeEach(() => {
-    const localStorage = createStorageMock();
-    vi.stubGlobal('window', { localStorage });
-    localStorage.clear();
+    vi.stubGlobal('window', {});
     useAIStore.getState().resetWorkflow();
   });
 
-  it('defaults enableThinking to true when loading legacy settings', async () => {
-    window.localStorage.setItem(
-      AI_SETTINGS_KEY,
-      JSON.stringify({
-        llmBaseUrl: 'https://api.openai.com/v1',
-        llmApiKey: 'sk-test',
-        llmModel: 'gpt-4o',
-        jimengApiUrl: 'https://jimeng.example.com',
-        jimengSessionId: 'session-test',
-      }),
-    );
+  it('defaults enableThinking to true when loading settings without the field', async () => {
+    stubElectronSettings({
+      llmBaseUrl: 'https://api.openai.com/v1',
+      llmApiKey: 'sk-test',
+      llmModel: 'gpt-4o',
+    });
 
-    // 加载时会依次执行 migrateToProviders + migrateImageProviders，
-    // 后者会把 jimeng* 字段迁移到 imageProviders[0] 并清空旧字段。
     const loaded = await loadAISettings();
     expect(loaded).toMatchObject({
       enableThinking: true,
-      jimengApiUrl: '',
-      jimengSessionId: '',
-      jimengModel: '',
       minimaxApiKey: '',
       minimaxVoiceId: 'male-qn-qingse',
       minimaxSpeed: 1.0,
-      defaultImageProviderId: 'jimeng-default',
-      defaultImageModel: 'jimeng-5.0',
-    });
-    expect(loaded?.imageProviders).toHaveLength(1);
-    expect(loaded?.imageProviders[0]).toMatchObject({
-      id: 'jimeng-default',
-      type: 'jimeng',
-      baseUrl: 'https://jimeng.example.com',
-      apiKey: 'session-test',
-      models: ['jimeng-5.0'],
+      imageProviders: [],
+      defaultImageProviderId: null,
     });
   });
 
-  it('persists enableThinking and minimax settings when explicitly configured', async () => {
-    // saveAISettings 也是异步的，但在没有 electronAPI 时是 no-op
-    // 通过 localStorage 直接写入来模拟已保存状态
-    window.localStorage.setItem(
-      AI_SETTINGS_KEY,
-      JSON.stringify({
-        llmBaseUrl: 'https://api.openai.com/v1',
-        llmApiKey: 'sk-test',
-        llmModel: 'gpt-4o',
-        jimengApiUrl: 'https://jimeng.example.com',
-        jimengSessionId: 'session-test',
-        enableThinking: false,
-        minimaxApiKey: 'mm-key',
-        minimaxVoiceId: 'female-yujie',
-        minimaxSpeed: 1.25,
-      }),
-    );
+  it('keeps explicitly configured enableThinking and minimax settings', async () => {
+    stubElectronSettings({
+      llmBaseUrl: 'https://api.openai.com/v1',
+      llmApiKey: 'sk-test',
+      llmModel: 'gpt-4o',
+      enableThinking: false,
+      minimaxApiKey: 'mm-key',
+      minimaxVoiceId: 'female-yujie',
+      minimaxSpeed: 1.25,
+    });
 
     await expect(loadAISettings()).resolves.toMatchObject({
       enableThinking: false,
@@ -112,8 +73,6 @@ describe('AI settings store helpers', () => {
       llmBaseUrl: 'https://api.openai.com/v1',
       llmApiKey: 'sk-test',
       llmModel: 'gpt-4o',
-      jimengApiUrl: 'https://jimeng.example.com',
-      jimengSessionId: 'session-test',
       minimaxApiKey: '',
       minimaxVoiceId: 'male-qn-qingse',
       minimaxSpeed: 1.0,

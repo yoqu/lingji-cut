@@ -21,6 +21,7 @@ describe('registerPipelineMcpTools', () => {
       'lingji_open_project',
       'lingji_get_project_state',
       'lingji_get_settings',
+      'lingji_update_settings',
       'lingji_get_task_status',
       'lingji_cancel_task',
       'lingji_list_tasks',

@@ -11,9 +11,7 @@ import {
   EmptyState,
   Field,
   FieldGrid,
-  FileDropCard,
   Input,
-  LoadingOverlay,
   MediaPlaceholder,
   ModalFooter,
   NumberField,
@@ -115,25 +113,6 @@ describe('ui primitives', () => {
     expect(html).toContain('aria-valuenow="42"');
   });
 
-  it('renders cards and file drop cards', () => {
-    const html = renderToStaticMarkup(
-      <Card>
-        <FileDropCard
-          eyebrow="AUDIO"
-          heading="拖入 MP3"
-          placeholder="把文件拖到这里"
-          value="demo.mp3"
-          accentColor="#79c4ff"
-          action={<span>选择文件</span>}
-        />
-      </Card>,
-    );
-
-    expect(html).toContain('拖入 MP3');
-    expect(html).toContain('demo.mp3');
-    expect(html).toContain('选择文件');
-  });
-
   it('renders media placeholders for non-visual assets', () => {
     const html = renderToStaticMarkup(
       <>
@@ -148,20 +127,16 @@ describe('ui primitives', () => {
     expect(html).toContain('PDF');
   });
 
-  it('renders alert and loading overlay primitives', () => {
+  it('renders alert primitives', () => {
     const html = renderToStaticMarkup(
-      <>
-        <Alert variant="warning" dismissible>
-          配置还不完整
-        </Alert>
-        <LoadingOverlay label="正在处理中..." />
-      </>,
+      <Alert variant="warning" dismissible>
+        配置还不完整
+      </Alert>,
     );
 
     expect(html).toContain('role="alert"');
     expect(html).toContain('配置还不完整');
     expect(html).toContain('Dismiss alert');
-    expect(html).toContain('正在处理中...');
   });
 
   it('renders divider, switch, number field and select controls', () => {

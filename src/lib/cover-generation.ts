@@ -1,6 +1,5 @@
 import { v4 as uuid } from 'uuid';
 import type { CoverCandidate, ImageAspectRatio, ImageProvider } from '../types/ai';
-import { ImageGenerationError } from './image-gen/errors';
 import { createNoopContext, toDataUrl } from './image-gen/progress';
 import { getImageProvider } from './image-gen/registry';
 import type { ImageGenerationContext } from './image-gen/types';
@@ -10,34 +9,6 @@ export interface CoverCandidateOptions {
   aspectRatio?: ImageAspectRatio;
   /** 每条 prompt 生成的候选数量 */
   n?: number;
-}
-
-/**
- * 按 ImageProvider.type 分派到具体的文生图实现。
- * 三参签名为兼容旧调用方保留；新代码请显式传 ctx 以接入统一进度条。
- */
-export async function generateCoverImage(
-  prompt: string,
-  provider: ImageProvider,
-  model: string,
-  ctx?: ImageGenerationContext,
-  aspectRatio: ImageAspectRatio = '16:9',
-): Promise<string> {
-  const adapter = getImageProvider(provider.type);
-  const result = await adapter.generate(
-    { prompt, model, aspectRatio, n: 1 },
-    { baseUrl: provider.baseUrl, apiKey: provider.apiKey, extras: provider.extras },
-    ctx ?? createNoopContext(),
-  );
-  const first = result.images[0];
-  if (!first) {
-    throw new ImageGenerationError(
-      'server',
-      provider.type,
-      `${provider.name} 未返回图片`,
-    );
-  }
-  return first.url ?? toDataUrl(first);
 }
 
 /**

@@ -14,7 +14,9 @@ export const HAND_SKETCH: VisualStylePreset = {
   },
   facets: {},
   motionTokens: {
-    palette: { bg: '#F4EDE1', ink: '#2B2B2B', muted: '#7A6E5A', accent: '#FFD84D', track: 'rgba(43,43,43,0.12)' },
+    // accent 是前景色（编号 / 虚线 / 圈注的红马克笔），便利贴黄只作 surface 面色——
+    // 两者若同色，贴内的 accent 条 / 线 / 字全部隐形（撞色 bug 已发生过，勿改回）。
+    palette: { bg: '#F4EDE1', ink: '#2B2B2B', muted: '#7A6E5A', accent: '#D0342C', track: 'rgba(43,43,43,0.12)' },
     fonts: {
       display: "'Caveat','Kalam','Noto Sans SC',cursive",
       body: "'Kalam','Noto Sans SC',sans-serif",
@@ -27,7 +29,7 @@ export const HAND_SKETCH: VisualStylePreset = {
     persona: { easing: 'bouncy', emphasis: 'settle' },
   },
   motionStyleNotes:
-    '标题正文一律手写体（禁规整无衬线大字）；关键内容放便利贴黄小卡，每张终态带 ±2°（≤3°）轻微旋转 + 柔和阴影，依次"贴上"纸面，非便利贴的纯文本块不加背景；要点间用 1.5px 手绘 dashed 虚线连接（描线揭示）；方格纸底与阴影全程静止，不做呼吸漂移。',
+    '标题正文一律手写体（禁规整无衬线大字）；关键内容放便利贴黄小卡（surface 黄只作面色），每张终态带 ±2°（≤3°）轻微旋转 + 柔和阴影，依次"贴上"纸面，非便利贴的纯文本块不加背景；accent 红马克笔色只作编号 / 虚线 / 圈注等前景，不当块底色；要点间用 1.5px 手绘 dashed 虚线连接（描线揭示）；方格纸底与阴影全程静止，不做呼吸漂移。',
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;align-content:center;gap:5%;font-family:'Caveat','Kalam','Noto Sans SC',cursive;background:#F4EDE1;color:#2B2B2B;box-sizing:border-box;padding:7% 6%;overflow:hidden;}

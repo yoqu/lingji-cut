@@ -1,10 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
-import { ArrowLeft, Bot, Cpu, DatabaseBackup, Heart, MessageCircle, Server, Share2, Sparkles, Volume2 } from 'lucide-react';
+import { ArrowLeft, Bot, Cpu, DatabaseBackup, Heart, MessageCircle, Share2, Sparkles, Volume2 } from 'lucide-react';
 import { ConfigBackupTab } from '../components/settings/ConfigBackupTab';
 import { AIConfigTab } from '../components/settings/AIConfigTab';
 import { TTSConfigTab } from '../components/settings/TTSConfigTab';
 import { AgentSettingsTab } from '../components/settings/AgentSettingsTab';
-import { McpSettingsTab } from '../components/settings/McpSettingsTab';
 import { PromptsConfigTab } from '../components/settings/PromptsConfigTab';
 import { PublishAccountsTab } from '../components/settings/PublishAccountsTab';
 import { SupportAuthorTab } from '../components/settings/SupportAuthorTab';
@@ -17,7 +16,6 @@ export type SettingsTab =
   | 'ai-config'
   | 'tts'
   | 'agent'
-  | 'mcp'
   | 'prompts'
   | 'backup'
   | 'publish-accounts'
@@ -28,7 +26,6 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Bot }[] = [
   { id: 'ai-config', label: 'AI 基础配置', icon: Bot },
   { id: 'tts', label: 'TTS 语音合成', icon: Volume2 },
   { id: 'agent', label: 'AI Agent', icon: Cpu },
-  { id: 'mcp', label: 'MCP 服务', icon: Server },
   { id: 'prompts', label: '提示词配置', icon: Sparkles },
   { id: 'backup', label: '配置备份', icon: DatabaseBackup },
   { id: 'publish-accounts', label: '发布账号', icon: Share2 },
@@ -72,7 +69,7 @@ export function Settings({ onBack, initialTab }: SettingsProps) {
   );
 
   return (
-    <Tabs value={activeTab} onValueChange={handleSelectTab} className={styles.page}>
+    <Tabs value={activeTab} onValueChange={handleSelectTab} className={styles.page} data-agent-zone="settings">
       <div className={styles.sidebar}>
         <div className={styles.sidebarHeader}>
           <Button.Icon
@@ -124,9 +121,6 @@ export function Settings({ onBack, initialTab }: SettingsProps) {
         </TabsContent>
         <TabsContent value="agent" className={styles.contentPanel}>
           <AgentSettingsTab />
-        </TabsContent>
-        <TabsContent value="mcp" className={styles.contentPanel}>
-          <McpSettingsTab />
         </TabsContent>
         <TabsContent value="prompts" className={styles.contentPanelWide}>
           <PromptsConfigTab />

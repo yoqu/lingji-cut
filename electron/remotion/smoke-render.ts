@@ -117,6 +117,43 @@ interface LayoutProbe {
   overflowY: string;
   directText: boolean;
   isMedia: boolean;
+  /** 计算样式 color（rgb/rgba 字符串） */
+  color: string;
+  /** 沿祖先链合成出的有效背景色 [r,g,b]（0-255）；遇渐变/图片或无不透明底时为 null（跳过对比度检查） */
+  effectiveBg: [number, number, number] | null;
+}
+
+/** 解析 computed style 的 rgb()/rgba() 颜色为 [r,g,b,a]。 */
+function parseRgb(color: string): [number, number, number, number] | null {
+  const m = /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*(?:,\s*(\d+(?:\.\d+)?)\s*)?\)$/.exec(color.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? 1 : Number(m[4])];
+}
+
+function srgbLuminance([r, g, b]: [number, number, number]): number {
+  const ch = (v: number) => {
+    const n = v / 255;
+    return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
+}
+
+/** 文字与其有效背景的 WCAG 对比度；颜色不可解析 / 背景不确定 / 文字透明时返回 null（不判）。 */
+function textContrastRatio(node: LayoutProbe): number | null {
+  if (!node.effectiveBg) return null;
+  const fg = parseRgb(node.color);
+  if (!fg) return null;
+  const [r, g, b, a] = fg;
+  if (a < 0.1) return null; // 全透明文字视为有意隐藏（入场动画走 opacity，不走 color alpha）
+  const bg = node.effectiveBg;
+  const composited: [number, number, number] = [
+    r * a + bg[0] * (1 - a),
+    g * a + bg[1] * (1 - a),
+    b * a + bg[2] * (1 - a),
+  ];
+  const lf = srgbLuminance(composited);
+  const lb = srgbLuminance(bg);
+  return (Math.max(lf, lb) + 0.05) / (Math.min(lf, lb) + 0.05);
 }
 
 function rectsOverlap(a: LayoutProbe, b: LayoutProbe): boolean {
@@ -145,6 +182,38 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
             const s = getComputedStyle(el as Element);
             const directText = Array.from(el.childNodes).some((n) => Boolean(n.nodeType === Node.TEXT_NODE && n.textContent?.trim()));
             const text = (el.textContent ?? '').trim();
+            // 有效背景：从自身沿祖先链合成 background-color（rgba 按 alpha 叠加），
+            // 直到不透明底；途中遇渐变/图片背景或到根仍无不透明底 → null（对比度不判）。
+            const effectiveBg = ((): [number, number, number] | null => {
+              const parse = (c: string): [number, number, number, number] | null => {
+                const m = /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*(?:,\s*(\d+(?:\.\d+)?)\s*)?\)$/.exec(c.trim());
+                return m ? [Number(m[1]), Number(m[2]), Number(m[3]), m[4] === undefined ? 1 : Number(m[4])] : null;
+              };
+              const layers: Array<[number, number, number, number]> = [];
+              let node: Element | null = el as Element;
+              let opaque = false;
+              while (node && node.id !== 'root') {
+                const cs = getComputedStyle(node);
+                if (cs.backgroundImage !== 'none') return null;
+                const c = parse(cs.backgroundColor);
+                if (!c) return null;
+                if (c[3] > 0) layers.push(c);
+                if (c[3] >= 1) {
+                  opaque = true;
+                  break;
+                }
+                node = node.parentElement;
+              }
+              if (!opaque) return null;
+              let [br, bgc, bb] = layers.pop() as [number, number, number, number];
+              while (layers.length > 0) {
+                const [r2, g2, b2, a2] = layers.pop() as [number, number, number, number];
+                br = r2 * a2 + br * (1 - a2);
+                bgc = g2 * a2 + bgc * (1 - a2);
+                bb = b2 * a2 + bb * (1 - a2);
+              }
+              return [br, bgc, bb];
+            })();
             return {
               tag: (el as Element).tagName.toLowerCase(),
               text,
@@ -163,6 +232,8 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
               overflowY: s.overflowY,
               directText,
               isMedia: ['img', 'video', 'canvas', 'svg'].includes((el as Element).tagName.toLowerCase()),
+              color: s.color,
+              effectiveBg,
             };
           }))),
         );
@@ -311,6 +382,18 @@ async function inspectLayoutRisks(
         code: 'subtitle-zone-violation',
         message: `元素 ${node.tag}（"${node.text.slice(0, 12)}"）侵入底部字幕安全区（y+height=${Math.round(node.y + node.height)} > ${Math.round(1080 * 0.84)}）；内容必须收在 y ≤ H*0.80 内。`,
       });
+    }
+    // 文字与有效背景对比度：字色 ≈ 底色（撞色）判 error 回喂重修；偏低只警示。
+    // error 阈值取 1.8 而非 WCAG 3：浅色预设的 muted 标签对比度合法地落在 2~3 之间。
+    if (node.directText && node.text.length >= 2) {
+      const ratio = textContrastRatio(node);
+      if (ratio != null && ratio < 3) {
+        pushCappedIssue({
+          severity: ratio < 1.8 ? 'error' : 'warning',
+          code: ratio < 1.8 ? 'text-bg-contrast' : 'text-bg-low-contrast',
+          message: `文本元素 ${node.tag}（"${node.text.slice(0, 12)}"）字色 ${node.color} 与其所在背景对比度仅 ${ratio.toFixed(2)}:1${ratio < 1.8 ? '，文字与底色几乎同色不可读；换用 tokens 的 ink（深/浅底相应回落），不要把 accent 同时当块底色和字色' : '，偏低，请确认可读性'}。`,
+        });
+      }
     }
     // 真裁切 = 元素自身 overflow 会剪内容（hidden/clip/scroll/auto）且滚动尺寸超出可视尺寸。
     // overflow: visible 的大字（如 lineHeight ≤1 的 hero 数字）scrollHeight 天然超出，但内容完整渲染，不算截断。

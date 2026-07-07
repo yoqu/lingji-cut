@@ -1,0 +1,15 @@
+/* AI 铁律：虚拟鼠标标签，绿色 #34d399 保留 */
+.label {
+  position: absolute;
+  bottom: -2px;
+  left: 14px;
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  background: rgba(52, 211, 153, 0.85);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}

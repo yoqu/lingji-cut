@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   isOverlayTrackManaged,
   canPlaceAt,
-  findCollidingItems,
   overlaysOverlap,
 } from '../src/lib/timeline-placement';
 import type { OverlayItem } from '../src/types';
@@ -76,24 +75,6 @@ describe('canPlaceAt', () => {
   });
 });
 
-describe('findCollidingItems', () => {
-  it('returns all overlapping ids regardless of type', () => {
-    const overlays: OverlayItem[] = [
-      makeOverlay({ id: 'x1', trackId: 'visual-1', startMs: 0, durationMs: 2000 }),
-      makeOverlay({ id: 'x2', trackId: 'visual-1', startMs: 1500, durationMs: 1000, overlayType: 'ai-card' }),
-      makeOverlay({ id: 'x3', trackId: 'visual-1', startMs: 3000, durationMs: 1000 }),
-    ];
-    const collisions = findCollidingItems({
-      trackId: 'visual-1',
-      startMs: 1000,
-      durationMs: 1200,
-      overlays,
-    });
-    expect(collisions.map((o) => o.id).sort()).toEqual(['x1', 'x2']);
-  });
-});
-
-// overlaysOverlap re-exported sanity check (used by callers of this module)
 describe('overlaysOverlap (sanity)', () => {
   it('is accessible via the module', () => {
     expect(typeof overlaysOverlap).toBe('function');

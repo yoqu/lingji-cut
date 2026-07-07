@@ -163,29 +163,3 @@ export function decodeMinimaxAudioData(audioData: string): Buffer {
 
   return Buffer.from(normalized, 'base64');
 }
-
-// =============================================================================
-// 字级时间戳提取（供 TTS 替换配音使用）
-// =============================================================================
-
-import type { WordTimestamp } from '../types';
-
-/**
- * 从 MiniMax 返回的 subtitles 数组转换为统一的 WordTimestamp 结构。
- * 兼容 begin_time/end_time 与 time_begin/time_end 两种字段命名。
- */
-export function extractWordTimestamps(
-  sentences: MinimaxSubtitleSentence[] | undefined
-): WordTimestamp[] {
-  if (!sentences || sentences.length === 0) return [];
-  const result: WordTimestamp[] = [];
-  for (const s of sentences) {
-    const text = s.text ?? s.pronounce_text ?? '';
-    if (!text) continue;
-    const startMs = s.begin_time ?? s.time_begin;
-    const endMs = s.end_time ?? s.time_end;
-    if (typeof startMs !== 'number' || typeof endMs !== 'number') continue;
-    result.push({ text, startMs: Number(startMs), endMs: Number(endMs) });
-  }
-  return result;
-}

@@ -7,7 +7,7 @@ export interface ParsedArgs {
 }
 
 /** 已知布尔开关（不吞掉后一个 token 作为值） */
-const BOOLEAN_FLAGS = new Set(['wait', 'detach', 'json']);
+const BOOLEAN_FLAGS = new Set(['wait', 'json', 'export', 'editor', 'context', 'files', 'settings', 'headful', 'force', 'help']);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const flags: Record<string, string | boolean> = {};

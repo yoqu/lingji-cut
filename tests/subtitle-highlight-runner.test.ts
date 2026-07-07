@@ -17,8 +17,6 @@ const settings: AISettings = {
   llmBaseUrl: 'https://api.openai.com/v1',
   llmApiKey: 'sk-test',
   llmModel: 'gpt-4o-mini',
-  jimengApiUrl: '',
-  jimengSessionId: '',
 };
 
 describe('generateSubtitleHighlights', () => {

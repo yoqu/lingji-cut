@@ -56,11 +56,7 @@ export class BinaryManager {
   }
 
   async findNpxPath(): Promise<string | null> {
-    return this.findBinaryPath('npx');
-  }
-
-  async findNodePath(): Promise<string | null> {
-    return this.findBinaryPath('node');
+    return this.whichSync('npx');
   }
 
   async getNodeVersion(): Promise<string | null> {
@@ -73,10 +69,6 @@ export class BinaryManager {
     } catch {
       return null;
     }
-  }
-
-  async findBinaryPath(name: string): Promise<string | null> {
-    return this.whichSync(name);
   }
 
   // ── 内部方法 ──────────────────────────────────────────────────────────

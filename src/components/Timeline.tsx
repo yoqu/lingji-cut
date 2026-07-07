@@ -1207,6 +1207,7 @@ export function Timeline({
   return (
     <div
       className={styles.root}
+      data-agent-zone="timeline"
       style={{
         gridTemplateRows: `${toolbarHeight}px minmax(0, 1fr)`,
       }}

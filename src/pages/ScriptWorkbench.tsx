@@ -33,6 +33,7 @@ import { openSearchPanel } from '@codemirror/search';
 import { setOpenWithReplace } from '../ui/components/script-editor-search';
 import { waitForValue } from '../lib/wait-for-value';
 import { AnnotationList } from '../components/script/AnnotationList';
+import { AgentCursor } from '../components/agent/AgentCursor';
 import { ConflictDialog } from '../components/script/ConflictDialog';
 import { DouyinImportDialog } from '../components/script/DouyinImportDialog';
 import { EmptyGuide } from '../components/script/EmptyGuide';
@@ -1683,7 +1684,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
 
   return (
     <AlertProvider>
-      <div className={styles.page}>
+      <div className={styles.page} data-agent-zone="script">
         <FileTreePanel
           projectDir={projectDir}
           fileEntries={fileEntries}
@@ -2060,16 +2061,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
             top: reviewCursorPos.y - 2,
           }}
         >
-          <svg width="20" height="24" viewBox="0 0 20 24" fill="none">
-            <path
-              d="M1 1L1 18.5L5.5 14L10.5 22L13.5 20.5L8.5 12.5L14 11.5L1 1Z"
-              fill="rgba(52, 211, 153, 0.85)"
-              stroke="rgba(255,255,255,0.6)"
-              strokeWidth="1.2"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className={styles.aiReviewCursorLabel}>AI</span>
+          <AgentCursor />
         </div>
       )}
 

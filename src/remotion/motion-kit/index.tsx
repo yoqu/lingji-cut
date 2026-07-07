@@ -63,7 +63,8 @@ export function normalizeMotionTokens(partial?: Partial<MotionTokens> | null): M
 
 /* ---------- accent 字色对比度守卫 ----------
  * 浅色预设的 accent 多为"面色"（便签 / 高亮条），直接作前景文字会糊底。
- * WCAG 相对亮度对比不足 3:1 时字色回落 ink；只约束"字"，条 / 面 / 描线仍用 accent。 */
+ * WCAG 相对亮度对比不足 3:1 时字色回落 ink；只约束"字"，条 / 面 / 描线仍用 accent。
+ * 原语可能坐在页面底（palette.bg）或面板底（surface.bg）上，任一底不达标即回落。 */
 
 function hexLuminance(color: string): number | null {
   const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
@@ -76,12 +77,17 @@ function hexLuminance(color: string): number | null {
   return 0.2126 * ch(0) + 0.7152 * ch(2) + 0.0722 * ch(4);
 }
 
-function accentTextColor(palette: MotionTokens['palette']): string {
+/** 导出仅供测试；卡片经 require 垫片只拿到 createMotionKit 的返回值，接触不到本函数。 */
+export function accentTextColor(t: Pick<MotionTokens, 'palette' | 'surface'>): string {
+  const { palette, surface } = t;
   const la = hexLuminance(palette.accent);
-  const lb = hexLuminance(palette.bg);
-  if (la == null || lb == null) return palette.accent;
-  const ratio = (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-  return ratio < 3 ? palette.ink : palette.accent;
+  if (la == null) return palette.accent;
+  const contrastOk = (bgLum: number | null) => {
+    if (bgLum == null) return true; // 不可解析（rgba 等）时不否决
+    return (Math.max(la, bgLum) + 0.05) / (Math.min(la, bgLum) + 0.05) >= 3;
+  };
+  const surfaceLum = surface && surface.kind !== 'none' && surface.bg ? hexLuminance(surface.bg) : null;
+  return contrastOk(hexLuminance(palette.bg)) && contrastOk(surfaceLum) ? palette.accent : palette.ink;
 }
 
 /* ============================== remotion 注入 ============================== */
@@ -483,7 +489,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
           fontSize: H * (t.typeScale?.label ?? 0.025),
           fontWeight: 500,
           textTransform: 'uppercase',
-          color: accent ? accentTextColor(t.palette) : t.palette.muted,
+          color: accent ? accentTextColor(t) : t.palette.muted,
           ...trackIn(beat.p),
         }}
       >
@@ -520,7 +526,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
               fontSize: H * (t.typeScale?.dataHero ?? 0.26),
               fontWeight: 600,
               lineHeight: 1,
-              color: accentTextColor(t.palette),
+              color: accentTextColor(t),
               fontVariantNumeric: 'tabular-nums',
               display: 'inline-block',
               ...emphasize(frame, beat.land, fps, emphasis),
@@ -589,7 +595,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
                   fontFamily: t.fonts.display,
                   fontSize: H * ((t.typeScale?.body ?? 0.036) * 1.1),
                   fontVariantNumeric: 'tabular-nums',
-                  color: focus ? accentTextColor(t.palette) : t.palette.ink,
+                  color: focus ? accentTextColor(t) : t.palette.ink,
                   width: '14%',
                   textAlign: 'right',
                   flexShrink: 0,
@@ -654,7 +660,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
           }}
         >
           <span>{startLabel ?? ''}</span>
-          <span style={{ color: accentTextColor(t.palette) }}>{endLabel ?? ''}</span>
+          <span style={{ color: accentTextColor(t) }}>{endLabel ?? ''}</span>
         </div>
       </div>
     );
@@ -691,7 +697,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
             fontWeight: 600,
             lineHeight: 1,
             fontVariantNumeric: 'tabular-nums',
-            color: focus ? accentTextColor(t.palette) : t.palette.muted,
+            color: focus ? accentTextColor(t) : t.palette.muted,
             display: 'inline-block',
             ...(focus ? emphasize(frame, beat.land, fps, emphasis) : {}),
           }}
@@ -736,7 +742,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
                 style={{
                   fontFamily: t.fonts.mono,
                   fontSize: H * (t.typeScale?.label ?? 0.025),
-                  color: accentTextColor(t.palette),
+                  color: accentTextColor(t),
                   ...trackIn(numP),
                 }}
               >
@@ -788,7 +794,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
                   style={{
                     fontFamily: t.fonts.mono,
                     fontSize: H * (t.typeScale?.label ?? 0.025),
-                    color: accentTextColor(t.palette),
+                    color: accentTextColor(t),
                     border: `1px solid ${t.palette.track}`,
                     padding: `${H * 0.008}px ${H * 0.016}px`,
                   }}
@@ -818,7 +824,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
             top: -H * 0.02,
             fontFamily: t.fonts.display,
             fontSize: H * 0.09,
-            color: accentTextColor(t.palette),
+            color: accentTextColor(t),
             lineHeight: 1,
             ...riseIn(beat.p),
           }}
@@ -945,6 +951,8 @@ countUp(beat.p, 28842)                       // 数字字符串（配 fontVarian
 emphasize(frame, beat.land, fps, 'settle')   // 焦点落地强调：'settle'回弹 | 'brighten'提亮，一次性收敛
 
 // 布局与自定义：useStage() → { tokens, W, H, CW, CH, fps, D, frame }；自定义元素用 tokens 配色配字体
+// useStage 的 tokens 只在 CardStage 的子组件内有效——在渲染 <CardStage> 的组件体里调用会拿到默认深色 tokens（surface.bg 为空、ink 反色，字底同色判失败）；该处配色请直接读 TOKENS 常量，useStage 只取尺寸/帧率
+// 自定义色块内的字色必须与该块底色对比 ≥3:1：accent 当块底时字用 bg/ink，绝不 accent 底配 accent 字（机器逐帧检查对比度，撞色直接打回）
 // 尺寸铁律：CardStage 内容区左右各留 10%、底部留 20% 字幕区——整行元素 / svg / 横向条的宽度用 CW（=0.8×W），高度预算用 CH（=0.72×H）；写 W/H 全尺寸必溢出画布判失败
 // 仍可 import { useCurrentFrame, useVideoConfig, interpolate, spring, Easing } from 'remotion' 写 kit 没有的表达
 // 自写 interpolate 必须带双侧 clamp：{ extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }（漏一侧=区间外爆炸，lint 会拦）`;

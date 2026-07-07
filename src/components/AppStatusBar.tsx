@@ -220,7 +220,7 @@ function AiEditLockIndicator() {
 
 export function AppStatusBar() {
   return (
-    <div className={styles.statusBar}>
+    <div className={styles.statusBar} data-agent-zone="status-bar">
       <StatusBarProgressLine />
       <TaskProgressPanel />
       <AgentObservationPanel />

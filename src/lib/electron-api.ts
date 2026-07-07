@@ -36,6 +36,15 @@ export type { PublishAccount, PublishPlatform };
 
 export type AppPage = 'welcome' | 'setup' | 'editor' | 'script-workbench' | 'settings' | 'auto-run' | 'publish';
 
+/** 控制服务操作事件（agent 经 CLI 驱动应用；驱动全局「AI 正在操作」反馈层） */
+export interface ControlOpEvent {
+  op: string;
+  title: string;
+  phase: 'start' | 'success' | 'error';
+  error?: string;
+  ts: number;
+}
+
 export interface FileEntry {
   name: string;
   type: 'file' | 'directory';
@@ -419,6 +428,8 @@ export interface ElectronAPI {
   onPipelineTaskUpdate: (
     callback: (task: PipelineTask & { bridgeId: string }) => void,
   ) => () => void;
+  /** 订阅控制服务操作事件（agent 经 CLI 驱动应用时的「AI 正在操作」界面反馈）。 */
+  onControlOpEvent: (callback: (ev: ControlOpEvent) => void) => () => void;
   /** 订阅 Motion 卡多 agent 生成的观测事件（导演/雕刻/审查流式输出 → 观测面板）。 */
   onAgentFeedEvent: (callback: (ev: AgentFeedEvent) => void) => () => void;
   /** 取消 MCP/pipeline 任务。 */
@@ -788,19 +799,6 @@ export interface DependencyDownloadProgress {
   total?: number;
   speed?: number;
 }
-
-/** @deprecated 改用 DependencyStatus。 */
-export type BiliupStatus = DependencyStatus;
-/** @deprecated 改用 DependencyStatus。 */
-export type ChromiumStatus = DependencyStatus;
-/** @deprecated 改用 DependencyDownloadResult。 */
-export type BiliupDownloadResult = DependencyDownloadResult;
-/** @deprecated 改用 DependencyDownloadResult。 */
-export type ChromiumDownloadResult = DependencyDownloadResult;
-/** @deprecated 改用 DependencyDownloadProgress。 */
-export type BiliupDownloadProgress = DependencyDownloadProgress;
-/** @deprecated 改用 DependencyDownloadProgress。 */
-export type ChromiumDownloadProgress = DependencyDownloadProgress;
 
 declare global {
   interface Window {

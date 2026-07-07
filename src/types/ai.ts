@@ -400,10 +400,6 @@ export interface AISettings {
   llmModel?: string;
   /** @deprecated 已迁移到 LLMProvider.enableThinking；保留仅用于旧数据迁移 */
   enableThinking?: boolean;
-  // 图片生成
-  jimengApiUrl: string;
-  jimengSessionId: string;
-  jimengModel?: string;
   // MiniMax TTS
   minimaxApiKey: string;
   minimaxVoiceId: string;

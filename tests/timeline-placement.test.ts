@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   clampOverlayDurationByNeighbors,
-  findAvailableTrack,
   findNearestAvailablePlacement,
   isOverlayTrackManaged,
   overlaysOverlap,
@@ -299,93 +298,6 @@ describe('findNearestAvailablePlacement', () => {
       overlays,
     });
     expect(result).toEqual({ startMs: 1000, fits: true });
-  });
-});
-
-// ── findAvailableTrack ──
-
-describe('findAvailableTrack', () => {
-  const tracks: TimelineTrack[] = [
-    { id: 'audio', kind: 'audio', label: '口播轨', order: 0, locked: true },
-    { id: 'subtitle', kind: 'subtitle', label: '字幕轨', order: 0, locked: true },
-    makeVisualTrack('visual-1', 1),
-    makeVisualTrack('visual-2', 2),
-  ];
-
-  it('returns the first track when it has space', () => {
-    const result = findAvailableTrack({
-      targetStartMs: 0,
-      durationMs: 1000,
-      overlays: [],
-      tracks,
-    });
-    expect(result).toEqual({ trackId: 'visual-1', startMs: 0 });
-  });
-
-  it('returns the second track when first is occupied at the target position', () => {
-    const overlays = [
-      makeOverlay({ id: 'a', trackId: 'visual-1', startMs: 0, durationMs: 5000 }),
-    ];
-    // 在 visual-1 上 [0, 1000) 与 a 重叠，但 findNearestAvailablePlacement
-    // 会找到 5000 作为替代位置，所以 visual-1 也会 fit
-    // 要测试"第一轨道不行，用第二轨道"的场景，需要更紧的条件
-    // 实际上 findNearestAvailablePlacement 总会在尾部找到位置
-    // 所以这个测试应该验证：当第一轨道虽然 fits 但位置被偏移了，而第二轨道可以精确放置
-    // 但函数只检查 fits，不比较偏移量
-    // 所以实际上只要有 visual 轨道，总会有 fits=true（因为尾部无限间隙）
-    // 因此 findAvailableTrack 在正常场景中总会返回第一个 visual 轨道
-    const result = findAvailableTrack({
-      targetStartMs: 0,
-      durationMs: 1000,
-      overlays,
-      tracks,
-    });
-    // visual-1 会 fit（虽然位置被推到 5000），所以返回 visual-1
-    expect(result.trackId).toBe('visual-1');
-    expect(result.fits).toBeUndefined(); // PlacementTrackResult 没有 fits 字段
-    expect(result.startMs).toBe(5000);
-  });
-
-  it('returns null when no visual tracks exist', () => {
-    const audioOnlyTracks: TimelineTrack[] = [
-      { id: 'audio', kind: 'audio', label: '口播轨', order: 0, locked: true },
-    ];
-    const result = findAvailableTrack({
-      targetStartMs: 0,
-      durationMs: 1000,
-      overlays: [],
-      tracks: audioOnlyTracks,
-    });
-    expect(result).toEqual({ trackId: null, startMs: 0 });
-  });
-
-  it('ignores non-visual tracks (audio, subtitle)', () => {
-    const overlays = [
-      // 即使在 audio 轨道上有 overlay，也不影响 visual 轨道搜索
-      makeOverlay({ id: 'audio-item', trackId: 'audio', startMs: 0, durationMs: 60000 }),
-    ];
-    const result = findAvailableTrack({
-      targetStartMs: 0,
-      durationMs: 1000,
-      overlays,
-      tracks,
-    });
-    expect(result).toEqual({ trackId: 'visual-1', startMs: 0 });
-  });
-
-  it('prefers tracks in order by the order field', () => {
-    const reorderedTracks: TimelineTrack[] = [
-      makeVisualTrack('visual-2', 1),
-      makeVisualTrack('visual-1', 2),
-    ];
-    const result = findAvailableTrack({
-      targetStartMs: 0,
-      durationMs: 1000,
-      overlays: [],
-      tracks: reorderedTracks,
-    });
-    // visual-2 有更低的 order，应该先检查
-    expect(result.trackId).toBe('visual-2');
   });
 });
 

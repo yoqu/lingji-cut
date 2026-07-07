@@ -92,9 +92,6 @@ describe('ai-config-utils', () => {
       providers: [createProvider()],
       defaultProviderId: 'provider-1',
       defaultModel: 'gpt-4.1',
-      jimengApiUrl: 'https://jimeng.example.com',
-      jimengSessionId: 'session-a',
-      jimengModel: 'jimeng-5.0',
     });
 
     expect(
@@ -104,9 +101,6 @@ describe('ai-config-utils', () => {
           providers: [createProvider()],
           defaultProviderId: 'provider-1',
           defaultModel: 'gpt-4.1',
-          jimengApiUrl: 'https://jimeng.example.com',
-          jimengSessionId: 'session-a',
-          jimengModel: 'jimeng-5.0',
         }),
       ),
     ).toBe(false);
@@ -115,12 +109,9 @@ describe('ai-config-utils', () => {
       hasUnsavedAIConfigChanges(
         baseSnapshot,
         createAIConfigSnapshot({
-          providers: [createProvider()],
+          providers: [createProvider({ name: 'Other Provider' })],
           defaultProviderId: 'provider-1',
           defaultModel: 'gpt-4.1',
-          jimengApiUrl: 'https://jimeng.example.com',
-          jimengSessionId: 'session-b',
-          jimengModel: 'jimeng-5.0',
         }),
       ),
     ).toBe(true);
@@ -131,9 +122,6 @@ describe('ai-config-utils', () => {
       providers: [createProvider({ enableThinking: true })],
       defaultProviderId: 'provider-1',
       defaultModel: 'gpt-4.1',
-      jimengApiUrl: '',
-      jimengSessionId: '',
-      jimengModel: '',
     });
 
     expect(
@@ -143,9 +131,6 @@ describe('ai-config-utils', () => {
           providers: [createProvider({ enableThinking: false })],
           defaultProviderId: 'provider-1',
           defaultModel: 'gpt-4.1',
-          jimengApiUrl: '',
-          jimengSessionId: '',
-          jimengModel: '',
         }),
       ),
     ).toBe(true);
@@ -200,17 +185,11 @@ describe('ai-config-utils', () => {
       providers: [createProvider()],
       defaultProviderId: 'provider-1',
       defaultModel: 'gpt-4.1',
-      jimengApiUrl: '',
-      jimengSessionId: '',
-      jimengModel: '',
     });
     const piSnapshot = createAIConfigSnapshot({
       providers: [provider],
       defaultProviderId: 'provider-1',
       defaultModel: 'gpt-4.1',
-      jimengApiUrl: '',
-      jimengSessionId: '',
-      jimengModel: '',
     });
 
     expect(hasUnsavedAIConfigChanges(baseSnapshot, piSnapshot)).toBe(true);
@@ -265,8 +244,6 @@ describe('ai-config-utils', () => {
 
     expect(aiConfigSource).toContain('useSettingsTabGuard');
     expect(aiConfigSource).toContain('onRegisterLeaveGuard');
-    // 旧 jimeng* 字段的 UI 已下线，但仍需从 settings 读取旧值，以保持向后兼容的持久化
-    expect(aiConfigSource).toContain("settings?.jimengApiUrl ?? ''");
     // 新的封面图像生成 Section 应使用 ImageProviderListSection
     expect(aiConfigSource).toContain('ImageProviderListSection');
     expect(aiConfigSource).toContain('封面图像生成');

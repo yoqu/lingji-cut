@@ -15,6 +15,7 @@ import {
 } from '../ui';
 import { AppIcon } from './AppIcon';
 import { AddTextCard, AssetCard, AssetImportCard } from './AssetCard';
+import type { SourcePreviewAsset } from './SourceAssetPreviewPlayer';
 import styles from './AssetPanel.module.css';
 
 const EXTENSION_TO_ASSET_TYPE: Record<string, Extract<AssetType, 'video' | 'image' | 'audio' | 'srt'>> = {
@@ -208,6 +209,8 @@ export function AssetPanel({
   onAddAsset,
   onOpenSubtitleInspector,
   onAddTextOverlay,
+  onPreviewAsset,
+  selectedPreviewAssetPath,
   onUseAsPodcastAudio,
   onUseAsPodcastSrt,
   onReplaceAudio,
@@ -220,6 +223,8 @@ export function AssetPanel({
   onAddAsset?: () => Promise<void>;
   onOpenSubtitleInspector?: () => void;
   onAddTextOverlay?: () => void;
+  onPreviewAsset?: (asset: SourcePreviewAsset) => void;
+  selectedPreviewAssetPath?: string | null;
   onUseAsPodcastAudio?: (path: string, durationMs: number) => Promise<void>;
   onUseAsPodcastSrt?: (path: string) => Promise<void>;
   onReplaceAudio?: () => Promise<void>;
@@ -234,6 +239,7 @@ export function AssetPanel({
   const [podcastExpanded, setPodcastExpanded] = useState(!compact);
   const [isDropTarget, setIsDropTarget] = useState(false);
   const dragDepthRef = useRef(0);
+  const draggingAssetPathRef = useRef<string | null>(null);
 
   const handleAddAsset = useCallback(async () => {
     if (onAddAsset) {
@@ -433,7 +439,19 @@ export function AssetPanel({
                     compact={compact}
                     usageCount={getAssetUsageCount(asset.path)}
                     onRemove={handleRemoveAsset}
-                    onClick={asset.type === 'srt' ? onOpenSubtitleInspector : undefined}
+                    selected={selectedPreviewAssetPath === asset.path}
+                    onClick={
+                      asset.type === 'image' || asset.type === 'video'
+                        ? () => {
+                            if (draggingAssetPathRef.current === asset.path) {
+                              return;
+                            }
+                            onPreviewAsset?.(asset);
+                          }
+                        : asset.type === 'srt'
+                          ? onOpenSubtitleInspector
+                          : undefined
+                    }
                     onDragStart={(event) => {
                       if (asset.locked) {
                         event.preventDefault();
@@ -448,8 +466,16 @@ export function AssetPanel({
                         event.preventDefault();
                         return;
                       }
+                      draggingAssetPathRef.current = asset.path;
                       event.dataTransfer.effectAllowed = 'copy';
                       event.dataTransfer.setData('application/json', JSON.stringify(asset));
+                    }}
+                    onDragEnd={() => {
+                      window.setTimeout(() => {
+                        if (draggingAssetPathRef.current === asset.path) {
+                          draggingAssetPathRef.current = null;
+                        }
+                      }, 0);
                     }}
                   />
                 </div>

@@ -133,8 +133,6 @@ describe('getSettings', () => {
         minimaxApiKey: 'minimax-secret',
         minimaxVoiceId: 'voice-1',
         minimaxSpeed: 1.0,
-        jimengApiUrl: 'https://jimeng.com',
-        jimengSessionId: 'jimeng-secret',
       },
     });
     wfs(path.join(userDataPath, 'settings.json'), settingsContent);

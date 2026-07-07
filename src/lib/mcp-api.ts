@@ -4,18 +4,7 @@
  */
 
 export interface McpAPI {
-  // ─── 服务管理 ───────────────────────────────────────────
-  getStatus(): Promise<{ running: boolean; port: number; url: string }>;
-  start(port: number): Promise<{ port: number; url: string }>;
-  stop(): Promise<void>;
-
-  // ─── 配置管理 ───────────────────────────────────────────
-  scanLocal(): Promise<Array<{ id: string; spec: Record<string, unknown>; apps: string[] }>>;
-  registerToApp(app: string): Promise<void>;
-  removeFromApp(app: string): Promise<boolean>;
-  isRegistered(app: string): Promise<boolean>;
-
-  // ─── MCP Tool 事件监听（Main → Renderer） ──────────────
+  // ─── 控制服务工具事件监听（Main → Renderer） ──────────
   onGetEditorState(handler: (payload: unknown) => void): () => void;
   onReadScript(handler: (payload: unknown) => void): () => void;
   onGenerateScript(handler: (payload: unknown) => void): () => void;

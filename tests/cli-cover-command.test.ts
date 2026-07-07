@@ -13,23 +13,27 @@ function fake() {
 }
 
 describe('runCoverCommand', () => {
-  it('prompt → lingji_generate_cover_prompts', async () => {
-    const { client, calls } = fake();
-    await runCoverCommand('prompt', {}, client);
-    expect(calls.some((c) => c.name === 'lingji_generate_cover_prompts')).toBe(true);
-  });
-  it('image → lingji_generate_cover_images', async () => {
-    const { client, calls } = fake();
-    await runCoverCommand('image', {}, client);
-    expect(calls.some((c) => c.name === 'lingji_generate_cover_images')).toBe(true);
-  });
   it('gen → lingji_generate_covers', async () => {
     const { client, calls } = fake();
     await runCoverCommand('gen', {}, client);
     expect(calls.some((c) => c.name === 'lingji_generate_covers')).toBe(true);
   });
-  it('unknown → bad_args', async () => {
+  it('gen --step prompts → lingji_generate_cover_prompts', async () => {
+    const { client, calls } = fake();
+    await runCoverCommand('gen', { step: 'prompts' }, client);
+    expect(calls.some((c) => c.name === 'lingji_generate_cover_prompts')).toBe(true);
+  });
+  it('gen --step images → lingji_generate_cover_images', async () => {
+    const { client, calls } = fake();
+    await runCoverCommand('gen', { step: 'images' }, client);
+    expect(calls.some((c) => c.name === 'lingji_generate_cover_images')).toBe(true);
+  });
+  it('gen --step frob → bad_args', async () => {
     const { client } = fake();
-    await expect(runCoverCommand('frob', {}, client)).rejects.toMatchObject({ code: 'bad_args' });
+    await expect(runCoverCommand('gen', { step: 'frob' }, client)).rejects.toMatchObject({ code: 'bad_args' });
+  });
+  it('unknown action → bad_args', async () => {
+    const { client } = fake();
+    await expect(runCoverCommand('prompt', {}, client)).rejects.toMatchObject({ code: 'bad_args' });
   });
 });

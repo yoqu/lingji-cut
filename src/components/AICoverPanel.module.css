@@ -104,6 +104,13 @@
   color: var(--color-text-muted);
 }
 
+.editActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .promptActions {
   display: flex;
   justify-content: flex-end;

@@ -56,6 +56,38 @@ describe('assertCardRenders', () => {
   });
 });
 
+// 撞色样本：色块底与字色同为 accent 粉——生成期真实事故形态（模型把 accent 同时当块底和字色）。
+const SAME_COLOR_TEXT = `import { AbsoluteFill } from 'remotion';
+export default function Clash() {
+  return <AbsoluteFill style={{ background: '#0E0E10' }}>
+    <div style={{ position: 'absolute', left: 200, top: 200, background: '#FF9EB5', padding: 40 }}>
+      <span style={{ color: '#FF9EB5', fontSize: 48 }}>关键结论文字</span>
+    </div>
+  </AbsoluteFill>;
+}`;
+
+const READABLE_TEXT = `import { AbsoluteFill } from 'remotion';
+export default function Fine() {
+  return <AbsoluteFill style={{ background: '#0E0E10' }}>
+    <div style={{ position: 'absolute', left: 200, top: 200, background: '#FF9EB5', padding: 40 }}>
+      <span style={{ color: '#2B2B2B', fontSize: 48 }}>关键结论文字</span>
+    </div>
+  </AbsoluteFill>;
+}`;
+
+describe('文字-背景对比度探针', () => {
+  it('字色与所在色块底色同色 → text-bg-contrast error', async () => {
+    const result = await validateMotionCardTsx(SAME_COLOR_TEXT, { checkRenderedLayout: true });
+    expect(result.issues.some((i) => i.code === 'text-bg-contrast' && i.severity === 'error')).toBe(true);
+    expect(result.ok).toBe(false);
+  }, 120_000);
+
+  it('同一色块换 ink 字色 → 无对比度 error', async () => {
+    const result = await validateMotionCardTsx(READABLE_TEXT, { checkRenderedLayout: true });
+    expect(result.issues.filter((i) => i.code === 'text-bg-contrast')).toEqual([]);
+  }, 120_000);
+});
+
 describe('validateMotionCardTsx', () => {
   it('marks return null as a validation error while smoke rendering stays compatible', async () => {
     const result = await validateMotionCardTsx(RETURNS_NULL, { checkRenderedLayout: false });

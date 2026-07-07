@@ -229,14 +229,49 @@ export function AIPanel({
   );
 
   const handlePersistedCovers = useCallback(
-    async (candidates: CoverCandidate[]) => {
-      const persistedState = await persistAIState(analysisResult, candidates);
+    async (candidates: CoverCandidate[], result: AIAnalysisResult | null = analysisResult) => {
+      const persistedState = await persistAIState(result, candidates);
       if (persistedState.analysisResult) {
         setAnalysisResult(persistedState.analysisResult);
       }
       setCoverCandidates(persistedState.coverCandidates);
     },
     [analysisResult, persistAIState, setAnalysisResult, setCoverCandidates],
+  );
+
+  const handleSaveCoverPrompt = useCallback(
+    async (prompts: string[]) => {
+      const nextPrompts = prompts.map((prompt) => prompt.trim()).filter(Boolean).slice(0, 1);
+      if (nextPrompts.length === 0) {
+        setAnalysisError('封面提示词不能为空');
+        throw new Error('封面提示词不能为空');
+      }
+
+      if (!analysisResult) {
+        setAnalysisError('当前没有可保存的 AI 分析结果');
+        throw new Error('当前没有可保存的 AI 分析结果');
+      }
+
+      const nextResult: AIAnalysisResult = {
+        ...analysisResult,
+        coverPrompts: nextPrompts,
+      };
+      setAnalysisError(null);
+      setAnalysisResult(nextResult);
+      const persistedState = await persistAIState(nextResult, coverCandidates);
+      const persistedResult = persistedState.analysisResult ?? nextResult;
+      setAnalysisResult(persistedResult);
+      setCoverCandidates(persistedState.coverCandidates);
+      return persistedResult;
+    },
+    [
+      analysisResult,
+      coverCandidates,
+      persistAIState,
+      setAnalysisError,
+      setAnalysisResult,
+      setCoverCandidates,
+    ],
   );
 
   const handleAddCoverToTimeline = useCallback(
@@ -743,20 +778,29 @@ export function AIPanel({
 
       setGeneratingCovers(true);
       try {
+        const nextResult = await handleSaveCoverPrompt(prompts);
         const candidates = await window.electronAPI.generateCoverImages({
           prompts,
           settings,
           projectDir,
           projectBindings: useAIStore.getState().projectBindings,
         });
-        await handlePersistedCovers(candidates);
+        await handlePersistedCovers(candidates, nextResult);
       } catch (error) {
         console.error('封面生成失败:', error);
+        if (error instanceof Error) {
+          setAnalysisError(error.message);
+        }
       } finally {
         setGeneratingCovers(false);
       }
     },
-    [handlePersistedCovers, setGeneratingCovers, setAnalysisError],
+    [
+      handlePersistedCovers,
+      handleSaveCoverPrompt,
+      setGeneratingCovers,
+      setAnalysisError,
+    ],
   );
 
   const handleRegenerateCoverPrompt = useCallback(async () => {
@@ -963,6 +1007,7 @@ export function AIPanel({
   return (
     <aside
       className={styles.root}
+      data-agent-zone="ai-panel"
       data-ai-panel-root="true"
       data-ai-panel-tab={activeTab}
       data-compact={compact ? 'true' : 'false'}
@@ -1273,6 +1318,7 @@ export function AIPanel({
               isRegeneratingPrompt={isRegeneratingCoverPrompt}
               selectedCandidateId={selectedCoverCandidate?.id}
               onGenerateCovers={handleGenerateCovers}
+              onSavePrompt={handleSaveCoverPrompt}
               onRegeneratePrompt={handleRegenerateCoverPrompt}
               onSelectCover={handleSelectCover}
               onAddToTimeline={handleAddCoverToTimeline}

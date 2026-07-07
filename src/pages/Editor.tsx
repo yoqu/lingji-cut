@@ -7,6 +7,7 @@ import { useTaskProgressStore } from '../store/task-progress';
 import { ExportSettingsModal } from '../components/ExportSettingsModal';
 import { PreviewPanel } from '../components/PreviewPanel';
 import type { RemotionPreviewHandle } from '../components/RemotionPreviewPlayer';
+import type { SourcePreviewAsset } from '../components/SourceAssetPreviewPlayer';
 import { TimelineAIOverlay } from '../components/TimelineAIOverlay';
 import { Timeline } from '../components/Timeline';
 import type { ProjectOverviewMeta } from '../components/ProjectOverviewPanel';
@@ -144,6 +145,7 @@ export function Editor({
     ReturnType<typeof useTimelineStore.getState>['srtEntries'] | null
   >(null);
   const [activePanel, setActivePanel] = useState<'assets' | 'ai'>(initialActivePanel);
+  const [sourcePreviewAsset, setSourcePreviewAsset] = useState<SourcePreviewAsset | null>(null);
   const [inspectorSelection, setInspectorSelection] = useState<InspectorSelection>({ type: 'empty' });
   const [projectMeta, setProjectMeta] = useState<ProjectOverviewMeta | null>(null);
   const [isProjectMetaLoading, setIsProjectMetaLoading] = useState(false);
@@ -367,6 +369,36 @@ export function Editor({
     setIsPlaying(false);
   }, [effectiveDurationMs]);
 
+  const clearSourcePreview = useCallback(() => {
+    setSourcePreviewAsset(null);
+  }, []);
+
+  const handlePreviewAsset = useCallback((asset: SourcePreviewAsset) => {
+    if (asset.type !== 'image' && asset.type !== 'video') {
+      return;
+    }
+
+    const current = sourcePreviewAsset;
+    if (current?.path === asset.path) {
+      setSourcePreviewAsset(null);
+      return;
+    }
+
+    playerRef.current?.pause();
+    setIsPlaying(false);
+    setSourcePreviewAsset(asset);
+  }, [sourcePreviewAsset]);
+
+  useEffect(() => {
+    if (!sourcePreviewAsset) {
+      return;
+    }
+
+    if (!assets.some((asset) => asset.path === sourcePreviewAsset.path)) {
+      setSourcePreviewAsset(null);
+    }
+  }, [assets, sourcePreviewAsset]);
+
   // exportRequestToken 是 App 级计数器，用户点击菜单/工具栏「导出」时自增。
   // 这里用 ref 记录组件"已处理过的"token 值，仅在 token 真正递增时弹出导出框，
   // 避免 Editor 因 page 切换（welcome → workbench/editor）remount 后拿到陈旧 token
@@ -447,6 +479,14 @@ export function Editor({
 
   const handleSeek = useCallback(
     (targetMs: number) => {
+      if (sourcePreviewAsset) {
+        clearSourcePreview();
+        currentTimeRef.current = targetMs;
+        setCurrentTimeMs(targetMs);
+        setIsPlaying(false);
+        return;
+      }
+
       const player = playerRef.current;
       if (!player) {
         return;
@@ -462,8 +502,20 @@ export function Editor({
       currentTimeRef.current = targetMs;
       setCurrentTimeMs(targetMs);
     },
-    [],
+    [clearSourcePreview, sourcePreviewAsset],
   );
+
+  const handleTimelineSeekStart = useCallback(() => {
+    if (sourcePreviewAsset) {
+      playerRef.current?.pause();
+      scrubStateRef.current = IDLE_SCRUB_STATE;
+      setIsPlaying(false);
+      clearSourcePreview();
+      return;
+    }
+
+    handleSeekStart();
+  }, [clearSourcePreview, handleSeekStart, sourcePreviewAsset]);
 
   const handleExport = useCallback(async () => {
     setIsExportSettingsOpen(true);
@@ -561,14 +613,16 @@ export function Editor({
   }, [feedSessionCount, inspectorSelection.type]);
 
   const handleOpenAICardInspector = useCallback((cardId: string) => {
+    clearSourcePreview();
     // Motion Card 编排模块已下线；所有卡片统一按 ai-card 类型打开 inspector
     setInspectorSelection({ type: 'ai-card', cardId });
     setActivePanel('ai');
-  }, []);
+  }, [clearSourcePreview]);
 
   const handleOpenSubtitleInspector = useCallback(() => {
+    clearSourcePreview();
     setInspectorSelection({ type: 'subtitle-style' });
-  }, []);
+  }, [clearSourcePreview]);
 
   const handleCloseInspector = useCallback(() => {
     setInspectorSelection({ type: 'empty' });
@@ -576,9 +630,10 @@ export function Editor({
 
   const handleOpenOverlayInspector = useCallback(
     (overlayId: string) => {
+      clearSourcePreview();
       setInspectorSelection({ type: 'overlay', overlayId });
     },
-    [],
+    [clearSourcePreview],
   );
 
   const handleReplaceAudio = useCallback(async () => {
@@ -646,6 +701,7 @@ export function Editor({
   }, [pendingRegenerateScript, startWorkflow]);
 
   const handleAddTextOverlay = useCallback(() => {
+    clearSourcePreview();
     const store = useTimelineStore.getState();
     const currentTime = currentTimeRef.current;
     const { width, height } = store.timeline;
@@ -682,10 +738,11 @@ export function Editor({
       const midpointMs = insertedOverlay.startMs + Math.floor(insertedOverlay.durationMs / 2);
       handleSeek(midpointMs);
     }
-  }, [handleSeek]);
+  }, [clearSourcePreview, handleSeek]);
 
   const handleSelectOverlayOnCanvas = useCallback(
     (overlayId: string | null) => {
+      clearSourcePreview();
       if (overlayId) {
         const overlay = timeline.overlays.find((o) => o.id === overlayId);
         if (overlay) {
@@ -695,7 +752,7 @@ export function Editor({
       }
       setInspectorSelection({ type: 'empty' });
     },
-    [timeline.overlays],
+    [clearSourcePreview, timeline.overlays],
   );
 
   const handleUpdateOverlayPosition = useCallback(
@@ -814,6 +871,8 @@ export function Editor({
                 currentTimeMs={currentTimeMs}
                 durationMs={effectiveDurationMs}
                 compact={layout.compactToolbar}
+                sourcePreviewAsset={sourcePreviewAsset}
+                onCloseSourcePreview={clearSourcePreview}
                 selectedOverlayId={
                   inspectorSelection.type === 'overlay' ? inspectorSelection.overlayId : null
                 }
@@ -851,7 +910,12 @@ export function Editor({
             >
               <Tabs
                 value={activePanel}
-                onValueChange={(next) => setActivePanel(next as 'assets' | 'ai')}
+                onValueChange={(next) => {
+                  if (next !== 'assets') {
+                    clearSourcePreview();
+                  }
+                  setActivePanel(next as 'assets' | 'ai');
+                }}
                 className={styles.sidebarTabs}
               >
                 <div className={styles.tabStrip}>
@@ -880,6 +944,8 @@ export function Editor({
                       onAddAsset={onAddAsset}
                       onOpenSubtitleInspector={handleOpenSubtitleInspector}
                       onAddTextOverlay={handleAddTextOverlay}
+                      onPreviewAsset={handlePreviewAsset}
+                      selectedPreviewAssetPath={sourcePreviewAsset?.path ?? null}
                       onUseAsPodcastAudio={onUseAsPodcastAudio}
                       onUseAsPodcastSrt={onUseAsPodcastSrt}
                       onReplaceAudio={handleReplaceAudio}
@@ -933,6 +999,8 @@ export function Editor({
                 currentTimeMs={currentTimeMs}
                 durationMs={effectiveDurationMs}
                 compact={layout.compactToolbar}
+                sourcePreviewAsset={sourcePreviewAsset}
+                onCloseSourcePreview={clearSourcePreview}
                 selectedOverlayId={
                   inspectorSelection.type === 'overlay' ? inspectorSelection.overlayId : null
                 }
@@ -1006,7 +1074,7 @@ export function Editor({
           currentTimeMs={currentTimeMs}
           isPlaying={isPlaying}
           onSeek={handleSeek}
-          onSeekStart={handleSeekStart}
+          onSeekStart={handleTimelineSeekStart}
           onSeekEnd={handleSeekEnd}
           compact={layout.compactTimeline}
           onOpenAICardInspector={handleOpenAICardInspector}

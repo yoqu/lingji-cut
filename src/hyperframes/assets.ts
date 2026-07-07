@@ -1,8 +1,14 @@
 import type { TimelineData } from '../types';
 import type { MediaCardContent } from '../types/ai';
-import type { HyperframesAssetDescriptor, PreparedHyperframesTimeline } from './types';
+export interface HyperframesAssetDescriptor {
+  sourcePath: string;
+  publicPath: string;
+}
 
-export type { HyperframesAssetDescriptor } from './types';
+export interface PreparedHyperframesTimeline {
+  timeline: TimelineData;
+  assets: HyperframesAssetDescriptor[];
+}
 
 function normalizePathLike(value: string): string {
   return value.replace(/\\/g, '/');
