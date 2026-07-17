@@ -5,6 +5,7 @@ export interface RunScriptGeneratingInput {
   originalText: string;
   projectDir: string;
   params: AutoWorkflowParams;
+  signal?: AbortSignal;
 }
 
 /**
@@ -22,7 +23,12 @@ export async function runScriptGenerating(input: RunScriptGeneratingInput): Prom
     throw new Error('未选择项目目录');
   }
 
-  const generated = await generateScriptDraft(text, input.params.templateId, input.params.roleId);
+  const generated = await generateScriptDraft(
+    text,
+    input.params.templateId,
+    input.params.roleId,
+    input.signal,
+  );
   await window.electronAPI.saveScriptFile(input.projectDir, 'script.md', generated);
   return generated;
 }

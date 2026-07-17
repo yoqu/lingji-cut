@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { FolderOpen } from 'lucide-react';
 import type { TTSProvider, TTSVoicePreset } from '../../types/ai';
 import {
   Button,
@@ -72,7 +73,7 @@ type VoiceErrors = Partial<Record<'name' | 'providerId' | 'voiceId' | 'reference
 function validateVoice(voice: TTSVoicePreset): VoiceErrors {
   const errors: VoiceErrors = {};
   if (!voice.name.trim()) errors.name = '请输入音色名称';
-  if (!voice.providerId) errors.providerId = '请选择 Provider';
+  if (!voice.providerId) errors.providerId = '请选择口播生成服务';
   if (!voice.model?.trim()) errors.model = '请选择或输入模型';
   if (voice.source === 'system' && !voice.voiceId?.trim()) errors.voiceId = '请输入音色 ID';
   if (voice.source === 'cloned') {
@@ -153,7 +154,7 @@ export function TTSVoiceDialog({
           <Field label="音色名称" required error={errors.name}>
             <Input value={form.name} onChange={(event) => set('name', event.target.value)} placeholder="例如：MiMo 宣传片旁白" size="sm" />
           </Field>
-          <Field label="Provider" required error={errors.providerId}>
+          <Field label="口播生成服务" required error={errors.providerId}>
             <Select value={form.providerId} options={providerOptions} onChange={(event) => handleProviderChange(event.target.value)} />
           </Field>
           <Field label="模型" required error={errors.model}>
@@ -178,7 +179,7 @@ export function TTSVoiceDialog({
             <Field label="参考音频" required error={errors.referenceAudioPath}>
               <div className={styles.modelInputRow}>
                 <Input value={form.referenceAudioPath ?? ''} onChange={(event) => set('referenceAudioPath', event.target.value)} placeholder="/Users/you/voice.mp3" size="sm" wrapperClassName={styles.modelInput} />
-                <Button type="button" variant="secondary" size="sm" onClick={() => { void handlePickAudio(); }}>选择</Button>
+                <Button type="button" variant="secondary" size="sm" leftIcon={<FolderOpen size={12} />} onClick={() => { void handlePickAudio(); }}>选择</Button>
               </div>
             </Field>
           )}

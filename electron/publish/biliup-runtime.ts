@@ -14,6 +14,7 @@
 
 import { join } from 'path';
 import { spawn } from 'child_process';
+import { registerPublishCancelHandler } from './cancel';
 
 // ---------------------------------------------------------------------------
 // 内部归一化辅助
@@ -141,6 +142,10 @@ export function runBiliup(
       });
     } else {
       const child = spawn(binaryPath, args, { cwd: opts?.cwd });
+      // 用户取消发布时杀掉上传子进程（B 站走 biliup，不经 Playwright）
+      const unregisterCancel = registerPublishCancelHandler(() => {
+        child.kill();
+      });
       let stdout = '';
       let stderr = '';
 
@@ -152,9 +157,11 @@ export function runBiliup(
       });
       child.on('error', (err) => {
         // binary not found or spawn failed — still resolve
+        unregisterCancel();
         resolve({ code: 1, stdout, stderr: stderr + err.message });
       });
       child.on('close', (code) => {
+        unregisterCancel();
         resolve({ code: code ?? 1, stdout, stderr });
       });
     }

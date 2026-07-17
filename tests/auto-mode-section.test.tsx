@@ -65,8 +65,8 @@ describe('AutoModeSection', () => {
     expect(html).toContain('type="checkbox"');
     expect(html).not.toMatch(/type="checkbox"[^>]*checked/);
     // 标题与说明可读
-    expect(html).toContain('一键成稿');
-    expect(html).toContain('写稿');
+    expect(html).toContain('自动剪辑');
+    expect(html).toContain('生成口播稿');
     // 未启用时不渲染参数下拉文案
     expect(html).not.toContain('不指定角色');
     expect(html).not.toContain('少女音');
@@ -75,7 +75,7 @@ describe('AutoModeSection', () => {
   it('toggling fires onToggle with the new boolean state', () => {
     const onToggle = vi.fn();
     const tree = AutoModeSection(makeBaseProps({ onToggle }));
-    const checkbox = findByAriaLabel(tree, '启用一键成稿');
+    const checkbox = findByAriaLabel(tree, '启用自动剪辑');
     expect(checkbox).not.toBeNull();
     const onChange = (checkbox!.props as { onChange: (next: boolean) => void }).onChange;
     expect(onChange).toBeTypeOf('function');
@@ -96,14 +96,24 @@ describe('AutoModeSection', () => {
 
     // 元素树层面校验 Select 的 value 与 options 已正确传入
     const tree = AutoModeSection(props);
-    // 重构后不再单独暴露 "写稿模板"：与 AI 写稿工作台保持一致，只保留角色 + 音色
+    // 重构后不再单独暴露 "写稿模板"：与写稿工作台保持一致，只保留角色 + 音色
     expect(findByAriaLabel(tree, '写稿模板')).toBeNull();
     const role = findByAriaLabel(tree, '写稿角色');
-    const voice = findByAriaLabel(tree, 'TTS 音色');
+    const voice = findByAriaLabel(tree, '口播音色');
     expect(role).not.toBeNull();
     expect(voice).not.toBeNull();
     expect((role!.props as { value: string }).value).toBe('none');
     expect((voice!.props as { value: string }).value).toBe('female-shaonv');
+  });
+
+  it('旧项目缺少 productionMode 时默认显示一键成片，并提供导演确认', () => {
+    const html = renderToStaticMarkup(
+      <AutoModeSection {...makeBaseProps({ enabled: true })} />,
+    );
+    expect(html).toContain('制作模式');
+    expect(html).toContain('一键成片');
+    expect(html).toContain('导演确认');
+    expect(html).toMatch(/aria-pressed="true"[^>]*>一键成片/u);
   });
 
   it("mode='always' 时不渲染 checkbox，字段始终展开", () => {
@@ -160,7 +170,7 @@ describe('AutoModeSection', () => {
     const tree = AutoModeSection(
       makeBaseProps({ enabled: true, onChangeParams }),
     );
-    const voice = findByAriaLabel(tree, 'TTS 音色');
+    const voice = findByAriaLabel(tree, '口播音色');
     expect(voice).not.toBeNull();
     const onChange = (voice!.props as { onChange: (e: { target: { value: string } }) => void }).onChange;
     onChange({ target: { value: 'male-qn-qingse' } });

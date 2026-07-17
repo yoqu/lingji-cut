@@ -151,7 +151,7 @@ async function runXiaomiMimoTTS(options: TTSRunnerOptions): Promise<TTSRunnerRes
 
 export async function runTTSProvider(options: TTSRunnerOptions): Promise<TTSRunnerResult> {
   if (!options.provider.apiKey.trim()) {
-    throw new Error('TTS Provider 缺少 API Key');
+    throw new Error('口播生成服务缺少 API Key');
   }
 
   if (options.provider.type === 'minimax') {
@@ -162,5 +162,5 @@ export async function runTTSProvider(options: TTSRunnerOptions): Promise<TTSRunn
     return runXiaomiMimoTTS(options);
   }
 
-  throw new Error('该 TTS Provider 类型暂未接入生成实现');
+  throw new Error('该口播生成服务类型暂未接入生成实现');
 }

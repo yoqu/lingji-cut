@@ -14,6 +14,29 @@ import type {
   TTSVoicePreset,
   VideoAspectRatio,
 } from '../types/ai';
+import type { MotionBible } from '../types/motion';
+import type { MediaAssetCandidate } from './media-asset-resolution';
+import type { MediaAssetRequest } from '../types/production';
+import type {
+  AssetImportRequest,
+  AssetImportResult,
+  AssetAcceptGeneratedResult,
+  AssetChromaKeyRequest,
+  AssetChromaKeyResult,
+  AssetDeleteRequest,
+  AssetDeleteResult,
+  AssetGenerationRequest,
+  AssetLibraryFile,
+  AssetRecord,
+  AssetResolutionState,
+  AssetLibraryState,
+  AssetReplaceOriginalResult,
+  AssetSampleColorRequest,
+  AssetSampleColorResult,
+  AssetUpdatePatch,
+  ProjectAssetManifest,
+  StoryboardAssetRequest,
+} from '../types/assets';
 import type {
   VideoImportProgress,
   VideoImportRequest,
@@ -34,7 +57,16 @@ import type {
 import type { PublishAccount, PublishPlatform } from '../../electron/publish/types';
 export type { PublishAccount, PublishPlatform };
 
-export type AppPage = 'welcome' | 'setup' | 'editor' | 'script-workbench' | 'settings' | 'auto-run' | 'publish';
+export type AppPage =
+  | 'welcome'
+  | 'setup'
+  | 'editor'
+  | 'director-workbench'
+  | 'script-workbench'
+  | 'asset-center'
+  | 'settings'
+  | 'auto-run'
+  | 'publish';
 
 /** 控制服务操作事件（agent 经 CLI 驱动应用；驱动全局「AI 正在操作」反馈层） */
 export interface ControlOpEvent {
@@ -61,6 +93,34 @@ export interface WorkbenchTabContextMenuRequest {
 export interface WorkbenchTabMenuEvent {
   action: 'close-current' | 'close-others' | 'close-right';
   file: string;
+}
+
+// --- 目录树共享组件：右键菜单 + CRUD ---
+export type DirectoryTreeMenuAction =
+  | 'create-directory'
+  | 'rename'
+  | 'delete'
+  | 'copy-path'
+  | 'reveal';
+
+export interface DirectoryTreeContextMenuRequest {
+  /** 被右键节点的相对路径（项目根目录为 ''） */
+  relativePath: string;
+  type: 'file' | 'directory';
+  projectDir: string | null;
+}
+
+export interface DirectoryTreeMenuEvent {
+  action: Exclude<DirectoryTreeMenuAction, 'copy-path' | 'reveal'>;
+  relativePath: string;
+  type: 'file' | 'directory';
+}
+
+/** 目录树 CRUD 操作返回值 */
+export interface ProjectTreeCrudResult {
+  ok: boolean;
+  code?: string;
+  message?: string;
 }
 
 export const MENU_ACTIONS = [
@@ -131,6 +191,7 @@ export interface GenerateCardImageArgs {
   cardId: string;
   prompt: string;
   negativePrompt?: string;
+  backgroundRemoval?: 'none' | 'green-screen';
   aspectRatio: ImageAspectRatio;
   providerId?: string | null;
   model?: string | null;
@@ -161,6 +222,7 @@ export interface GenerateAICardForSegmentArgs {
   cardPrompt?: string;
   programSummary?: string;
   keywords?: string[];
+  motionBible?: MotionBible;
   projectDir?: string;
   projectBindings?: PromptBindingMap | null;
   segmentIndex?: number;
@@ -168,6 +230,7 @@ export interface GenerateAICardForSegmentArgs {
   prevSegment?: AISegment;
   nextSegment?: AISegment;
   visualType?: AISegmentVisualType;
+  qualityMode?: 'auto' | 'director';
   /** 观测面板关联键（渲染端任务 id）；缺省不上报 agent 观测事件。 */
   feedId?: string;
 }
@@ -208,6 +271,9 @@ export interface ProjectMetadata {
   createdAtMs: number;
 }
 
+/** 项目所处阶段（欢迎页标签）：已发布 > 剪辑中 > 口播稿 > 原稿 > 新建。 */
+export type RecentProjectStage = 'published' | 'editing' | 'script' | 'original' | 'new';
+
 export interface RecentProjectEntry {
   path: string;
   name: string;
@@ -215,6 +281,9 @@ export interface RecentProjectEntry {
   createdAt?: string;
   updatedAt?: string;
   coverImageUrl?: string;
+  stage?: RecentProjectStage;
+  /** 已成功发布的平台 id（stage 为 published 时非空）。 */
+  publishedPlatforms?: string[];
 }
 
 /** 灵机剪影缓存账户（主进程 safeStorage 落盘结构，含长效网关密钥 lj_ 与服务端下发配置）。 */
@@ -234,6 +303,23 @@ export interface ElectronAPI {
   /** 弹出系统通知（mac 通知中心 / Windows 通知）。点击通知聚焦主窗口。 */
   showSystemNotification: (payload: { title: string; body: string }) => void;
   getAudioDuration: (filePath: string) => Promise<number>;
+  createSunoMusic: (
+    request: import('./audio-gen/types').MusicGenerationRequest,
+  ) => Promise<import('./audio-gen/types').AudioTask>;
+  createSunoSound: (
+    request: import('./audio-gen/types').SoundGenerationRequest,
+  ) => Promise<import('./audio-gen/types').AudioTask>;
+  getSunoAudioTask: (taskId: string) => Promise<import('./audio-gen/types').AudioTaskStatus>;
+  getSunoCredits: () => Promise<number>;
+  testSunoAudioGeneration: () => Promise<import('./audio-gen/types').AudioGenerationSmokeTestResult>;
+  materializeSunoAudio: (args: {
+    taskId: string;
+    projectDir?: string | null;
+    role: 'bgm' | 'stinger' | 'sfx' | 'ambience' | 'transition-sound';
+    query: string;
+    reuseKey: string;
+    audio?: Pick<NonNullable<import('../types/assets').AssetMetadata['audio']>, 'energy' | 'transientType'>;
+  }) => Promise<AssetRecord[]>;
   /** 返回文件的 mtime（毫秒整数）。文件不存在或读取失败时返回 null。 */
   getFileMtime: (filePath: string) => Promise<number | null>;
   analyzeSrt: (args: {
@@ -270,9 +356,11 @@ export interface ElectronAPI {
     cardPrompt?: string;
     programSummary?: string;
     keywords?: string[];
+    motionBible?: MotionBible;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
     feedId?: string;
+    refineExistingMotion?: boolean;
   }) => Promise<AICard>;
   generateAnimationDirection: (args: {
     entries: SrtEntry[];
@@ -282,6 +370,7 @@ export interface ElectronAPI {
     programSummary?: string;
     keywords?: string[];
     cardPrompt?: string;
+    motionBible?: MotionBible;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
   }) => Promise<string>;
@@ -293,6 +382,7 @@ export interface ElectronAPI {
     globalPrompt?: string;
     programSummary?: string;
     keywords?: string[];
+    motionBible?: MotionBible;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
     feedId?: string;
@@ -373,7 +463,48 @@ export interface ElectronAPI {
     expired?: boolean;
   } | null>;
   loadProject: (projectDir: string) => Promise<string>;
-  saveProjectSection: (projectDir: string, section: string, data: string) => Promise<void>;
+  saveProjectSection: (
+    projectDir: string,
+    section: string,
+    data: string,
+    productionGuard?: import('./production-mutations').ProductionMutationGuard,
+  ) => Promise<void>;
+  mutateProjectProduction: (
+    projectDir: string,
+    mutation: import('./production-mutations').ProductionMutation,
+  ) => Promise<import('../types/director').ProjectProductionState>;
+  startDirectorPlan: (args: {
+    taskId: string;
+    directorRevision: number;
+    entries: SrtEntry[];
+    settings: AISettings;
+    projectDir: string;
+    globalPrompt?: string;
+    projectBindings?: PromptBindingMap | null;
+    telemetryRunId?: string | null;
+    mode?: 'auto' | 'director';
+  }) => Promise<import('../types/director').ProjectProductionState>;
+  approveDirectorPlanAndStartProduction: (
+    projectDir: string,
+    expectedRevision: number,
+    taskId?: string,
+  ) => Promise<import('../types/director').ProjectProductionState>;
+  resumeProduction: (
+    projectDir: string,
+    taskId?: string,
+    mode?: 'auto' | 'director',
+  ) => Promise<import('../types/director').ProjectProductionState>;
+  cancelProduction: (
+    projectDir: string,
+    taskId?: string,
+    directorRevision?: number,
+  ) => Promise<import('../types/director').ProjectProductionState>;
+  onDirectorPlanProgress: (callback: (progress: {
+    taskId: string;
+    directorRevision: number;
+    phase: 'planning' | 'motion-bible';
+    percent: number;
+  }) => void) => () => void;
   scanProjectDirectory: (
     projectDir: string,
   ) => Promise<import('./project-import-types').ImportProjectScanResult>;
@@ -410,6 +541,42 @@ export interface ElectronAPI {
   scanProjectAssets: (projectDir: string) => Promise<
     { path: string; type: 'video' | 'image' | 'audio' | 'srt'; durationMs: number }[]
   >;
+  getAssetLibraryState: (projectDir?: string | null) => Promise<AssetLibraryState>;
+  searchReusableMediaAssets: (args: {
+    projectDir: string;
+    request: MediaAssetRequest;
+  }) => Promise<MediaAssetCandidate[]>;
+  importAssetLibraryFiles: (request?: AssetImportRequest) => Promise<AssetImportResult>;
+  updateAssetLibraryAsset: (
+    assetId: string,
+    patch: AssetUpdatePatch,
+  ) => Promise<AssetLibraryFile>;
+  chromaKeyAssetLibraryAsset: (request: AssetChromaKeyRequest) => Promise<AssetChromaKeyResult>;
+  deleteAssetLibraryAsset: (request: AssetDeleteRequest) => Promise<AssetDeleteResult>;
+  replaceAssetOriginalWithProcessed: (
+    assetId: string,
+    projectDir?: string | null,
+  ) => Promise<AssetReplaceOriginalResult>;
+  sampleAssetLibraryColor: (request: AssetSampleColorRequest) => Promise<AssetSampleColorResult>;
+  addAssetToProjectLibrary: (
+    projectDir: string,
+    assetId: string,
+  ) => Promise<ProjectAssetManifest | null>;
+  resolveAssetLibraryRequests: (args: {
+    projectDir: string;
+    requests: StoryboardAssetRequest[];
+    sourceCardId?: string;
+  }) => Promise<AssetResolutionState>;
+  acceptGeneratedAssetFile: (args: {
+    projectDir: string;
+    requestId: string;
+    filePath: string;
+  }) => Promise<AssetAcceptGeneratedResult>;
+  updateAssetGenerationRequest: (args: {
+    projectDir: string;
+    requestId: string;
+    patch: Partial<AssetGenerationRequest>;
+  }) => Promise<ProjectAssetManifest | null>;
   renderVideo: (args: {
     timeline: string;
     outputPath: string;
@@ -540,6 +707,13 @@ export interface ElectronAPI {
   showEditorContextMenu: () => Promise<void>;
   showWorkbenchTabContextMenu: (request: WorkbenchTabContextMenuRequest) => Promise<void>;
   onWorkbenchTabMenuAction: (callback: (event: WorkbenchTabMenuEvent) => void) => () => void;
+  // 目录树共享组件：CRUD + 右键菜单
+  createDirectory: (args: { projectDir: string; relativePath: string }) => Promise<ProjectTreeCrudResult>;
+  createFile: (args: { projectDir: string; relativePath: string; content?: string }) => Promise<ProjectTreeCrudResult>;
+  renamePath: (args: { projectDir: string; oldRelative: string; newRelative: string }) => Promise<ProjectTreeCrudResult>;
+  deletePath: (args: { projectDir: string; relativePath: string; recursive?: boolean }) => Promise<ProjectTreeCrudResult>;
+  showDirectoryTreeContextMenu: (request: DirectoryTreeContextMenuRequest) => Promise<void>;
+  onDirectoryTreeMenuAction: (callback: (event: DirectoryTreeMenuEvent) => void) => () => void;
   // 一键成稿观测日志
   appendAutoRunEvent: (event: import('./telemetry/auto-run').AutoRunEvent) => Promise<void>;
   listAutoRunLogs: (limit?: number) => Promise<import('./telemetry/auto-run').AutoRunLogMeta[]>;

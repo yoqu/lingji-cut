@@ -1,5 +1,6 @@
 import { useAIStore } from '../store/ai';
 import { useScriptStore } from '../store/script';
+import { useProjectTreeStore } from '../store/project-tree';
 import { getRoleById } from './script-templates';
 import { SCRIPT_TEMPLATE_SEEDS } from './prompts/script-template-defaults';
 
@@ -19,7 +20,7 @@ export function registerMcpReadonlyHandlers(): () => void {
       const state = useScriptStore.getState();
       window.mcpAPI!.reply(payload._replyChannel, {
         projectDir: state.projectDir,
-        openFiles: state.fileEntries.map((f) => f.name),
+        openFiles: useProjectTreeStore.getState().fileEntries.map((f) => f.name),
         activeFile: state.openedFile,
         cursorPosition: null,
       });
@@ -132,7 +133,7 @@ export function registerMcpReadonlyHandlers(): () => void {
       const state = useScriptStore.getState();
       window.mcpAPI!.reply(payload._replyChannel, {
         projectDir: state.projectDir,
-        files: state.fileEntries.map((f) => ({
+        files: useProjectTreeStore.getState().fileEntries.map((f) => ({
           path: f.name,
           name: f.name,
           isDirectory: f.type === 'directory',

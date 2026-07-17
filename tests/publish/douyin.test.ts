@@ -80,6 +80,25 @@ it('uploadDouyinVideo 把视频文件设置到 div[class^="container"] input 上
   expect(loc.setInputFiles).toHaveBeenCalledWith('/tmp/v.mp4');
 });
 
+it('uploadDouyinVideo 把描述打入描述编辑器（先描述后标签）', async () => {
+  const page = makeMockPage();
+
+  await uploadDouyinVideo(page as any, {
+    storageStatePath: '/c.json',
+    filePath: '/tmp/v.mp4',
+    title: '标题',
+    desc: '这是视频描述',
+    tags: ['a'],
+    headless: true,
+  });
+
+  const typed = page.keyboard.type.mock.calls.map((c: any[]) => c[0]);
+  const descIndex = typed.indexOf('这是视频描述');
+  const tagIndex = typed.findIndex((t: string) => t.includes('#a'));
+  expect(descIndex).toBeGreaterThanOrEqual(0);
+  expect(tagIndex).toBeGreaterThan(descIndex);
+});
+
 it('uploadDouyinVideo 传入 covers 时上传 3:4 竖封面 + 4:3 横封面', async () => {
   const page = makeMockPage();
 

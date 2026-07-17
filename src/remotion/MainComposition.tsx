@@ -18,6 +18,8 @@ export type MainCompositionProps = {
   compiledCards?: Record<string, string>;
   /** 项目目录：预览时供卡片 cardAsset 把相对图片解析为 file://（导出走 staticFile，可省）。 */
   cardProjectDir?: string;
+  /** 预览专用：同名口播文件被覆盖时刷新媒体 URL；导出不传。 */
+  podcastRevision?: number;
 };
 
 export const MainComposition = memo(function MainComposition({
@@ -25,6 +27,7 @@ export const MainComposition = memo(function MainComposition({
   srtEntries,
   compiledCards,
   cardProjectDir,
+  podcastRevision,
 }: MainCompositionProps) {
   const plan = useMemo(
     () => buildRenderPlan(timeline, srtEntries, timeline.fps ?? 30),
@@ -34,11 +37,19 @@ export const MainComposition = memo(function MainComposition({
   const audioSequences = useMemo(
     () =>
       plan.audio.map((a) => (
-        <Sequence key={a.id} from={a.startFrame} durationInFrames={a.durationFrames}>
-          <AudioOverlay clip={a} fps={plan.fps} />
+        <Sequence
+          key={`${a.id}:${a.id === 'podcast-audio' ? podcastRevision ?? 0 : 0}`}
+          from={a.startFrame}
+          durationInFrames={a.durationFrames}
+        >
+          <AudioOverlay
+            clip={a}
+            fps={plan.fps}
+            mediaRevision={a.id === 'podcast-audio' ? podcastRevision : undefined}
+          />
         </Sequence>
       )),
-    [plan.audio, plan.fps],
+    [plan.audio, plan.fps, podcastRevision],
   );
   const visualSequences = useMemo(
     () =>
@@ -50,6 +61,10 @@ export const MainComposition = memo(function MainComposition({
               zIndex={c.zIndex}
               compiledJs={compiledCards?.[c.overlay.id]}
               cues={c.cues}
+              timingPlan={c.timingPlan}
+              transitionIn={c.transitionIn}
+              transitionOut={c.transitionOut}
+              durationFrames={c.durationFrames}
               projectDir={cardProjectDir}
             />
           ) : c.kind === 'text' ? (

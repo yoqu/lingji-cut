@@ -83,6 +83,15 @@
 - 首页、设置页、工作区都应体现“工具”而不是“宣传”
 - 不要使用双主卡片营销式入口、夸张卖点文案、情绪化插画式包装
 
+### 3.6 Director-First Production
+- 顶层信息架构固定为：写稿工作台 → 导演台 → 视频编辑器 → 资产 → 发布。
+- 导演方案是画面、封面、声音、字幕高亮和时间线生成的强制上游；批准前只允许低成本规划。
+- 导演模式有“导演方案批准”和“Animatic 批准”两个检查点；一键模式自动批准，但仍持久化检查点时间。
+- 批量画面、封面、声音和质检只在导演台管理；编辑器只保留播放器、时间线、镜头导航和单项精修。
+- 导演声音方向分别提供“背景音乐”和“环境与音效”开关；两者可独立启用，全部关闭时只保留口播且不得调用声音生成服务。
+- 导演台使用三栏全宽工作台；宽度不足时风险栏收为覆盖式抽屉，不把结构化字段压缩到不可用宽度。
+- 已批准方案再次编辑必须创建新草案；旧产物在替代结果成功前持续可用，人工精修内容不得静默覆盖。
+
 ---
 
 ## 4. Color System
@@ -120,15 +129,16 @@
 - **Warm Accent (Orange)**: `#FF9F0A`（仅用于时间线轨道等功能区分，不作为主要交互色）
 
 ### AI Operation Colors（AI 操作界面专用）
-这些颜色仅用于 AI 操作界面的虚拟光标和指示器（详见第 9 章）：
-- **Generation Cursor**: `#a78bfa`（紫色，仅用于 AI 生成模式光标）
-- **Review Cursor**: `#34d399`（绿色，仅用于 AI 审阅模式光标）
-- **Waiting Glow**: `#34d399` + `#00d2ff`（渐变，仅用于等待呼吸效果）
+AI 不是一套独立品牌色。所有生成、审查、分析、语音与媒体任务共用产品的状态语义：
+- **Active / Progress**: `var(--color-system-blue)`
+- **Completed**: `var(--color-success)`，只在完成终态出现
+- **Failed**: `var(--color-danger)`，只在错误与破坏性反馈中出现
+- **Cancelled**: `var(--color-text-tertiary)`，表达中性终止
 
 ### Rules
 - 常态界面只允许一个主强调色：**System Blue** (`#0A84FF`)
 - 绿色、橙色、黄色、红色只用于状态，不用于入口包装或品牌分区
-- 紫色和青色**仅**用于 AI 操作界面的光标和指示器，不用于常规交互
+- AI 光标、进度、选中态与主操作统一使用系统蓝，不按 AI 能力分配紫/绿/粉等分类色
 - 不允许大面积渐变作为界面背景
 - **禁止**使用 CLAUDE.md 中旧的 Apple 官网配色（`#f5f5f7`、`#000000`、`#0071e3` 等）
 
@@ -376,129 +386,90 @@ background: #1C1C1E;
 
 ---
 
-## 9. AI 操作界面视觉反馈体系（铁律）
+## 9. AI 人机交互体系（铁律）
 
-所有涉及 AI 操作界面的功能（文稿生成、视频剪辑、审稿、AI 辅助编辑等）**必须**复用以下统一的视觉反馈架构。不允许各模块自行发明独立的 AI 操作指示方案。
+自动剪辑、口播稿生成与审查、口播音频、内容卡片、Motion 卡片、图片、视频、封面和发布文案，必须使用同一套任务语言与生命周期。AI 是完成创作任务的能力，不是每个模块各自包装的一种视觉主题。
 
-### 架构总览
+### 铁律 1：统一生命周期
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    页面协调层（Workbench）                    │
-│  负责流程编排、状态切换、回调注册                              │
-└────┬────────────────────────────────────────────────────────┘
-     │
-     ├─► LiveStreamingEditor — 实时流式打字机（生成模式）
-     │    ├─► 文档内虚拟光标（紫色 #a78bfa，generate 模式）
-     │    ├─► 动态分块 + 缓冲区自适应速率
-     │    └─► 智能自动滚动跟随
-     │
-     ├─► ReviewCursorAnimator — 审阅扫描动画（审稿模式）
-     │    ├─► 文档内虚拟光标（绿色 #34d399，review 模式）
-     │    ├─► 呼吸光效（CSS 动画，等待阶段）
-     │    ├─► 浮动鼠标指针（fixed 定位，屏幕坐标）
-     │    └─► 行高亮 + 批注逐个揭示
-     │
-     ├─► StreamingEditor — 预计算帧回放（重放/倒回场景）
-     │
-     ├─► 状态管理层（Zustand Store）
-     │    ├─► virtualCursorPos: number | null
-     │    ├─► reviewCursorPos: { x, y } | null
-     │    ├─► reviewBreathing: boolean
-     │    ├─► streamingActive: boolean
-     │    ├─► editorAgent: { readOnly, virtualCursorPos, streamingActive }
-     │    └─► agentOperation: { isOperating, operationType, progress, ... }
-     │
-     └─► 编辑器组件
-          ├─► virtualCursorExtension（CM6 StateField + 装饰 + 主题）
-          └─► streamingActive 守卫（防止 React 重渲染覆盖 CM6 动画）
-```
+每次 AI 操作都按同一状态机表达：
 
-### 铁律 1：双光标系统
+`ready → preparing → running → completed | failed | cancelled`
 
-任何 AI 操作界面必须实现两层光标：
+| 状态 | 用户看到什么 | 任务系统行为 |
+|------|--------------|--------------|
+| `ready` | 可编辑参数与明确主按钮 | 尚未创建任务 |
+| `preparing` | “准备中”或真实准备步骤 | `startTask`，系统蓝活动态 |
+| `running` | 真实阶段、进度或已用时间 | `updateTask`，允许继续浏览其他区域 |
+| `completed` | 结果直接落在触发位置 | `completeTask`，短暂成功反馈 |
+| `failed` | 原因与可执行恢复动作 | `failTask`，保留用户输入 |
+| `cancelled` | 中性“已取消”反馈 | `cancelTask`，不得标红或发送失败通知 |
 
-1. **文档内虚拟光标**（CodeMirror 6 Widget 装饰）
-   - 使用 `src/lib/virtual-cursor.ts` 中的 `virtualCursorExtension`
-   - 通过 `setVirtualCursor` / `clearVirtualCursor` Effect 控制位置
-   - 通过 `setVirtualCursorMode` 切换模式（`'generate'` 紫色 / `'review'` 绿色）
-   - Widget 包含闪烁竖线 + emoji 标签（🤖 生成 / 🔍 审阅）
-   - 位置随文档变更自动映射（`tr.changes.mapPos`）
+迟到的异步回调不得覆盖任何终态。相同操作必须有重入锁，防止用户连续点击产生重复请求。
 
-2. **浮动鼠标指针**（仅审阅/扫描场景）
-   - `position: fixed` + `z-index: 99999`
-   - SVG 箭头 + “AI” 标签徽章
-   - 通过 `coordsAtPos()` 获取屏幕坐标
-   - `transition: 0.15s ease-out` 平滑移动
-   - `drop-shadow` 发光效果
+### 铁律 2：三层反馈，避免重复
 
-### 铁律 2：三阶段动画模型
+1. **触发位置**：按钮 loading/disabled、简短阶段文字和最终结果，只描述当前操作。
+2. **全局任务**：预计超过 2 秒的操作接入 `src/store/task-progress.ts`，统一汇聚到底部 `AppStatusBar`；多步骤工作使用父子任务。
+3. **内容结果**：生成内容在其真实编辑位置出现；失败使用行内错误与重试入口，不用原生 `alert()`。
 
-所有 AI 操作必须遵循三阶段视觉反馈：
+同一任务不得同时出现全屏遮罩、独立进度弹窗和底部进度三套阻塞反馈。自动剪辑可以使用专用任务页面展示整体步骤，但子阶段仍以同一个 task id 汇总；编辑器内操作默认使用非阻塞局部状态。
 
-| 阶段 | 视觉表现 | 实现方式 |
-|------|---------|---------|
-| **等待/准备** | 呼吸光效 + 扫描线 | CSS 动画（`reviewBreathing` 类名），不涉及 CM6 |
-| **执行中** | 虚拟光标移动 + 打字机/扫描 | CM6 Effect dispatch + 定时器调度 |
-| **完成** | 清除所有光标状态 | `clearVirtualCursor` + 重置 store |
+### 铁律 3：真实进度与阶段
 
-### 铁律 3：流式打字机引擎规范
+- 有总量时展示真实百分比，例如卡片 `3/8`、字幕 `42/120`、音频 `68%`。
+- 无法计算百分比时使用 indeterminate/streaming，并展示真实阶段或已用时间；禁止伪造递增百分比。
+- 多路并行应合成一个总任务，并在详情中展示子任务，不创建多个互相争抢焦点的主提示。
+- 不显示永远 active 的装饰步骤，也不在请求完成前使用“即将完成”等无依据文案。
+- 完成、失败和取消都必须收尾，不能留下无限旋转或禁用状态。
 
-使用 `LiveStreamingEditor` 处理实时 LLM 流：
+### 铁律 4：取消必须真实
 
-- **队列缓冲**：文本 chunk 入队，动画帧按节奏消费
-- **动态分块**：基础 chunkSize=3，根据缓冲深度动态调整（3~24 字符）
-- **智能停顿**：换行后 +26ms，标点后 +14ms（中英文标点均覆盖）
-- **自然断句**：在标点、空格、换行处优先断开，避免硬切
-- **速率自适应**：缓冲积压时自动加速（减少延迟 + 增大 chunk），空闲时恢复节奏
-- **进度回调**：`committedChars` / `receivedChars` / `processedSteps` / `totalSteps`
+- 只有底层请求、IPC 或本地播放器能够实际中断时，才显示“停止/取消生成”。
+- 点击后先进入 `cancelled` 终态，再中断网络请求、轮询、渲染或动画；可用的部分结果可保留，但不得冒充完整成功结果。
+- 取消不是错误：不调用 `failTask`，不显示红色，不弹错误 toast，不发送失败系统通知。
+- 无法取消的阶段不显示停止按钮；不要提供点击后仅关闭界面的假取消。
+- 所有异常、完成与取消路径都要释放监听器、timer、AbortController 和编辑器只读态。
 
-### 铁律 4：滚动跟随策略
+### 铁律 5：语言与操作一致
 
-- **底部检测**：`scrollHeight - scrollTop - clientHeight < 50px` 视为”在底部”
-- **自动跟随**：在底部时 `scrollIntoView: true`，不在底部时不强制滚动
-- **用户滚动尊重**：一旦用户手动滚动，停止自动跟随（程序滚动 100ms 窗口内忽略）
-- **用户回底恢复**：用户滚回底部后恢复自动跟随
+- 初次操作使用“生成”：`生成口播稿`、`生成封面图`、`生成图片`。
+- 已有结果再次运行使用“重新生成”；只改文本提示使用“重写提示词”。
+- 语音统一使用“合成口播/开始合成”，审查统一使用“审查口播稿”。
+- 活动中统一使用“停止”，终态统一使用“已完成 / 失败 / 已取消”。
+- Provider 面向用户写“生成服务”，技术模型写“模型”；不要混用“引擎、通道、Agent 执行器”等内部术语。
+- 错误文案包含发生了什么和下一步，例如“生成失败。检查 AI 配置或网络后重新生成”。
 
-### 铁律 5：状态安全守卫
+### 铁律 6：视觉主题一致
 
-- `streamingActive` 标志位在动画期间**必须**为 `true`，阻止 React 状态同步覆盖 CM6 内容
-- `editorAgent.readOnly` 在 AI 操作期间**必须**为 `true`
-- 任何异常/中断路径都必须清理光标状态（`clearVirtualCursor` + `setReviewHighlightLine(null)` + 重置 store）
-- 多个 `StateEffect` 应在单次 `dispatch` 中批量发送
+- 所有 AI 活动态、虚拟光标、进度线和选中态统一使用 `var(--color-system-blue)`。
+- 绿色仅表示完成，红色仅表示失败，黄色仅表示需要注意，灰色表示取消或不可用。
+- 使用 Lucide 图标承载动作与状态，不用 emoji 作为主要识别方式。
+- 禁止紫色/绿色区分 AI 能力，禁止渐变进度、辉光、扫描线、呼吸灯和大面积动态背景。
+- 动效只用于说明内容正在写入或位置正在变化，并遵守 reduced-motion；不能为了“像 AI”而制造持续动画。
 
-### 铁律 6：视觉主题一致性
+### 铁律 7：编辑器内反馈是可选增强
 
-| 操作类型 | 主色 | 光标闪烁 | 指示器样式 |
-|---------|------|---------|-----------|
-| 生成/写入 | `#a78bfa` 紫色 | 1s step-end | `agentTypingIndicator`（紫色药丸 + 三点脉冲） |
-| 审阅/扫描 | `#34d399` 绿色 | 0.8s step-end | `agentReviewIndicator`（绿色药丸 + 三点脉冲） |
-| 等待/呼吸 | `#34d399` + `#00d2ff` 渐变 | — | `reviewBreathing`（辉光 + 扫描线） |
+文稿流式写入可使用 `LiveStreamingEditor`，审查可使用 `ReviewCursorAnimator`，但它们不是所有 AI 操作都必须复制的视觉模板：
 
-### 铁律 7：文件职责与复用方式
+- `streamingActive` 在实际写入期间为 `true`，防止 React 同步覆盖 CodeMirror 内容。
+- 只锁定正在被 AI 修改的编辑面，不阻塞全局导航、预览或其他无关区域。
+- 自动滚动必须尊重用户手动滚动；用户离开底部后停止强制跟随。
+- 生成与审查光标都使用系统蓝和简洁文本标签，不使用 emoji、发光或浮动鼠标表演。
+- 完成、失败与取消路径统一清除虚拟光标、高亮、只读态和动画引用。
 
-| 文件 | 职责 | 复用方式 |
-|------|------|---------|
-| `src/lib/virtual-cursor.ts` | CM6 虚拟光标扩展（Effect/Field/Widget/Theme） | 直接引入 `virtualCursorExtension` |
-| `src/lib/live-streaming-editor.ts` | 实时流式打字机引擎 | `new LiveStreamingEditor(view, options)` |
-| `src/lib/review-cursor-animator.ts` | 审阅扫描动画控制器 | `new ReviewCursorAnimator(view, options)` |
-| `src/lib/streaming-editor.ts` | 预计算帧回放引擎 | `new StreamingEditor(view, options)` |
-| `src/lib/diff-to-frames.ts` | 文本 diff → 动画帧转换 | `diffToFrames(before, after, options)` |
+### 实现映射
 
-新模块（如视频 AI 剪辑）接入时：
-1. 编辑器扩展中加入 `virtualCursorExtension`
-2. 根据场景选择合适的引擎（`LiveStreamingEditor` / `StreamingEditor` / `ReviewCursorAnimator`）
-3. 在 store 中维护 `editorAgent` / `agentOperation` / `activeStream` 等状态
-4. CSS 层复用 `agentTypingIndicator` / `agentReviewIndicator` / `reviewBreathing` / `aiReviewCursor` 样式
-5. 遵循三阶段动画模型和滚动跟随策略
+| 能力 | 统一入口 |
+|------|----------|
+| 全局任务生命周期 | `src/store/task-progress.ts` |
+| 状态栏与详情 | `src/components/StatusBarProgressLine.tsx`、`TaskProgressPanel.tsx` |
+| 自动剪辑整体流程 | `src/hooks/useAIVideoWorkflow.ts`、`AutoRunOverlay.tsx` |
+| 文稿流式写入 | `src/lib/live-streaming-editor.ts` |
+| 审查标注 | `src/lib/review-cursor-animator.ts` |
+| 编辑器虚拟光标 | `src/lib/virtual-cursor.ts` |
 
-### 禁止事项
-
-- **禁止**在新模块中自行实现 blinking cursor、typing indicator、breathing 效果
-- **禁止**绕过 `streamingActive` 守卫直接操作编辑器内容
-- **禁止**在动画期间允许用户编辑（必须 `readOnly: true`）
-- **禁止**使用 `setInterval` 轮询光标位置，必须通过 CM6 Effect 系统驱动
-- **禁止**在清理路径中遗漏任何光标/高亮状态的重置
+新增 AI 能力时，先复用统一任务生命周期，再决定是否需要局部内容动效。禁止为新能力另建进度 store、独立品牌色或阻塞式 AI 弹窗。
 
 ---
 

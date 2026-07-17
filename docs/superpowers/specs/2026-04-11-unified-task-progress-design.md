@@ -65,7 +65,7 @@
 
 ```
 操作代码（ScriptWorkbench / Editor / hooks）
-  │  startTask / updateTask / completeTask / failTask
+  │  startTask / updateTask / completeTask / failTask / cancelTask
   ▼
 taskProgressStore（Zustand, 纯内存）
   │
@@ -129,7 +129,7 @@ interface TaskCompletionAction {
 
 interface TaskProgressItem {
   id: string;                    // 'ai-generate-1712808000000'
-  category: TaskCategory;        // 分类，决定图标和颜色
+  category: TaskCategory;        // 分类只决定任务语义与图标
   label: string;                 // "AI 生成稿件"
   mode: ProgressMode;
   progress: number;              // 0-100，indeterminate 时为 0
@@ -139,8 +139,9 @@ interface TaskProgressItem {
   onCancel?: () => void;
   startedAt: number;
   completedAt?: number;
-  status: 'active' | 'completed' | 'error';
+  status: 'active' | 'completed' | 'error' | 'cancelled';
   error?: string;
+  cancelReason?: string;
   completionAction?: TaskCompletionAction;
 }
 
@@ -152,7 +153,8 @@ type TaskCategory =
   | 'export'      // 视频导出
   | 'tts'         // TTS 语音合成
   | 'cover'       // 封面图生成
-  | 'io';         // 通用文件 I/O
+  | 'io'          // 通用文件 I/O
+  | 'publish';    // 平台发布
 ```
 
 ### 5.2 Store API
@@ -170,6 +172,7 @@ interface TaskProgressStore {
   >>) => void;
   completeTask: (id: string, action?: TaskCompletionAction) => void;
   failTask: (id: string, error: string) => void;
+  cancelTask: (id: string, reason?: string) => void;
   removeTask: (id: string) => void;
 
   // 派生值（Zustand selector 或 getter）
@@ -181,7 +184,9 @@ interface TaskProgressStore {
 **行为规则**：
 - `completeTask` 将 status 设为 `'completed'`，设置 `completedAt`，5 秒后自动 `removeTask`
 - `failTask` 将 status 设为 `'error'`，10 秒后自动 `removeTask`（用户也可提前手动关闭）
-- `primaryTask` 选择规则：最近 `startedAt` 的 active 任务；无 active 时取最近 completed/error
+- `cancelTask` 将 status 设为 `'cancelled'`，使用中性色，5 秒后自动 `removeTask`
+- 任务进入终态后拒绝迟到的 update/complete/fail；父任务终止会同步收尾仍 active 的子任务
+- `primaryTask` 选择规则：最近 `startedAt` 的 active 任务；无 active 时取最近终态任务
 - Store 文件：`src/store/task-progress.ts`，Zustand，无持久化
 
 ---
@@ -200,18 +205,9 @@ interface TaskProgressStore {
 | z-index | 1 |
 | 无任务时 | 不渲染 |
 
-**颜色（按 category）**：
-
-| category | 颜色 | 说明 |
-|----------|------|------|
-| `ai-write` | `#a78bfa` | 紫色，与铁律 generate 主色一致 |
-| `ai-review` | `#34d399` | 绿色，与铁律 review 主色一致 |
-| `ai-analyze` | `#60a5fa` | 蓝色 |
-| `import` | `#fbbf24` | 琥珀 |
-| `export` | `#0A84FF` | 系统蓝 |
-| `tts` | `#f472b6` | 粉色 |
-| `cover` | `#c084fc` | 浅紫 |
-| `io` | `#9ca3af` | 灰色 |
+**颜色（按状态）**：active 统一使用 `var(--color-system-blue)`；completed、error、cancelled
+分别使用 `var(--color-success)`、`var(--color-danger)`、`var(--color-text-tertiary)`。
+category 不再分配彩虹色。
 
 **动画**：
 
@@ -219,9 +215,9 @@ interface TaskProgressStore {
 |------|------|
 | `determinate` | `width: ${progress}%`，`transition: width 0.3s ease` |
 | `indeterminate` | `@keyframes indeterminateSweep`：35% 宽度光带从左到右，1.2s 周期 |
-| `streaming` | 同 indeterminate 动画，使用 category 颜色的渐变（`transparent → color → transparent`） |
+| `streaming` | 系统蓝单色脉冲，不使用渐变、辉光或扫描线 |
 
-**多任务**：显示 `primaryTask` 的颜色和进度。
+**多任务**：显示 `primaryTask` 的状态色和进度。
 
 ### 6.2 StatusBarTaskSummary
 
@@ -236,21 +232,23 @@ interface TaskProgressStore {
 | 无活跃任务 | 不渲染 |
 | 1 个 active | `{icon} {label} {progress}%` |
 | 2+ 个 active | `{icon} {primaryLabel} {progress}% · +{n-1}` |
-| 完成（3s 可见） | `✅ {label} 完成` |
-| 失败（5s 可见） | `❌ {label} 失败` |
+| 完成（短暂可见） | `{Check} {label} 完成` |
+| 失败（短暂可见） | `{CircleAlert} {label} 失败` |
+| 取消（短暂可见） | `{Ban} {label} 已取消` |
 
 **图标映射**：
 
 | category | 图标 |
 |----------|------|
-| `ai-write` | 🤖 |
-| `ai-review` | 🔍 |
-| `ai-analyze` | 🧠 |
-| `import` | 📥 |
-| `export` | 🎬 |
-| `tts` | 🎙️ |
-| `cover` | 🖼️ |
-| `io` | 📁 |
+| `ai-write` | `FilePenLine` |
+| `ai-review` | `Search` |
+| `ai-analyze` | `Sparkles` |
+| `import` | `Download` |
+| `export` | `Film` |
+| `tts` | `Mic` |
+| `cover` | `Image` |
+| `io` | `FolderOpen` |
+| `publish` | `Upload` |
 
 **交互**：点击切换 `panelOpen`；hover 提亮至 `--color-text-secondary`。
 
@@ -283,9 +281,10 @@ z-index: 100;
 
 | status | 进度条颜色 | 右侧内容 | 自动移除 |
 |--------|-----------|---------|---------|
-| `active` | category 色 | 百分比 + 取消按钮（如 canCancel） | 否 |
+| `active` | 系统蓝 | 百分比 + 取消按钮（仅真实可中断时） | 否 |
 | `completed` | `--color-success` 100% | `completionAction` 按钮或空 | 5s |
 | `error` | `--color-danger` | 错误摘要 + 关闭按钮 | 10s |
+| `cancelled` | `--color-text-tertiary` | 中性取消原因 | 5s |
 
 **关闭**：点击面板外区域关闭。
 
@@ -385,6 +384,9 @@ useTaskProgressStore.getState().completeTask(taskId, {
 
 // 或失败
 useTaskProgressStore.getState().failTask(taskId, 'API 超时');
+
+// 或用户取消（onCancel 必须真实中断底层操作）
+useTaskProgressStore.getState().cancelTask(taskId, '用户停止');
 ```
 
 ---
@@ -394,10 +396,12 @@ useTaskProgressStore.getState().failTask(taskId, 'API 超时');
 1. 禁止新功能中创建独立进度展示组件（模态 / 内联 / 顶部条）
 2. 禁止用 `LoadingOverlay` 展示长耗时操作
 3. 禁止修改 AppStatusBar 的 28px 高度
-4. 禁止在进度线中使用非规范颜色
-5. 禁止移除编辑器内打字机/审阅光标动画
+4. 禁止在进度线中使用彩虹分类色、渐变、辉光或 emoji
+5. 禁止伪造百分比或永远 active 的装饰步骤
 6. 禁止进度展示阻塞用户操作
-7. 禁止完成态缺少必要操作入口（如导出后的 Finder 按钮）
+7. 禁止在底层不可中断时展示取消按钮
+8. 禁止把取消写成成功或失败
+9. 禁止完成态缺少必要操作入口（如导出后的 Finder 按钮）
 
 ---
 
@@ -416,6 +420,6 @@ useTaskProgressStore.getState().failTask(taskId, 'API 超时');
 
 | 规范 | 关系 |
 |------|------|
-| CLAUDE.md 铁律（AI 动画体系） | 互补：铁律管编辑器内动画，本规范管底部进度 |
+| DESIGN.md AI 人机交互体系 | 统一生命周期、状态语义、视觉反馈与取消规则 |
 | CLAUDE.md UI 设计规范 | 颜色/字体/间距遵循 macOS 专业工具风格 |
 | DESIGN.md | 组件实现遵循 CSS 变量和设计 token |

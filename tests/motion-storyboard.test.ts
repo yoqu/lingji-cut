@@ -20,6 +20,20 @@ const VALID: MotionStoryboard = {
 
 const CTX = { cueCount: 4, transcript: '今年硕士报名28,842人，博士2403人。' };
 
+const BUDGETED: MotionStoryboard = {
+  ...VALID,
+  layout: 'title-hero',
+  elements: [
+    { id: 'title', role: 'support', slot: 'header', content: '考研报名', heightRatio: 0.12 },
+    { id: 'hero', role: 'focus', slot: 'main', content: '28842人', heightRatio: 0.42 },
+  ],
+  capacity: { maxVisible: 2, maxHeightRatio: 0.62 },
+  beats: [
+    { ...VALID.beats[0], lifecycle: { enter: ['title'] } },
+    { ...VALID.beats[1], lifecycle: { enter: ['hero'], collapse: ['title'] } },
+  ],
+};
+
 describe('parseStoryboard', () => {
   it('解析裸 JSON', () => {
     expect(parseStoryboard(JSON.stringify(VALID))?.carrier).toBe('data-hero');
@@ -76,6 +90,11 @@ describe('parseStoryboard', () => {
     expect(sb.beats[1].changes).toBe('标题保持');
     expect(validateStoryboard(sb, CTX).ok).toBe(true);
   });
+
+  it('旧分镜缺少 role 时按焦点与首尾拍补默认节奏角色', () => {
+    const parsed = parseStoryboard(JSON.stringify(VALID))!;
+    expect(parsed.beats.map((beat) => beat.role)).toEqual(['anticipation', 'emphasis']);
+  });
 });
 
 describe('storyboardParseHint', () => {
@@ -98,6 +117,49 @@ describe('validateStoryboard', () => {
     expect(v.errors).toHaveLength(0);
   });
 
+  it('合法分镜可携带资产规划请求', () => {
+    const v = validateStoryboard({
+      ...VALID,
+      assets: [
+        {
+          slot: 'archive_prop',
+          query: '旧档案袋',
+          role: 'object',
+          importance: 'primary',
+          reusePolicy: 'generate-if-missing',
+          visualTreatment: 'editorial-realist-cutout',
+          placementHint: '左下角前景物件',
+        },
+      ],
+    }, CTX);
+
+    expect(v.ok).toBe(true);
+    expect(v.errors).toHaveLength(0);
+  });
+
+  it('非法资产规划字段会报错', () => {
+    const v = validateStoryboard({
+      ...VALID,
+      assets: [
+        {
+          slot: '',
+          query: '',
+          role: 'person' as never,
+          importance: 'hero' as never,
+          reusePolicy: 'auto' as never,
+          visualTreatment: 'editorial-realist-cutout',
+        },
+      ],
+    }, CTX);
+
+    expect(v.ok).toBe(false);
+    expect(v.errors.join()).toContain('缺少 slot');
+    expect(v.errors.join()).toContain('缺少 query');
+    expect(v.errors.join()).toContain('role');
+    expect(v.errors.join()).toContain('importance');
+    expect(v.errors.join()).toContain('reusePolicy');
+  });
+
   it('null 分镜直接失败', () => {
     expect(validateStoryboard(null, CTX).ok).toBe(false);
   });
@@ -107,6 +169,23 @@ describe('validateStoryboard', () => {
     const v = validateStoryboard(bad, CTX);
     expect(v.ok).toBe(false);
     expect(v.errors.join()).toContain('carrier');
+  });
+
+  it('接受专业信息载体 carrier', () => {
+    for (const carrier of ['timeline', 'matrix', 'funnel', 'network', 'before-after', 'stacked-composition'] as const) {
+      const v = validateStoryboard({ ...VALID, carrier }, CTX);
+      expect(v.ok).toBe(true);
+    }
+  });
+
+  it('非法 role 只警告，便于旧分镜或模型小错降级', () => {
+    const bad = {
+      ...VALID,
+      beats: [{ ...VALID.beats[0], role: 'boom' as never }, VALID.beats[1]],
+    };
+    const v = validateStoryboard(bad, CTX);
+    expect(v.ok).toBe(true);
+    expect(v.warnings.join()).toContain('role');
   });
 
   it('cue 越界 / 乱序报错', () => {
@@ -162,5 +241,36 @@ describe('validateStoryboard', () => {
   it('formatStoryboardIssues 输出编号列表', () => {
     const v = validateStoryboard(null, CTX);
     expect(formatStoryboardIssues(v)).toMatch(/^1\. /);
+  });
+
+  it('严格生成模式要求 layout/elements/capacity/lifecycle', () => {
+    const missing = validateStoryboard(VALID, { ...CTX, requireCapacityModel: true });
+    expect(missing.ok).toBe(false);
+    expect(missing.errors.join()).toContain('elements');
+
+    const valid = validateStoryboard(BUDGETED, { ...CTX, requireCapacityModel: true });
+    expect(valid.errors).toEqual([]);
+    expect(valid.ok).toBe(true);
+  });
+
+  it('逐拍模拟生命周期并阻止同时驻留区块超预算', () => {
+    const overloaded: MotionStoryboard = {
+      ...BUDGETED,
+      elements: [
+        ...BUDGETED.elements!,
+        { id: 'note', role: 'support', slot: 'header', content: '补充说明', heightRatio: 0.24 },
+      ],
+      capacity: { maxVisible: 2, maxHeightRatio: 0.62 },
+      beats: [
+        BUDGETED.beats[0],
+        {
+          ...BUDGETED.beats[1],
+          lifecycle: { enter: ['hero', 'note'], update: ['title'] },
+        },
+      ],
+    };
+    const result = validateStoryboard(overloaded, { ...CTX, requireCapacityModel: true });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join()).toMatch(/同时驻留|预计占高/);
   });
 });

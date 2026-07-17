@@ -52,6 +52,13 @@ describe('shouldNotifyTask', () => {
     expect(shouldNotifyTask(task, undefined, now)).toBe(false);
   });
 
+  it('active → cancelled 不触发成功或失败通知', () => {
+    const task = makeTask({ status: 'cancelled', cancelReason: '用户停止' });
+    const before = makeTask({ status: 'active', completedAt: undefined });
+    expect(shouldNotifyTask(task, before, now)).toBe(false);
+    expect(buildTaskNotification(task)).toBeNull();
+  });
+
   it('已完成态再次 patch（before 非 active）不重复通知', () => {
     const task = makeTask();
     const before = makeTask(); // 已经是 completed
@@ -73,20 +80,27 @@ describe('shouldNotifyTask', () => {
 
 describe('buildTaskNotification', () => {
   it('完成态文案包含标签', () => {
-    const { title, body } = buildTaskNotification(makeTask());
+    const notification = buildTaskNotification(makeTask());
+    expect(notification).not.toBeNull();
+    const { title, body } = notification!;
     expect(title).toContain('视频导出');
     expect(title).toContain('已完成');
+    expect(title).not.toMatch(/[✅⚠️]/u);
     expect(body).toContain('继续下一步');
   });
 
   it('失败态展示错误信息', () => {
-    const { title, body } = buildTaskNotification(makeTask({ status: 'error', error: '磁盘已满' }));
+    const notification = buildTaskNotification(makeTask({ status: 'error', error: '磁盘已满' }));
+    expect(notification).not.toBeNull();
+    const { title, body } = notification!;
     expect(title).toContain('失败');
     expect(body).toBe('磁盘已满');
   });
 
   it('失败态无错误信息时给默认文案', () => {
-    const { body } = buildTaskNotification(makeTask({ status: 'error', error: undefined }));
+    const notification = buildTaskNotification(makeTask({ status: 'error', error: undefined }));
+    expect(notification).not.toBeNull();
+    const { body } = notification!;
     expect(body).toContain('回到灵机剪影');
   });
 });

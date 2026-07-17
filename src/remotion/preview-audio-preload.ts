@@ -23,12 +23,15 @@ function getAudioContentType(src: string): string | undefined {
   return undefined;
 }
 
-export function getPreviewAudioSources(audio: RenderableAudio[]): string[] {
+export function getPreviewAudioSources(audio: RenderableAudio[], podcastRevision?: number): string[] {
   const seen = new Set<string>();
   const sources: string[] = [];
 
   for (const clip of audio) {
-    const src = resolveAssetSrc(clip.assetPath);
+    const src = resolveAssetSrc(
+      clip.assetPath,
+      clip.id === 'podcast-audio' ? podcastRevision : undefined,
+    );
     if (!src || seen.has(src)) continue;
     seen.add(src);
     sources.push(src);

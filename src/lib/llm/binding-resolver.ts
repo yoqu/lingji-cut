@@ -63,7 +63,7 @@ function resolveLlmByKey(
     throw new PromptBindingError(
       'PROVIDER_MISSING',
       key,
-      `提示词 ${key} 未绑定 LLM 且无全局默认 Provider/Model`,
+      `提示词 ${key} 未绑定文本生成服务和模型，且无全局默认设置`,
     );
   }
   const provider = settings.llmProviders.find((p) => p.id === providerId);
@@ -71,10 +71,10 @@ function resolveLlmByKey(
     throw new PromptBindingError(
       'PROVIDER_MISSING',
       key,
-      `提示词 ${key} 绑定的 Provider ${providerId} 不存在`,
+      `提示词 ${key} 绑定的生成服务 ${providerId} 不存在`,
     );
   }
-  // 模型回退链：提示词级绑定 → 全局提示词绑定 → 该 Provider 的默认模型 → 全局默认模型。
+  // 模型回退链：提示词级绑定 → 全局提示词绑定 → 该生成服务的默认模型 → 全局默认模型。
   const model = pickFirstNonNull(
     projectB?.model,
     globalB?.model,
@@ -85,14 +85,14 @@ function resolveLlmByKey(
     throw new PromptBindingError(
       'PROVIDER_MISSING',
       key,
-      `提示词 ${key} 未绑定 LLM 且无全局默认 Provider/Model`,
+      `提示词 ${key} 未绑定文本生成服务和模型，且无全局默认设置`,
     );
   }
   if (!provider.models.includes(model)) {
     throw new PromptBindingError(
       'MODEL_NOT_IN_PROVIDER',
       key,
-      `提示词 ${key} 绑定的模型 ${model} 不在 Provider ${provider.name} 的模型列表里`,
+      `提示词 ${key} 绑定的模型 ${model} 不在生成服务 ${provider.name} 的模型列表里`,
     );
   }
   return { provider, model };
@@ -127,7 +127,7 @@ function resolveMediaBinding<P extends { id: string; name: string; models: strin
     throw new PromptBindingError(
       errors.missing,
       kind,
-      `提示词 ${kind} 未绑定 ${errors.label} 且无全局默认`,
+      `提示词 ${kind} 未绑定${errors.label}且无全局默认`,
     );
   }
   const provider = providers.find((p) => p.id === providerId);
@@ -135,14 +135,14 @@ function resolveMediaBinding<P extends { id: string; name: string; models: strin
     throw new PromptBindingError(
       errors.missing,
       kind,
-      `提示词 ${kind} 绑定的 ${errors.label} ${providerId} 不存在`,
+      `提示词 ${kind} 绑定的${errors.label} ${providerId} 不存在`,
     );
   }
   if (!provider.models.includes(model)) {
     throw new PromptBindingError(
       errors.modelNotIn,
       kind,
-      `提示词 ${kind} 绑定的模型 ${model} 不在 ${errors.label} ${provider.name} 的模型列表里`,
+      `提示词 ${kind} 绑定的模型 ${model} 不在${errors.label} ${provider.name} 的模型列表里`,
     );
   }
   return { provider, model };
@@ -161,7 +161,7 @@ function resolveImage(
   }, {
     missing: 'IMAGE_PROVIDER_MISSING',
     modelNotIn: 'IMAGE_MODEL_NOT_IN_PROVIDER',
-    label: 'ImageProvider',
+    label: '图片生成服务',
   });
   return { imageProvider: provider, imageModel: model };
 }
@@ -179,7 +179,7 @@ function resolveVideo(
   }, {
     missing: 'VIDEO_PROVIDER_MISSING',
     modelNotIn: 'VIDEO_MODEL_NOT_IN_PROVIDER',
-    label: 'VideoProvider',
+    label: '视频生成服务',
   });
   return { videoProvider: provider, videoModel: model };
 }

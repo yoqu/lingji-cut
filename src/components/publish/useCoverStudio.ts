@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CoverCandidate, ImageAspectRatio } from '../../types/ai';
 import { coverAspectRatio } from '../../types/ai';
 import { loadAISettings, useAIStore } from '../../store/ai';
+import { useTaskProgressStore } from '../../store/task-progress';
 import { getProjectDir } from '../../store/timeline';
 
 export interface DiskCover {
@@ -63,6 +64,26 @@ export function groupCoverCandidatesByRatio(
   return out;
 }
 
+export function resolveCoverStudioBasePrompt(
+  analysisPrompt: string | null,
+  candidates: CoverCandidate[],
+): string | null {
+  const selectedWidePrompt = candidates.find((candidate) => (
+    candidate.selected
+    && coverAspectRatio(candidate) === '16:9'
+    && candidate.prompt.trim().length > 0
+  ))?.prompt.trim();
+  return selectedWidePrompt || analysisPrompt?.trim() || null;
+}
+
+export function appendCoverGenerationHistory(
+  existing: CoverCandidate[],
+  generated: CoverCandidate[],
+): CoverCandidate[] {
+  const generatedIds = new Set(generated.map((candidate) => candidate.id));
+  return [...existing.filter((candidate) => !generatedIds.has(candidate.id)), ...generated];
+}
+
 /** 需自动预填的比例：16:9 由编辑器整期封面专属逻辑填充，此处只补抖音/视频号所需的横竖比例。 */
 const AUTO_FILL_RATIOS: ImageAspectRatio[] = ['4:3', '3:4'];
 
@@ -92,6 +113,27 @@ const PUBLISH_RATIO_VALUES = PUBLISH_RATIOS.map((r) => r.ratio);
 /** 每个比例一次生成的候选数 */
 const RATIO_BATCH = 2;
 
+function startCoverTask(label: string, phase: string): string {
+  const taskId = `publish-cover-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  useTaskProgressStore.getState().startTask({
+    id: taskId,
+    category: 'cover',
+    label,
+    mode: 'indeterminate',
+    progress: 0,
+    phase,
+    level: 1,
+    canCancel: false,
+  });
+  return taskId;
+}
+
+function failCoverTask(taskId: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : '封面生成失败';
+  useTaskProgressStore.getState().failTask(taskId, message);
+  return message;
+}
+
 function ratioOrientationHint(ratio: ImageAspectRatio): string {
   switch (ratio) {
     case '3:4':
@@ -107,6 +149,17 @@ function ratioOrientationHint(ratio: ImageAspectRatio): string {
 export function buildRatioPrompt(base: string, ratio: ImageAspectRatio): string {
   const hint = ratioOrientationHint(ratio);
   return hint ? `${base.trim()}\n${hint}` : base.trim();
+}
+
+/** 当前导演封面描述优先；仅旧项目缺少基础描述时回退候选生成时的历史提示词。 */
+export function resolvePublishRatioPrompt(
+  basePrompt: string | null,
+  ratio: ImageAspectRatio,
+  candidatePrompt = '',
+): string {
+  return basePrompt?.trim()
+    ? buildRatioPrompt(basePrompt, ratio)
+    : candidatePrompt.trim();
 }
 
 export interface CoverStudio {
@@ -137,7 +190,10 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
   const [diskCovers, setDiskCovers] = useState<DiskCover[]>([]);
   const [scanUnavailable, setScanUnavailable] = useState(false);
 
-  const basePrompt = analysisResult?.coverPrompts?.[0]?.trim() || null;
+  const basePrompt = useMemo(() => resolveCoverStudioBasePrompt(
+    analysisResult?.coverPrompts?.[0] ?? null,
+    coverCandidates,
+  ), [analysisResult?.coverPrompts, coverCandidates]);
   // 优先用调用方显式传入的 projectDir（发布选项卡的权威来源），回退到全局当前项目目录。
   const resolveDir = useCallback(
     () => projectDir || getProjectDir() || currentProjectDir || '',
@@ -191,18 +247,18 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
 
   const runGeneration = useCallback(
     async (ratio: ImageAspectRatio, n: number): Promise<CoverCandidate[]> => {
-      const prompt = basePrompt;
-      if (!prompt) throw new Error('缺少封面提示词，请先在编辑器完成 AI 分析');
+      const prompt = resolvePublishRatioPrompt(basePrompt, ratio);
+      if (!prompt) throw new Error('缺少封面生成描述，请先在编辑器生成内容卡片');
       const settings = await loadAISettings();
       const hasImageProvider =
         !!settings && settings.imageProviders.length > 0 && !!settings.defaultImageProviderId;
       if (!settings || !hasImageProvider) {
-        throw new Error('请先在「设置 → AI」中配置至少一个图像生成 Provider');
+        throw new Error('请先在「设置 → AI」中配置至少一个图像生成服务');
       }
       const dir = resolveDir();
       if (!dir) throw new Error('未找到项目目录');
       const generated = await window.electronAPI.generateCoverImages({
-        prompts: [buildRatioPrompt(prompt, ratio)],
+        prompts: [prompt],
         settings,
         projectDir: dir,
         projectBindings: useAIStore.getState().projectBindings,
@@ -218,17 +274,16 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
 
   const regenerateRatio = useCallback(
     async (ratio: ImageAspectRatio) => {
+      const taskId = startCoverTask(`生成 ${ratio} 发布封面`, '生成封面候选');
       setError(null);
       setBusyRatios((prev) => (prev.includes(ratio) ? prev : [...prev, ratio]));
       try {
         const fresh = await runGeneration(ratio, RATIO_BATCH);
         const all = useAIStore.getState().coverCandidates;
-        // 保留其它比例 + 当前比例里已被选中的候选（避免覆盖编辑器选定的整期背景），追加新一组
-        const keptOther = all.filter((c) => coverAspectRatio(c) !== ratio);
-        const keptSelected = all.filter((c) => coverAspectRatio(c) === ratio && c.selected);
-        await persist([...keptOther, ...keptSelected, ...fresh]);
+        await persist(appendCoverGenerationHistory(all, fresh));
+        useTaskProgressStore.getState().completeTask(taskId);
       } catch (e) {
-        setError(e instanceof Error ? e.message : '封面生成失败');
+        setError(failCoverTask(taskId, e));
       } finally {
         setBusyRatios((prev) => prev.filter((r) => r !== ratio));
         void scanDisk();
@@ -241,27 +296,24 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
     async (candidateId: string) => {
       setError(null);
       const target = useAIStore.getState().coverCandidates.find((c) => c.id === candidateId);
-      // store 候选可原地替换；磁盘扫描出的候选（disk:）不在 store，按其比例追加一张新候选
+      // 重生结果作为新候选追加，保留原候选的提示词和图片历史。
       const ratio = target
         ? coverAspectRatio(target)
         : diskCovers.find((d) => `disk:${d.path}` === candidateId)?.ratio;
       if (!ratio) return;
+      const taskId = startCoverTask('重新生成发布封面', `生成 ${ratio} 封面`);
       setBusyCandidateIds((prev) => (prev.includes(candidateId) ? prev : [...prev, candidateId]));
       try {
         const fresh = (await runGeneration(ratio, 1)).find((c) => c.imageUrl);
         if (!fresh) throw new Error('未生成有效封面');
-        if (target) {
-          const next = useAIStore.getState().coverCandidates.map((c) =>
-            c.id === candidateId
-              ? { ...c, imageUrl: fresh.imageUrl, prompt: fresh.prompt, error: undefined, createdAt: fresh.createdAt }
-              : c,
-          );
-          await persist(next);
-        } else {
-          await persist([...useAIStore.getState().coverCandidates, fresh]);
-        }
+        const next = target ? { ...fresh, editedFrom: target.id } : fresh;
+        await persist(appendCoverGenerationHistory(
+          useAIStore.getState().coverCandidates,
+          [next],
+        ));
+        useTaskProgressStore.getState().completeTask(taskId);
       } catch (e) {
-        setError(e instanceof Error ? e.message : '封面生成失败');
+        setError(failCoverTask(taskId, e));
       } finally {
         setBusyCandidateIds((prev) => prev.filter((id) => id !== candidateId));
         void scanDisk();
@@ -281,6 +333,7 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
       return !inStore && !onDisk;
     });
     if (targets.length === 0) return;
+    const taskId = startCoverTask('补全发布封面比例', `生成 ${targets.length} 种比例`);
     setBusyRatios((prev) => Array.from(new Set([...prev, ...targets])));
     try {
       for (const ratio of targets) {
@@ -288,8 +341,9 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
         const all = useAIStore.getState().coverCandidates;
         await persist([...all, ...fresh]);
       }
+      useTaskProgressStore.getState().completeTask(taskId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '封面生成失败');
+      setError(failCoverTask(taskId, e));
     } finally {
       setBusyRatios((prev) => prev.filter((r) => !targets.includes(r)));
       void scanDisk();
@@ -297,18 +351,18 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
   }, [persist, runGeneration, diskCovers, scanDisk]);
 
   const regenerateAll = useCallback(async () => {
+    const taskId = startCoverTask('重新生成全部发布封面', '生成多比例封面');
     setError(null);
     setBusyRatios(PUBLISH_RATIO_VALUES.slice());
     try {
       for (const ratio of PUBLISH_RATIO_VALUES) {
         const fresh = await runGeneration(ratio, RATIO_BATCH);
         const all = useAIStore.getState().coverCandidates;
-        const keptOther = all.filter((c) => coverAspectRatio(c) !== ratio);
-        const keptSelected = all.filter((c) => coverAspectRatio(c) === ratio && c.selected);
-        await persist([...keptOther, ...keptSelected, ...fresh]);
+        await persist(appendCoverGenerationHistory(all, fresh));
       }
+      useTaskProgressStore.getState().completeTask(taskId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : '封面生成失败');
+      setError(failCoverTask(taskId, e));
     } finally {
       setBusyRatios([]);
       void scanDisk();

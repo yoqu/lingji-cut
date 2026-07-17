@@ -1,8 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { existsSync } from 'node:fs';
-import type { ProjectData } from '../src/lib/project-persistence';
+import { existsSync, statSync } from 'node:fs';
+import { resolvePublishedPlatforms, type ProjectData } from '../src/lib/project-persistence';
 import { loadProjectFile } from './project-file';
+
+/** 项目所处阶段（欢迎页标签）：已发布 > 剪辑中 > 口播稿 > 原稿 > 新建。 */
+export type RecentProjectStage = 'published' | 'editing' | 'script' | 'original' | 'new';
 
 export interface RecentProjectEntry {
   path: string;
@@ -11,6 +14,34 @@ export interface RecentProjectEntry {
   createdAt?: string;
   updatedAt?: string;
   coverImageUrl?: string;
+  stage?: RecentProjectStage;
+  /** 已成功发布的平台 id（stage 为 published 时非空）。 */
+  publishedPlatforms?: string[];
+}
+
+function fileHasContent(filePath: string): boolean {
+  try {
+    return statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** 从 project.json 与磁盘产物推导项目阶段。 */
+export function deriveProjectStage(
+  projectDir: string,
+  projectData: ProjectData | null,
+): Pick<RecentProjectEntry, 'stage' | 'publishedPlatforms'> {
+  if (projectData) {
+    const published = Object.keys(resolvePublishedPlatforms(projectData));
+    if (published.length > 0) {
+      return { stage: 'published', publishedPlatforms: published };
+    }
+    if (projectData.timeline) return { stage: 'editing' };
+  }
+  if (fileHasContent(path.join(projectDir, 'script.md'))) return { stage: 'script' };
+  if (fileHasContent(path.join(projectDir, 'original.md'))) return { stage: 'original' };
+  return { stage: 'new' };
 }
 
 const RECENT_PROJECTS_FILE = 'recent-projects.json';
@@ -76,6 +107,7 @@ export async function addRecentProject(
     createdAt: projectData?.createdAt,
     updatedAt: projectData?.updatedAt,
     coverImageUrl,
+    ...deriveProjectStage(projectDir, projectData),
   };
 
   // 移除已存在的同路径项目，添加到开头
@@ -123,11 +155,14 @@ export async function refreshRecentProjects(
       coverImageUrl = selectedCover?.imageUrl;
     }
 
+    const { stage, publishedPlatforms } = deriveProjectStage(entry.path, projectData);
     refreshed.push({
       ...entry,
       createdAt: projectData?.createdAt ?? entry.createdAt,
       updatedAt: projectData?.updatedAt ?? entry.updatedAt,
       coverImageUrl,
+      stage,
+      publishedPlatforms,
     });
   }
 

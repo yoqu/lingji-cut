@@ -3,6 +3,18 @@ import { mkdtemp, rm, stat, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+const { generateMock, importGeneratedMediaAssetMock, resolveReusableVideoMock } = vi.hoisted(() => ({
+  generateMock: vi.fn(async () => ({
+    videoUrl: 'http://example.com/v.mp4',
+    posterUrl: 'http://example.com/p.jpg',
+    durationMs: 6000,
+    width: 1920,
+    height: 1080,
+  })),
+  importGeneratedMediaAssetMock: vi.fn(async () => ({ id: 'asset-generated' })),
+  resolveReusableVideoMock: vi.fn(async () => null),
+}));
+
 vi.mock('../src/lib/video-gen/registry', () => ({
   getVideoProvider: () => ({
     type: 'vidu',
@@ -14,14 +26,13 @@ vi.mock('../src/lib/video-gen/registry', () => ({
       isAsync: true,
       defaultModels: ['vidu-2'],
     },
-    generate: async () => ({
-      videoUrl: 'http://example.com/v.mp4',
-      posterUrl: 'http://example.com/p.jpg',
-      durationMs: 6000,
-      width: 1920,
-      height: 1080,
-    }),
+    generate: generateMock,
   }),
+}));
+
+vi.mock('../electron/asset-library', () => ({
+  importGeneratedMediaAsset: importGeneratedMediaAssetMock,
+  resolveReusableMediaAssetForProject: resolveReusableVideoMock,
 }));
 
 const fetchMock = vi.fn(async (url: string) => {
@@ -37,6 +48,10 @@ const fetchMock = vi.fn(async (url: string) => {
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
   fetchMock.mockClear();
+  generateMock.mockClear();
+  importGeneratedMediaAssetMock.mockClear();
+  resolveReusableVideoMock.mockReset();
+  resolveReusableVideoMock.mockResolvedValue(null);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -106,5 +121,46 @@ describe('handleGenerateCardVideo', () => {
     );
     expect(meta.mediaType).toBe('video');
     expect(meta.mediaDurationMs).toBe(6000);
+    expect(generateMock).toHaveBeenCalledTimes(1);
+    expect(importGeneratedMediaAssetMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('本地库精确命中时不调用视频 Provider', async () => {
+    resolveReusableVideoMock.mockResolvedValueOnce({
+      score: 92,
+      reasons: ['生成规格完全一致'],
+      asset: {
+        id: 'asset-reused',
+        files: { original: '/global/broll.mp4', processed: null, thumbnail: null },
+        metadata: {
+          durationMs: 6000,
+          width: 1920,
+          height: 1080,
+          provenance: { provider: 'vidu', model: 'vidu-2' },
+        },
+      },
+    });
+
+    const result = await handleGenerateCardVideo(
+      {
+        projectDir,
+        cardId: 'c2',
+        prompt: 'a reusable city skyline',
+        aspectRatio: '16:9',
+        durationSeconds: 6,
+        providerId: 'v1',
+        model: 'vidu-2',
+      },
+      {
+        settings: makeSettingsWithVideoProvider(),
+        projectBindings: null,
+        onProgress: () => {},
+      },
+    );
+
+    expect(result.assetPath).toBe('/global/broll.mp4');
+    expect(result.extraParams?.reusedAssetId).toBe('asset-reused');
+    expect(generateMock).not.toHaveBeenCalled();
+    expect(importGeneratedMediaAssetMock).not.toHaveBeenCalled();
   });
 });

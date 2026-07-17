@@ -57,3 +57,27 @@
   gap: 8px;
   flex-shrink: 0;
 }
+
+.modePicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.modePicker :global(button) {
+  padding-inline: 9px;
+}
+
+@media (max-width: 980px) {
+  .banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

@@ -18,6 +18,9 @@ import {
   runConvertCard,
   runSculptCard,
 } from './runs/card-run';
+import { runDirectorPlanHeadless } from './runs/director-run';
+import { runDirectorProductionHeadless } from './director-production-run';
+import { requireApprovedDirectorPlan } from './director-gate';
 
 const PROJECT_UPDATED_CHANNEL = 'pipeline:project-updated';
 
@@ -38,6 +41,8 @@ export interface GenerationToolConfig {
   sections: string[];
   /** 追加到 inputSchema 的可选入参；解析后作为 ctx.params 传给 run */
   extraInput?: Record<string, z.ZodTypeAny>;
+  /** 创建任务前的快速守卫；失败直接向 CLI/MCP 返回稳定错误码。 */
+  preflight?: (projectPath: string, params: Record<string, unknown>) => Promise<void>;
   run: (ctx: GenerationRunCtx) => Promise<unknown>;
 }
 
@@ -82,6 +87,7 @@ export function registerGenerationTool(
     },
     async ({ projectPath, ...rest }) => {
       try {
+        await config.preflight?.(projectPath, rest);
         const userDataPath = getUserDataPath();
         const { taskId } = await getPipelineService().createTask(
           config.kind,
@@ -118,6 +124,28 @@ export function registerGenerationTools(
   });
 
   registerGenerationTool(server, getMainWindow, getUserDataPath, {
+    name: 'lingji_director_plan',
+    title: '生成导演方案',
+    description:
+      '读取字幕并生成可审阅的结构化导演方案草案；只做规划，不生成卡片、封面图或声音资产。返回 taskId。',
+    kind: 'analyze_subtitles',
+    sections: ['production'],
+    extraInput: { globalPrompt: z.string().optional().describe('整片导演补充要求') },
+    run: (ctx) => runDirectorPlanHeadless(ctx),
+  });
+
+  registerGenerationTool(server, getMainWindow, getUserDataPath, {
+    name: 'lingji_director_approve',
+    title: '批准导演方案并开始制作',
+    description:
+      '以乐观版本锁批准当前导演草案，推进到 production-running，并生成画面、封面、声音、字幕高亮和时间线。省略 revision 时批准当前草案版本。返回 taskId。',
+    kind: 'generate_cards',
+    sections: ['production', 'aiAnalysis', 'timeline'],
+    extraInput: { revision: z.number().int().positive().optional().describe('期望批准的草案版本') },
+    run: (ctx) => runDirectorProductionHeadless(ctx),
+  });
+
+  registerGenerationTool(server, getMainWindow, getUserDataPath, {
     name: 'lingji_analyze_subtitles',
     title: '字幕分析+卡片生成',
     description:
@@ -135,6 +163,7 @@ export function registerGenerationTools(
       '基于字幕与分析结果生成封面提示词，写入 aiAnalysis.analysisResult.coverPrompts；需先完成 subtitle analyze。返回 taskId。',
     kind: 'generate_covers',
     sections: ['aiAnalysis'],
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runCoverPromptHeadless(ctx),
   });
 
@@ -144,6 +173,7 @@ export function registerGenerationTools(
     description: '由现有封面提示词出封面图，写入 covers/ 与 aiAnalysis.coverCandidates。返回 taskId。',
     kind: 'generate_covers',
     sections: ['aiAnalysis'],
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runCoverImagesHeadless(ctx),
   });
 
@@ -153,6 +183,7 @@ export function registerGenerationTools(
     description: '一次性生成封面提示词并出图。返回 taskId。',
     kind: 'generate_covers',
     sections: ['aiAnalysis'],
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runCoversHeadless(ctx),
   });
 
@@ -184,6 +215,7 @@ export function registerGenerationTools(
     kind: 'generate_cards',
     sections: ['aiAnalysis'],
     extraInput: { cardId: z.string().describe('卡片 id') },
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runRegenerateCard(ctx),
   });
 
@@ -194,6 +226,7 @@ export function registerGenerationTools(
     kind: 'generate_cards',
     sections: ['aiAnalysis'],
     extraInput: { cardId: z.string().describe('卡片 id') },
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runRegenerateCardMedia(ctx),
   });
 
@@ -208,6 +241,7 @@ export function registerGenerationTools(
       cardId: z.string().describe('卡片 id'),
       notes: z.string().optional().describe('精雕要求（可选，如"数字更有冲击力""装饰层太抢戏"）'),
     },
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runSculptCard(ctx),
   });
 
@@ -221,6 +255,7 @@ export function registerGenerationTools(
       cardId: z.string().describe('卡片 id'),
       to: z.enum(['image', 'video', 'motion']).describe('目标类型'),
     },
+    preflight: (projectPath) => requireApprovedDirectorPlan(projectPath).then(() => undefined),
     run: (ctx) => runConvertCard(ctx),
   });
 }

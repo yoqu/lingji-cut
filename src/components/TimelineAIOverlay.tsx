@@ -1,5 +1,8 @@
 import type { RefObject } from 'react';
+import { LoaderCircle, Square } from 'lucide-react';
 import type { WorkflowState } from '../store/ai';
+import { Button } from '../ui';
+import styles from './TimelineAIOverlay.module.css';
 
 interface TimelineAIOverlayProps {
   workflow: WorkflowState;
@@ -13,7 +16,7 @@ export function TimelineAIOverlay({
   workflow,
   timelineContainerRef: _timelineContainerRef,
   compactTimeline: _compactTimeline,
-  onCancel: _onCancel,
+  onCancel,
   onRetry: _onRetry,
 }: TimelineAIOverlayProps) {
   const isVisible =
@@ -23,67 +26,35 @@ export function TimelineAIOverlay({
     return null;
   }
 
+  const percent = Math.round(Math.max(0, Math.min(100, workflow.progress)));
+  const phase = workflow.stepLabel || '正在处理当前项目';
+
   return (
     <div
-      data-editor-region="workflow-blocker"
+      data-editor-region="workflow-status"
       role="status"
       aria-live="polite"
-      aria-label="AI 一键剪辑进行中，编辑器暂不可操作"
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 1100,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        pointerEvents: 'all',
-        cursor: 'progress',
-        background: 'rgba(10, 10, 18, 0.28)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
-      }}
+      aria-label={`自动剪辑进行中：${phase}`}
+      className={styles.root}
     >
-      <div
-        style={{
-          display: 'grid',
-          gap: 6,
-          padding: '14px 18px',
-          borderRadius: 16,
-          border: '1px solid rgba(196, 181, 253, 0.22)',
-          background:
-            'linear-gradient(135deg, rgba(30, 41, 59, 0.88), rgba(46, 16, 101, 0.72))',
-          boxShadow: '0 20px 50px rgba(15, 23, 42, 0.2)',
-          color: '#ede9fe',
-          textAlign: 'center',
-        }}
-      >
-        <div
-          style={{
-            width: 18,
-            height: 18,
-            margin: '0 auto',
-            border: '2px solid rgba(237, 233, 254, 0.4)',
-            borderTopColor: '#c084fc',
-            borderRadius: '50%',
-            animation: 'workflowBlockerSpin 0.85s linear infinite',
-          }}
-        />
-        <div style={{ fontSize: 13, fontWeight: 600 }}>AI 一键剪辑进行中</div>
-        <div style={{ fontSize: 11, color: '#ddd6fe' }}>底部状态栏可查看进度</div>
+      <LoaderCircle className={styles.spinner} size={14} aria-hidden="true" />
+      <span className={styles.title}>自动剪辑</span>
+      <span className={styles.phase}>{phase}</span>
+      <span className={styles.percent}>{percent}%</span>
+      {workflow.canCancel ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          className={styles.cancelButton}
+          leftIcon={<Square size={10} />}
+          onClick={onCancel}
+        >
+          停止
+        </Button>
+      ) : null}
+      <div className={styles.progressTrack} aria-hidden="true">
+        <div className={styles.progressValue} style={{ transform: `scaleX(${percent / 100})` }} />
       </div>
-      <style>
-        {`
-          @keyframes workflowBlockerSpin {
-            from {
-              transform: rotate(0deg);
-            }
-
-            to {
-              transform: rotate(360deg);
-            }
-          }
-        `}
-      </style>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
 import { getAllRoles } from '../../lib/script-templates';
 import { Select, type SelectOption } from '../../ui';
 import { useScriptStore } from '../../store/script';
+import { useTaskProgressStore } from '../../store/task-progress';
 import { ModelSelector } from './ModelSelector';
 import styles from './QuickActionBar.module.css';
 
@@ -36,12 +37,26 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
   const reviewState = useScriptStore((s) => s.reviewState);
   const scriptText = useScriptStore((s) => s.scriptText);
   const annotations = useScriptStore((s) => s.annotations);
+  const activeStreamId = useScriptStore((s) => s.activeStream.streamId);
   const selectedRole = useScriptStore((s) => s.selectedRole);
   const manualStageOverride = useScriptStore((s) => s.manualStageOverride);
   const setSelectedRole = useScriptStore((s) => s.setSelectedRole);
   const setManualStageOverride = useScriptStore((s) => s.setManualStageOverride);
   const clearManualStageOverride = useScriptStore((s) => s.clearManualStageOverride);
-  const stopAgentOperation = useScriptStore((s) => s.stopAgentOperation);
+  const activeAITask = useTaskProgressStore((s) => {
+    if (!activeStreamId) return null;
+    const task = s.tasks.get(activeStreamId);
+    if (
+      !task ||
+      task.status !== 'active' ||
+      (task.category !== 'ai-write' && task.category !== 'ai-review') ||
+      !task.canCancel ||
+      !task.onCancel
+    ) {
+      return null;
+    }
+    return task;
+  });
   const generateScriptCb = useScriptStore((s) => s.workbenchCallbacks.generateScript);
   const regenerateScript = useScriptStore((s) => s.workbenchCallbacks.regenerateScript);
   const reviewScriptCb = useScriptStore((s) => s.workbenchCallbacks.reviewScript);
@@ -85,6 +100,13 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
     useScriptStore.getState().acceptAllAnnotations();
   };
 
+  const handleStop = () => {
+    if (!activeAITask) return;
+    const interrupt = activeAITask.onCancel;
+    useTaskProgressStore.getState().cancelTask(activeAITask.id, '用户停止');
+    interrupt?.();
+  };
+
   const roleSelector = (
     <div className={styles.roleSelector}>
       <User size={12} className={styles.roleIcon} />
@@ -100,17 +122,18 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
   );
 
   const stageOptions: SelectOption[] = [
-    { value: '__auto__', label: '自动判断' },
+    { value: '__auto__', label: '按文件自动判断' },
     ...STAGE_OPTIONS.map((stage) => ({ value: stage, label: WORKBENCH_STAGE_LABELS[stage] })),
   ];
 
   const stageControls = (
     <div className={styles.stageControls}>
       <span className={styles.stageMeta}>
-        当前阶段：{WORKBENCH_STAGE_LABELS[effectiveWorkbenchStage]}
+        稿件阶段：{WORKBENCH_STAGE_LABELS[effectiveWorkbenchStage]}
         {manualStageOverride ? '（手动）' : '（自动）'}
       </span>
       <Select
+        aria-label="稿件阶段判断"
         options={stageOptions}
         value={manualStageOverride ?? '__auto__'}
         onChange={(event) => {
@@ -147,11 +170,11 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
   );
 
   if (isOperating) {
-    return renderBar('AI 处理中...', agentOperation.canInterrupt ? (
+    return renderBar('正在处理当前稿件', agentOperation.canInterrupt && activeAITask?.onCancel ? (
       <button
         type="button"
         className={`${styles.btn} ${styles.dangerBtn}`}
-        onClick={() => stopAgentOperation()}
+        onClick={handleStop}
       >
         <Square size={12} />
         停止
@@ -212,10 +235,10 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
           className={`${styles.btn} ${styles.primaryBtn}`}
           disabled={!generateScriptCb}
           onClick={handleGenerate}
-          title="AI 根据原稿生成口播稿"
+          title="根据原稿和当前角色生成口播稿"
         >
           <Sparkles size={12} />
-          AI 生成口播稿
+          生成口播稿
         </button>
       ) : null}
       {workbenchStage === 'review_issues' && hasActionableAnnotations && reviewState === 'issues' ? (
@@ -235,12 +258,12 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
           }`}
           disabled={!reviewScriptCb}
           onClick={handleReview}
-          title="AI 审查口播稿质量"
+          title="检查口播稿并生成可逐条处理的建议"
         >
           <Search size={12} />
           {reviewState === 'issues' || reviewState === 'stale' || effectiveWorkbenchStage === 'review_clean'
             ? '重新审查'
-            : 'AI 审稿'}
+            : '审查口播稿'}
         </button>
       ) : null}
       {canRegenerateScript ? (

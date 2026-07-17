@@ -29,7 +29,7 @@ describe('getAISettingsIssue', () => {
   });
 
   it('requires at least one configured LLM provider', () => {
-    expect(getAISettingsIssue(makeSettings())).toBe('请先配置 LLM Provider');
+    expect(getAISettingsIssue(makeSettings())).toBe('请先配置文本生成服务');
   });
 
   it('requires a model when neither defaultModel nor provider models exist', () => {

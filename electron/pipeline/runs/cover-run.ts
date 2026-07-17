@@ -15,6 +15,7 @@ import type { GenerationRunCtx } from '../headless-generation';
 import type { SrtEntry } from '../../../src/types';
 import type { AISettings, CoverCandidate, ImageProvider } from '../../../src/types/ai';
 import type { ImageGenerationContext } from '../../../src/lib/image-gen/types';
+import { requireApprovedDirectorPlan } from '../director-gate';
 
 async function readEntries(projectPath: string): Promise<SrtEntry[]> {
   let srt: string;
@@ -48,6 +49,8 @@ export async function runCoverPromptHeadless(
 ): Promise<string[]> {
   const regenerate = deps.regenerate ?? regenerateCoverPrompt;
   const { projectPath, userDataPath, handle } = ctx;
+
+  await requireApprovedDirectorPlan(projectPath);
 
   handle.update({ phase: '装配设置', percent: 10 });
   const settings = await loadFullHeadlessAISettings(userDataPath);
@@ -117,6 +120,8 @@ export async function runCoverImagesHeadless(
 ): Promise<CoverCandidate[]> {
   const generate = deps.generate ?? generateCoverCandidates;
   const { projectPath, userDataPath, handle } = ctx;
+
+  await requireApprovedDirectorPlan(projectPath);
 
   handle.update({ phase: '装配设置', percent: 10 });
   const settings = await loadFullHeadlessAISettings(userDataPath);

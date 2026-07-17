@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Pencil, Plus, RefreshCw, TestTube2, Trash2 } from 'lucide-react';
 import {
   LMSTUDIO_DEFAULT_BASE_URL,
   type LLMProvider,
@@ -57,11 +58,11 @@ const QUICK_PROVIDER_OPTIONS: SelectOption[] = [
     value: preset.id,
     label: preset.label,
   })),
-  { value: CUSTOM_PROVIDER_PRESET_ID, label: '自定义 Provider' },
+  { value: CUSTOM_PROVIDER_PRESET_ID, label: '自定义生成服务' },
 ];
 
 const PI_API_OPTIONS: SelectOption[] = [
-  { value: '', label: '自动匹配 Provider 类型' },
+  { value: '', label: '自动匹配服务类型' },
   { value: 'openai-completions', label: 'OpenAI Chat Completions' },
   { value: 'openai-responses', label: 'OpenAI Responses' },
   { value: 'anthropic-messages', label: 'Anthropic Messages' },
@@ -247,7 +248,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
   const [errors, setErrors] = useState<ReturnType<typeof validateProviderDraft>>({});
   const [picker, setPicker] = useState<FetchPickerState>({ status: 'idle' });
   const [modelTests, setModelTests] = useState<Record<string, ModelTestState>>({});
-  const title = initial.name ? '编辑 Provider' : '添加 Provider';
+  const title = initial.name ? '编辑文本生成服务' : '添加文本生成服务';
   const isVolcengineArk = form.type === 'volcengine_ark';
   const selectedPreset = PI_PROVIDER_PRESETS.find((preset) => preset.id === presetId) ?? null;
   const isQuickPreset = Boolean(selectedPreset && selectedPreset.id !== CUSTOM_PROVIDER_PRESET_ID);
@@ -506,13 +507,15 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
             </Field>
           ) : null}
 
-          <button
+          <Button
             type="button"
+            variant="link"
+            size="sm"
             className={styles.advancedToggle}
             onClick={() => setShowAdvanced((open) => !open)}
           >
             {showAdvanced ? '收起高级配置' : '展开高级配置'}
-          </button>
+          </Button>
 
           {showAdvanced ? (
             <>
@@ -657,6 +660,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                             void handleTestModel(m);
                           }}
                           disabled={testState.status === 'testing'}
+                          leftIcon={<TestTube2 size={12} />}
                         >
                           {testState.status === 'testing' ? '测试中…' : '测试'}
                         </Button>
@@ -665,6 +669,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                           variant="ghost"
                           size="sm"
                           className={styles.removeModelButton}
+                          leftIcon={<Trash2 size={12} />}
                           onClick={() => removeModel(idx)}
                           disabled={!showAdvanced && isQuickPreset}
                         >
@@ -694,13 +699,14 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                   wrapperClassName={styles.modelInput}
                   aria-invalid={Boolean(errors.models)}
                 />
-                <Button type="button" variant="secondary" size="sm" onClick={addModel}>
+                <Button type="button" variant="secondary" size="sm" leftIcon={<Plus size={12} />} onClick={addModel}>
                   添加
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
+                  leftIcon={<RefreshCw size={12} />}
                   onClick={() => {
                     void handleFetchModels();
                   }}
@@ -764,6 +770,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
                     type="button"
                     variant="secondary"
                     size="sm"
+                    leftIcon={<Plus size={12} />}
                     onClick={applyPickerSelection}
                     disabled={picker.selected.size === 0}
                   >
@@ -777,7 +784,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
           {form.models.length > 0 ? (
             <Field
               label="默认模型"
-              hint="该 Provider 被设为默认、且提示词未单独绑定模型时使用；留空则用模型列表首项。"
+              hint="该生成服务被设为默认、且提示词未单独绑定模型时使用；留空则用模型列表首项。"
             >
               <Select
                 value={
@@ -1068,7 +1075,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
           ) : null}
 
           <Checkbox
-            label="设为默认 Provider"
+            label="设为默认文本生成服务"
             checked={setAsDefault}
             onChange={(checked) => setSetAsDefault(checked)}
             size="sm"
@@ -1083,7 +1090,7 @@ function ProviderDialog({ initial, isDefault, onSave, onCancel }: DialogProps) {
               confirmLabel="保存"
               extra={
                 Object.keys(errors).length > 0 ? (
-                  <span className={styles.footerError}>请先补全 Provider 的必填项</span>
+                  <span className={styles.footerError}>请先补全生成服务的必填项</span>
                 ) : null
               }
             />
@@ -1149,14 +1156,14 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
     <div className={styles.root}>
       {providers.length === 0 ? (
         <EmptyState
-          eyebrow="Provider"
-          title="暂无 Provider"
-          description="点击下方按钮添加你的第一个 Provider。"
+          eyebrow="文本生成"
+          title="暂无文本生成服务"
+          description="点击下方按钮添加你的第一个文本生成服务。"
           actions={
             <div className={styles.providerActions}>
               <LingjiGatewayConnect onConnected={handleGatewayConnected} />
-              <Button type="button" variant="secondary" onClick={openAdd}>
-                + 添加 Provider
+              <Button type="button" variant="secondary" leftIcon={<Plus size={14} />} onClick={openAdd}>
+                添加文本生成服务
               </Button>
             </div>
           }
@@ -1168,7 +1175,7 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
               <div key={p.id} className={styles.providerCard}>
                 <div className={styles.providerHeader}>
                   <div className={styles.providerTitleGroup}>
-                    <span className={styles.providerName}>{p.name || '未命名 Provider'}</span>
+                    <span className={styles.providerName}>{p.name || '未命名生成服务'}</span>
                     {p.id === defaultProviderId ? (
                       <Badge variant="info" size="xs">
                         默认
@@ -1182,13 +1189,14 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
                       </Badge>
                     ) : (
                       <>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                        <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => openEdit(p)}>
                           编辑
                         </Button>
                         <Button
                           type="button"
                           variant="destructive"
                           size="sm"
+                          leftIcon={<Trash2 size={12} />}
                           onClick={() => handleDelete(p.id)}
                         >
                           删除
@@ -1232,9 +1240,10 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
               type="button"
               variant="secondary"
               className={styles.addProviderButton}
+              leftIcon={<Plus size={14} />}
               onClick={openAdd}
             >
-              + 添加 Provider
+              添加文本生成服务
             </Button>
           </div>
         </>

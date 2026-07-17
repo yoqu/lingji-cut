@@ -20,6 +20,11 @@ import {
   externalizeMotionCardDataUris,
   rewriteMotionCardAssetReferences,
 } from './motion-card-assets';
+import type { ProjectData } from '../../src/lib/project-persistence';
+import { evaluateProductionQuality } from '../../src/lib/production-quality';
+import { mutateProjectProduction } from '../project-file';
+import { resolveFfmpegPath } from '../runtime-binaries';
+import { masterVideoAudio } from '../audio-mastering';
 
 // 以下三个辅助函数由 electron/main.ts 原样迁入（仅 render-video 使用）。
 
@@ -204,6 +209,30 @@ export async function renderVideoHeadless(
   const timestamp = () => `${((Date.now() - renderStartedAt) / 1000).toFixed(2)}s`;
 
   const timelineData = JSON.parse(args.timeline) as TimelineData;
+  const qualityProjectDir = inferProjectDirFromTimeline(timelineData);
+  let qualityProject: ProjectData | null = null;
+  if (args.exportConfig.quality === 'quality' && qualityProjectDir) {
+    const projectPath = path.join(qualityProjectDir, 'project.json');
+    const project = JSON.parse(await fs.readFile(projectPath, 'utf-8')) as ProjectData;
+    qualityProject = project;
+    if (project.production) {
+      const report = evaluateProductionQuality(project, timelineData);
+      const execution = project.production.execution
+        ? { ...project.production.execution, qualityReport: report }
+        : null;
+      project.production = await mutateProjectProduction(qualityProjectDir, {
+        kind: 'set-execution',
+        execution,
+        expectedDirectorRevision: project.production.approvedPlan?.revision,
+      });
+      if (!report.exportAllowed) {
+        throw new Error(`质量导出被制作门禁阻止：${report.issues
+          .filter((issue) => issue.severity === 'error')
+          .map((issue) => issue.message)
+          .join('；')}`);
+      }
+    }
+  }
   const srtEntries =
     args.srtEntries && args.srtEntries.length > 0
       ? args.srtEntries
@@ -453,6 +482,70 @@ export async function renderVideoHeadless(
         error: err instanceof Error ? err.message : String(err),
       });
       throw err;
+    }
+
+    if (args.exportConfig.quality === 'quality' && qualityProject?.production?.execution && qualityProjectDir) {
+      const qualityExecution = qualityProject.production.execution;
+      const masteringStart = Date.now();
+      tel.emit('stage.start', { stage: 'export.mastering' });
+      try {
+        const ffmpegPath = resolveFfmpegPath({
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+          cwd: process.cwd(),
+          moduleDir: __dirname,
+        });
+        if (!ffmpegPath) throw new Error('未找到 ffmpeg，无法执行质量母带');
+        const mastering = qualityExecution.audioPlan.mastering;
+        const measurement = await masterVideoAudio({
+          ffmpegPath,
+          inputPath: args.outputPath,
+          targetLufs: mastering.targetLufs,
+          maxTruePeakDbtp: mastering.maxTruePeakDbtp,
+          audioBitrate: renderConfig.audioBitrate,
+        });
+        const report = evaluateProductionQuality(qualityProject, timelineData, measurement);
+        qualityProject.production = await mutateProjectProduction(qualityProjectDir, {
+          kind: 'set-execution',
+          execution: { ...qualityExecution, qualityReport: report },
+          expectedDirectorRevision: qualityProject.production.approvedPlan?.revision,
+        });
+        if (!report.exportAllowed) {
+          throw new Error(report.issues
+            .filter((issue) => issue.severity === 'error')
+            .map((issue) => issue.message)
+            .join('；'));
+        }
+        tel.emit('stage.end', {
+          stage: 'export.mastering',
+          durationMs: Date.now() - masteringStart,
+          ok: true,
+          integratedLufs: measurement.integratedLufs,
+          truePeakDbtp: measurement.truePeakDbtp,
+        });
+      } catch (error) {
+        const report = evaluateProductionQuality(qualityProject, timelineData);
+        report.exportAllowed = false;
+        report.degraded = true;
+        report.issues.push({
+          severity: 'error',
+          source: 'audio',
+          code: 'mastering-failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+        qualityProject.production = await mutateProjectProduction(qualityProjectDir, {
+          kind: 'set-execution',
+          execution: { ...qualityExecution, qualityReport: report },
+          expectedDirectorRevision: qualityProject.production.approvedPlan?.revision,
+        });
+        tel.emit('stage.end', {
+          stage: 'export.mastering',
+          durationMs: Date.now() - masteringStart,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw new Error(`质量导出响度母带失败：${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
     if (isDev) {

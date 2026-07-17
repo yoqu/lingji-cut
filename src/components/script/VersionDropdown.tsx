@@ -155,7 +155,7 @@ export function VersionDropdown() {
 
                     <div className={styles.versionRow2}>
                       {v.providerName && (
-                        <Badge color="#a78bfa" size="xs">
+                        <Badge color="var(--color-system-blue)" size="xs">
                           {v.providerName}
                           {v.modelName ? ` / ${v.modelName}` : ''}
                         </Badge>

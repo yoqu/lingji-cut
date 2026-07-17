@@ -18,6 +18,10 @@ export interface MotionLintResult {
   issues: MotionLintIssue[];
 }
 
+export interface MotionLintOptions {
+  requireSafeLayout?: boolean;
+}
+
 const ALLOWED_IMPORTS = new Set(['remotion', 'react', 'react/jsx-runtime', '@lingji/motion-kit']);
 
 /** 非确定性 / 副作用 API：全部 error（动画必须是 frame 的纯函数）。 */
@@ -52,7 +56,10 @@ function collectImports(tsx: string): string[] {
   return specs;
 }
 
-export function lintMotionCardTsx(tsx: string): MotionLintResult {
+export function lintMotionCardTsx(
+  tsx: string,
+  options: MotionLintOptions = {},
+): MotionLintResult {
   const issues: MotionLintIssue[] = [];
   const source = tsx ?? '';
 
@@ -72,6 +79,39 @@ export function lintMotionCardTsx(tsx: string): MotionLintResult {
       code: 'unfinished-source',
       message: '源码包含 TODO / 省略类占位内容，组件不完整。',
     });
+  }
+
+  if (options.requireSafeLayout) {
+    if (!/<SafeLayout\b/.test(source) || !/<MotionSlot\b/.test(source)) {
+      issues.push({
+        severity: 'error',
+        code: 'safe-layout-required',
+        message: '自动模式必须使用 SafeLayout + MotionSlot 组织槽位，不能直接在 CardStage 中自由堆叠。',
+      });
+    }
+    if (/position\s*:\s*['"]absolute['"]/.test(source)) {
+      issues.push({
+        severity: 'error',
+        code: 'auto-absolute-layout',
+        message: '自动模式禁止在卡片源码中使用 absolute 自由定位；请把语义内容放入 MotionSlot，并使用一个 motion-kit 主原语。',
+      });
+    }
+    const mainPrimitives = [
+      'StatHero', 'BarChart', 'TrendLine', 'CompareRow', 'ListBuild', 'ProcessFlow',
+      'QuoteBlock', 'TimelineRail', 'MatrixQuadrant', 'FunnelStack', 'NetworkMap',
+      'BeforeAfter', 'StackedComposition',
+    ];
+    const primitiveCount = mainPrimitives.reduce(
+      (count, name) => count + (source.match(new RegExp(`<${name}\\b`, 'g'))?.length ?? 0),
+      0,
+    );
+    if (primitiveCount > 1) {
+      issues.push({
+        severity: 'error',
+        code: 'too-many-main-primitives',
+        message: `自动模式检测到 ${primitiveCount} 个主原语；每张卡只能保留 1 个主原语，标题用 Kicker 放入 header 槽位。`,
+      });
+    }
   }
 
   for (const spec of collectImports(source)) {
@@ -191,13 +231,15 @@ export function lintMotionCardTsx(tsx: string): MotionLintResult {
   }
 
   // cues 未使用：卡片拿到逐句节拍却完全没消费，动画必然与口播脱节。
-  const usesCues = /\bcues\b/.test(source.replace(/function\s+\w*\s*\(\s*\{\s*cues[^}]*\}\s*\)/, ''));
+  const strippedProps = source.replace(/function\s+\w*\s*\(\s*\{\s*[^}]*\}\s*\)/, '');
+  const usesCues = /\bcues\b/.test(strippedProps);
   const usesBeats = /\buseBeats\s*\(/.test(source);
-  if (!usesCues && !usesBeats) {
+  const usesTimingPlan = /\buseTimingPlan\s*\(/.test(source);
+  if (!usesCues && !usesBeats && !usesTimingPlan) {
     issues.push({
       severity: 'warn',
       code: 'cues-unused',
-      message: '组件未使用 cues / useBeats，内容揭示无法跟随口播节拍。',
+      message: '组件未使用 cues / useBeats / useTimingPlan，内容揭示无法跟随口播节拍。',
     });
   }
 

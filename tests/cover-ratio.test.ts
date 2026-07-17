@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendCoverGenerationHistory,
   autoFillCovers,
+  buildRatioPrompt,
   classifyRatio,
   groupCoverCandidatesByRatio,
+  resolveCoverStudioBasePrompt,
+  resolvePublishRatioPrompt,
 } from '../src/components/publish/useCoverStudio';
 
 describe('classifyRatio', () => {
@@ -61,6 +65,53 @@ describe('groupCoverCandidatesByRatio', () => {
       'cover-scan:covers/cover-4x3.png',
     ]);
     expect(groups['16:9']).toEqual([]);
+  });
+});
+
+describe('resolvePublishRatioPrompt', () => {
+  it('导演台更新基础提示词后覆盖旧候选提示词，并附加目标比例构图要求', () => {
+    const prompt = resolvePublishRatioPrompt('新的导演封面提示词', '3:4', '旧候选提示词');
+
+    expect(prompt).toBe(buildRatioPrompt('新的导演封面提示词', '3:4'));
+    expect(prompt).toContain('新的导演封面提示词');
+    expect(prompt).toContain('竖版 3:4 构图');
+    expect(prompt).not.toContain('旧候选提示词');
+  });
+
+  it('旧项目没有基础提示词时保留候选历史提示词用于展示', () => {
+    expect(resolvePublishRatioPrompt(null, '4:3', '历史提示词')).toBe('历史提示词');
+  });
+});
+
+describe('cover prompt authority and history', () => {
+  it('优先使用当前选中的 16:9 候选提示词', () => {
+    expect(resolveCoverStudioBasePrompt('被规划覆盖的提示词', [
+      {
+        id: 'wide', prompt: '第一版 16:9 提示词', imageUrl: '/wide.png',
+        selected: true, aspectRatio: '16:9',
+      },
+      {
+        id: 'vertical', prompt: '竖版提示词', imageUrl: '/vertical.png',
+        selected: false, aspectRatio: '3:4',
+      },
+    ])).toBe('第一版 16:9 提示词');
+  });
+
+  it('没有选中的 16:9 候选时回退分析提示词', () => {
+    expect(resolveCoverStudioBasePrompt('分析提示词', [])).toBe('分析提示词');
+  });
+
+  it('追加新候选时保留旧图片和提示词历史', () => {
+    const oldCandidate = {
+      id: 'old', prompt: '第一版', imageUrl: '/old.png', selected: false,
+    };
+    const newCandidate = {
+      id: 'new', prompt: '第二版', imageUrl: '/new.png', selected: false,
+    };
+    expect(appendCoverGenerationHistory([oldCandidate], [newCandidate])).toEqual([
+      oldCandidate,
+      newCandidate,
+    ]);
   });
 });
 

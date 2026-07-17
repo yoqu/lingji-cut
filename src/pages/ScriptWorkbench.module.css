@@ -118,9 +118,7 @@
 .workflowOverlayProgressValue {
   height: 100%;
   border-radius: var(--radius-pill);
-  /* AI 铁律色：生成态紫色 #a78bfa 保留，视觉反馈体系专用 */
-  background: linear-gradient(90deg, #a78bfa, var(--color-selection-blue-hover));
-  box-shadow: 0 0 18px color-mix(in srgb, #a78bfa 32%, transparent);
+  background: var(--color-system-blue);
   transition: width 180ms ease;
 }
 
@@ -137,6 +135,10 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.operationError {
+  margin: var(--space-4) var(--space-6) 0;
 }
 
 .conflictBanner {
@@ -183,78 +185,9 @@
   transition: box-shadow 0.4s ease;
 }
 
-/* ─── 审稿呼吸光效：暗底 + 高饱和发光色 ─────── */
+/* 审稿等待态：只保留克制的系统蓝边缘提示，进度以统一任务系统为准。 */
 .reviewBreathing {
-  animation: reviewGlowBreathing 2.4s ease-in-out infinite;
-  border: 1px solid transparent;
-}
-
-/* 内层辉光覆层 */
-.reviewBreathing::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 5;
-  background:
-    radial-gradient(ellipse 60% 40% at 20% 10%, rgba(0, 210, 255, 0.06), transparent 70%),
-    radial-gradient(ellipse 50% 50% at 80% 90%, rgba(52, 211, 153, 0.05), transparent 70%);
-  animation: reviewInnerGlow 2.4s ease-in-out infinite;
-}
-
-/* 扫描线 — 自上而下来回 */
-.reviewBreathing::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 2px;
-  z-index: 6;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(52, 211, 153, 0.5) 20%,
-    rgba(0, 210, 255, 0.7) 50%,
-    rgba(52, 211, 153, 0.5) 80%,
-    transparent 100%
-  );
-  box-shadow:
-    0 0 12px 2px rgba(0, 210, 255, 0.35),
-    0 0 30px 4px rgba(52, 211, 153, 0.15);
-  animation: reviewScanLine 2.4s ease-in-out infinite;
-}
-
-@keyframes reviewGlowBreathing {
-  0%, 100% {
-    box-shadow:
-      inset 0 0 30px rgba(52, 211, 153, 0.04),
-      0 0 15px rgba(52, 211, 153, 0.08),
-      0 0 40px rgba(0, 210, 255, 0.04);
-    border-color: rgba(52, 211, 153, 0.12);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 50px rgba(52, 211, 153, 0.08),
-      0 0 25px rgba(52, 211, 153, 0.18),
-      0 0 60px rgba(0, 210, 255, 0.1),
-      0 0 100px rgba(52, 211, 153, 0.04);
-    border-color: rgba(52, 211, 153, 0.28);
-  }
-}
-
-@keyframes reviewInnerGlow {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
-}
-
-@keyframes reviewScanLine {
-  0% { top: -2px; opacity: 0; }
-  10% { opacity: 1; }
-  50% { top: 100%; opacity: 0.8; }
-  90% { opacity: 1; }
-  100% { top: -2px; opacity: 0; }
+  border: 1px solid color-mix(in srgb, var(--color-system-blue) 30%, var(--color-separator));
 }
 
 .thinkingPanel {
@@ -315,15 +248,15 @@
   background: var(--color-border-strong);
 }
 
-/* ─── 审稿推荐横幅 (AI 铁律：生成态紫色 #a78bfa 保留) ─────── */
+/* 生成结果的下一步提示，沿用系统蓝交互语义。 */
 .reviewBanner {
   display: flex;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-5) var(--space-8);
-  background: rgba(124, 58, 237, 0.12);
-  border-bottom: 1px solid rgba(124, 58, 237, 0.3);
-  color: #a78bfa;
+  background: color-mix(in srgb, var(--color-system-blue) 9%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-system-blue) 24%, transparent);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-md);
   flex-shrink: 0;
 }
@@ -332,9 +265,9 @@
   margin-left: auto;
   padding: var(--space-2) var(--space-6);
   border-radius: var(--radius-md);
-  border: 1px solid rgba(124, 58, 237, 0.4);
-  background: rgba(124, 58, 237, 0.2);
-  color: #a78bfa;
+  border: 1px solid color-mix(in srgb, var(--color-system-blue) 34%, transparent);
+  background: color-mix(in srgb, var(--color-system-blue) 14%, transparent);
+  color: var(--color-system-blue);
   font-size: var(--font-size-md);
   font-weight: 600;
   cursor: pointer;
@@ -342,14 +275,14 @@
 }
 
 .reviewBannerBtn:hover {
-  background: rgba(124, 58, 237, 0.35);
+  background: color-mix(in srgb, var(--color-system-blue) 22%, transparent);
 }
 
 .reviewBannerClose {
   padding: var(--space-1);
   border: none;
   background: transparent;
-  color: rgba(167, 139, 250, 0.5);
+  color: var(--color-text-muted);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -358,10 +291,10 @@
 }
 
 .reviewBannerClose:hover {
-  color: #a78bfa;
+  color: var(--color-text-primary);
 }
 
-/* AI 铁律：生成态紫色 #a78bfa 保留 */
+/* 写稿与审稿共享同一活跃状态视觉，区别由文案表达。 */
 .agentTypingIndicator {
   position: absolute;
   top: var(--space-4);
@@ -369,41 +302,35 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-  background: rgba(124, 58, 237, 0.18);
-  border: 1px solid rgba(124, 58, 237, 0.36);
+  background: color-mix(in srgb, var(--color-system-blue) 12%, var(--color-panel-bg));
+  border: 1px solid color-mix(in srgb, var(--color-system-blue) 28%, transparent);
   padding: var(--space-2) var(--space-5);
   border-radius: var(--radius-pill);
   font-size: var(--font-size-sm);
-  color: #a78bfa;
+  color: var(--color-system-blue);
   z-index: 10;
   pointer-events: none;
-  backdrop-filter: blur(6px);
 }
 
-.agentTypingIndicator::after {
+.agentTypingIndicator::before,
+.agentReviewIndicator::before {
   content: '';
   width: 6px;
   height: 6px;
   border-radius: var(--radius-pill);
   background: currentColor;
-  box-shadow:
-    10px 0 0 rgba(167, 139, 250, 0.55),
-    20px 0 0 rgba(167, 139, 250, 0.28);
-  animation: typingPulse 1s ease-in-out infinite;
+  animation: activityPulse 1.2s ease-in-out infinite;
 }
 
-@keyframes typingPulse {
+@keyframes activityPulse {
   0%, 100% {
-    opacity: 0.45;
-    transform: translateY(0);
+    opacity: 0.4;
   }
   50% {
     opacity: 1;
-    transform: translateY(-1px);
   }
 }
 
-/* ─── 审稿操作指示器（AI 铁律：审稿态绿色 #34d399 保留）─────────────── */
 .agentReviewIndicator {
   position: absolute;
   top: var(--space-4);
@@ -411,46 +338,19 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-  background: rgba(52, 211, 153, 0.15);
-  border: 1px solid rgba(52, 211, 153, 0.35);
+  background: color-mix(in srgb, var(--color-system-blue) 12%, var(--color-panel-bg));
+  border: 1px solid color-mix(in srgb, var(--color-system-blue) 28%, transparent);
   padding: var(--space-2) var(--space-5);
   border-radius: var(--radius-pill);
   font-size: var(--font-size-sm);
-  color: #34d399;
+  color: var(--color-system-blue);
   z-index: 10;
   pointer-events: none;
-  backdrop-filter: blur(6px);
 }
 
-.agentReviewIndicator::after {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: currentColor;
-  box-shadow:
-    10px 0 0 rgba(52, 211, 153, 0.55),
-    20px 0 0 rgba(52, 211, 153, 0.28);
-  animation: typingPulse 1s ease-in-out infinite;
-}
-
-/* ─── AI 审稿浮动指针 ───────────────────────── */
-.aiReviewCursor {
-  position: fixed;
-  z-index: 99999;
-  pointer-events: none;
-  transition: left 0.15s ease-out, top 0.15s ease-out;
-  filter: drop-shadow(0 2px 6px rgba(52, 211, 153, 0.4));
-  animation: cursorFadeIn 0.3s ease-out;
-}
-
-@keyframes cursorFadeIn {
-  from {
-    opacity: 0;
-    transform: scale(0.5);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
+@media (prefers-reduced-motion: reduce) {
+  .agentTypingIndicator::before,
+  .agentReviewIndicator::before {
+    animation: none;
   }
 }

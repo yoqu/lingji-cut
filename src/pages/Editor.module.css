@@ -146,12 +146,12 @@
   pointer-events: none;
 }
 
-.workspace[data-locked='true'] [data-editor-region='sidebar-shell'][data-active-panel='ai'] .panelBody {
+.workspace[data-locked='true'] [data-editor-region='sidebar-shell'][data-active-panel='shots'] .panelBody {
   pointer-events: auto;
   user-select: auto;
 }
 
-.workspace[data-locked='true'] [data-editor-region='sidebar-shell'][data-active-panel='ai'] {
+.workspace[data-locked='true'] [data-editor-region='sidebar-shell'][data-active-panel='shots'] {
   filter: none;
 }
 

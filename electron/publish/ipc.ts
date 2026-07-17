@@ -4,6 +4,7 @@ import { AccountStore } from './accounts';
 import { getPlatform } from './platforms';
 import { parseAccountId } from './account-id';
 import { runPublishJob } from './runner';
+import { abortActivePublish } from './cancel';
 import { getBiliupStatus, downloadBiliup } from './biliup-install';
 import { getChromiumStatus, downloadChromium } from './chromium-install';
 import { registerDownloadIpc } from './download-ipc';
@@ -64,8 +65,10 @@ export function registerPublishIpc(): void {
   });
 
   // ─── publish:cancel ─────────────────────────────────────────────────────────
-  ipcMain.handle('publish:cancel', () => {
+  // flag 阻止后续账号开始；abortActivePublish 中断 in-flight 上传（关浏览器/杀子进程）
+  ipcMain.handle('publish:cancel', async () => {
     cancelled = true;
+    await abortActivePublish();
   });
 
   // ─── 依赖运行时按需下载（统一工厂：status + download + progress + cancel） ──────

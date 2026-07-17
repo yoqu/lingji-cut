@@ -1,4 +1,5 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -20,15 +21,31 @@ export default function Card({ cues = [] }) {
   return <AbsoluteFill>{frame}</AbsoluteFill>;
 }`;
 
+const SAFE_TSX = `import { CardStage, SafeLayout, MotionSlot, useBeats, Kicker, StatHero } from '@lingji/motion-kit';
+const TOKENS = { palette: { bg: '#101820', ink: '#fff', muted: '#8996A3', accent: '#4F8CFF' } };
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 1]);
+  return <CardStage tokens={TOKENS}><SafeLayout variant="title-hero">
+    <MotionSlot name="header"><Kicker text="考研报名" beat={beats[0]} /></MotionSlot>
+    <MotionSlot name="main"><StatHero value={28842} unit="人" beat={beats[1]} /></MotionSlot>
+  </SafeLayout></CardStage>;
+}`;
+
 /** 合法分镜：cue 单调、数字 28842 在逐字稿中存在。 */
 const STORYBOARD = JSON.stringify({
   claim: '硕士报名人数远超博士',
   carrier: 'data-hero',
+  layout: 'title-hero',
   scene: '一个大数字与等比配重条',
+  elements: [
+    { id: 'title', role: 'support', slot: 'header', content: '考研报名', heightRatio: 0.12 },
+    { id: 'hero', role: 'focus', slot: 'main', content: '28842 人', heightRatio: 0.42 },
+  ],
+  capacity: { maxVisible: 2, maxHeightRatio: 0.62 },
   focus: { beat: 1, emphasis: 'countup-settle' },
   beats: [
-    { cue: null, kind: 'build', adds: '标题：考研报名', motion: '软落入场' },
-    { cue: 1, kind: 'build', adds: '数字 28842 人', changes: '标题保持', motion: '数字计数到 28842' },
+    { cue: null, kind: 'build', adds: '标题：考研报名', motion: '软落入场', lifecycle: { enter: ['title'] } },
+    { cue: 1, kind: 'build', adds: '数字 28842 人', changes: '标题收为辅助', motion: '数字计数到 28842', lifecycle: { enter: ['hero'], collapse: ['title'] } },
   ],
 });
 
@@ -79,6 +96,7 @@ function makeCtx(overrides: Partial<MotionCardAgentContext> = {}): MotionCardAge
     buildCardPrompt: (dir) => `出卡任务书；分镜：${dir ?? '无'}`,
     segmentTranscript: '今年考研硕士报名28842人，比博士多得多。',
     cueCount: 3,
+    qualityMode: 'director',
     ...overrides,
   };
 }
@@ -102,13 +120,31 @@ const writeTsx = (cwd: string, tsx = VALID_TSX) => writeFile(path.join(cwd, 'mot
 describe('parseReviewVerdict', () => {
   it('解析严格 JSON 与带围栏/前后缀的 JSON', () => {
     expect(parseReviewVerdict('{"pass": true, "issues": []}')).toEqual({ pass: true, issues: [] });
-    const wrapped = parseReviewVerdict('结论如下\n```json\n{"pass": false, "issues": [{"rule": "状态演进"}]}\n```');
+    const wrapped = parseReviewVerdict('结论如下\n```json\n{"pass": false, "issues": [{"code":"content-missing","rule": "关键文案缺失"}]}\n```');
     expect(wrapped.pass).toBe(false);
-    expect(wrapped.issues[0]?.rule).toBe('状态演进');
+    expect(wrapped.issues[0]?.rule).toBe('关键文案缺失');
   });
 
-  it('无法解析时按通过处理（审查员不阻断出卡）', () => {
-    expect(parseReviewVerdict('审查通过，没有问题。')).toEqual({ pass: true, issues: [] });
+  it('无法解析时显式标记审查不可用', () => {
+    const verdict = parseReviewVerdict('审查通过，没有问题。');
+    expect(verdict.pass).toBe(false);
+    expect(verdict.unavailableReason).toContain('未输出 JSON');
+    expect(verdict.issues[0]).toMatchObject({
+      severity: 'warn',
+      code: 'review-unavailable',
+    });
+  });
+
+  it('审查员误写 pass=true 时，白名单硬错误仍按未通过处理', () => {
+    const verdict = parseReviewVerdict('{"pass":true,"issues":[{"code":"focus-missing","severity":"warn","rule":"焦点内容未出现"}]}');
+    expect(verdict.pass).toBe(false);
+    expect(verdict.issues[0]?.severity).toBe('error');
+  });
+
+  it('设计保真问题即使误写 error 也降级为非阻断 warning', () => {
+    const verdict = parseReviewVerdict('{"pass":false,"issues":[{"code":"emphasis-mismatch","severity":"error","rule":"slam 未完全兑现"}]}');
+    expect(verdict.pass).toBe(true);
+    expect(verdict.issues[0]?.severity).toBe('warn');
   });
 });
 
@@ -149,6 +185,136 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
     expect(sculptPrompt).toContain('28842');
     expect(sculptPrompt).toContain('逐字稿');
     expect(sculptPrompt).toContain('motionCard.tsx');
+  });
+
+  it('机械校验返回的 layout warnings 会保留到 productionReport', async () => {
+    const { provider } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const validate = vi.fn(async () => ({
+      ok: true,
+      renderOk: true,
+      framesChecked: [0, 20, 40],
+      issues: [{ severity: 'warning' as const, code: 'possible-occlusion', message: '需复核' }],
+    }));
+    const result = await provider(makeCtx({ validate }));
+    expect(result.productionReport?.layoutIssues).toEqual([
+      expect.objectContaining({ source: 'layout', code: 'possible-occlusion' }),
+    ]);
+  });
+
+  it('机械校验接收真实镜头时长、字幕 TimingPlan 与逐拍探针帧', async () => {
+    const { provider } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const validate = vi.fn();
+    await provider(makeCtx({
+      validate,
+      timingInput: {
+        srt: [
+          { index: 1, startMs: 10_000, endMs: 11_000, text: '考研报名' },
+          { index: 2, startMs: 12_000, endMs: 13_000, text: '硕士报名28842人' },
+        ],
+        startMs: 10_000,
+        durationMs: 6_000,
+        fps: 30,
+      },
+    }));
+    const validationInput = validate.mock.calls[0]?.[1];
+    expect(validationInput).toMatchObject({ durationInFrames: 180, cues: [0, 60] });
+    expect(validationInput.frames).toEqual(expect.arrayContaining([0, 179]));
+    expect(validationInput.frames.length).toBeGreaterThan(3);
+  });
+
+  it('导演输出 assets 后先解析资产，再把资产上下文注入雕刻任务书', async () => {
+    const baseStoryboard = JSON.parse(STORYBOARD);
+    const storyboardWithAssets = JSON.stringify({
+      ...baseStoryboard,
+      elements: [
+        ...baseStoryboard.elements,
+        { id: 'archive', role: 'asset', slot: 'asset', assetSlot: 'archive_prop', content: '旧档案袋', heightRatio: 0.25 },
+      ],
+      capacity: { maxVisible: 3, maxHeightRatio: 0.72 },
+      beats: [
+        { ...baseStoryboard.beats[0], lifecycle: { enter: ['title', 'archive'] } },
+        { ...baseStoryboard.beats[1], lifecycle: { enter: ['hero'], collapse: ['title', 'archive'] } },
+      ],
+      assets: [
+        {
+          slot: 'archive_prop',
+          query: '旧档案袋',
+          role: 'object',
+          importance: 'primary',
+          reusePolicy: 'generate-if-missing',
+          visualTreatment: 'editorial-realist-cutout',
+          placementHint: '左下角前景',
+        },
+      ],
+    });
+    const resolveAssets = vi.fn(async () => ({
+      bindings: [
+        {
+          slot: 'archive_prop',
+          assetId: 'asset-archive',
+          filePath: '/tmp/archive.png',
+          treatment: {
+            profile: 'editorial-realist-cutout' as const,
+            lighting: 'soft-left',
+            palette: 'low-saturation',
+            shadow: 'soft-ground',
+            perspective: 'front-3q',
+          },
+          placement: {
+            x: 86,
+            y: 330,
+            width: 280,
+            depth: 'foreground' as const,
+          },
+        },
+      ],
+      generationRequests: [],
+      unresolved: [],
+    }));
+    const { provider, prompts, phases } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return storyboardWithAssets;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+
+    const result = await provider(makeCtx({
+      sourceCardId: 'card-asset',
+      resolveAssets,
+      buildCardPrompt: (_dir, assetBindings) =>
+        `出卡任务书；资产：${assetBindings?.map((binding) => binding.slot).join(',') || '无'}`,
+    }));
+
+    expect(resolveAssets).toHaveBeenCalledWith({
+      requests: expect.arrayContaining([expect.objectContaining({ slot: 'archive_prop' })]),
+      sourceCardId: 'card-asset',
+      signal: undefined,
+    });
+    expect(prompts.find((p) => p.role === '雕刻')!.text).toContain('archive_prop');
+    expect(result.assetBindings?.[0]?.assetId).toBe('asset-archive');
+    expect(phases).toEqual(['导演', '资产生成', '雕刻', '验证', '审查']);
   });
 
   it('分镜不合法（cue 越界）时回喂导演重出，第二轮通过', async () => {
@@ -365,7 +531,7 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
         }
         reviewTurn += 1;
         return reviewTurn === 1
-          ? '{"pass": false, "issues": [{"severity": "error", "rule": "状态演进", "fix": "changes 未落实"}]}'
+          ? '{"pass": false, "issues": [{"code":"contradictory-state","severity": "error", "rule": "状态演进", "fix": "终态保留矛盾内容"}]}'
           : '{"pass": true, "issues": []}';
       },
     });
@@ -376,7 +542,7 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
     expect(phases).toContain(`回炉 1/${MAX_REVIEW_ITER}`);
   });
 
-  it('审查持续不通过时在 MAX_REVIEW_ITER 后强制收尾（仍返回卡片）', async () => {
+  it('导演模式审查持续不通过时在 MAX_REVIEW_ITER 后触发质量门禁', async () => {
     let reviewTurn = 0;
     const { provider } = providerWith({
       reply: async (role, _text, cwd) => {
@@ -386,15 +552,31 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
           return 'ok';
         }
         reviewTurn += 1;
-        return '{"pass": false, "issues": [{"rule": "焦点层级"}]}';
+        return '{"pass": false, "issues": [{"code":"focus-missing","rule": "焦点内容未出现"}]}';
       },
     });
-    const result = await provider(makeCtx({ validate: vi.fn() }));
-    expect(result.tsx).toContain('export default');
+    await expect(provider(makeCtx({ validate: vi.fn() }))).rejects.toThrow(/质量门禁阻断/);
     expect(reviewTurn).toBe(1 + MAX_REVIEW_ITER);
   });
 
-  it('审查员输入含分镜与机械校验结论，不再要求复查机械规则', async () => {
+  it('自动模式审查持续不通过时切换为安全布局兜底卡', async () => {
+    const { provider, phases } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd, SAFE_TSX);
+          return 'ok';
+        }
+        return '{"pass": false, "issues": [{"code":"focus-missing","severity":"error","rule": "焦点内容未出现"}]}';
+      },
+    });
+    const result = await provider(makeCtx({ qualityMode: 'auto', validate: vi.fn() }));
+    expect(result.productionReport?.fallbackUsed).toBe(true);
+    expect(result.tsx).toContain('<SafeLayout');
+    expect(phases).toContain('质量降级');
+  });
+
+  it('审查员输入含分镜、机械校验结论与关键帧审片材料', async () => {
     const { provider, prompts } = providerWith({
       reply: async (role, _text, cwd) => {
         if (role === '导演') return STORYBOARD;
@@ -408,8 +590,35 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
     await provider(makeCtx({ validate: vi.fn() }));
     const reviewPrompt = prompts.find((p) => p.role === '审查')!.text;
     expect(reviewPrompt).toContain('storyboard');
+    expect(reviewPrompt).toContain('Motion Bible');
     expect(reviewPrompt).toContain('机械校验结论');
+    expect(reviewPrompt).toContain('关键帧审片材料');
+    expect(reviewPrompt).toContain('frame index');
     expect(reviewPrompt).toContain('设计兑现度');
+  });
+
+  it('审查员输出不可解析时不回炉，report 记录审查不可用 warning', async () => {
+    let sculptPrompts = 0;
+    const { provider } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          sculptPrompts += 1;
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '审查通过，没有问题。';
+      },
+    });
+    const result = await provider(makeCtx({ validate: vi.fn() }));
+    expect(result.tsx).toContain('export default');
+    expect(sculptPrompts).toBe(1);
+    expect(result.productionReport?.status).toBe('acceptable');
+    expect(result.productionReport?.reviewIssues[0]).toMatchObject({
+      severity: 'warning',
+      code: 'review-unavailable',
+    });
+    expect(result.productionReport?.unavailableReason).toContain('未输出 JSON');
   });
 
   it('refine 模式：现有 TSX 进导演诊断上下文并预写入工作目录', async () => {
@@ -447,6 +656,46 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
     expect(directorPrompt).toContain('用数字大卡呈现');
   });
 
+  it('合法 storyboard 草案默认仍会重新导演', async () => {
+    const { provider, sessions, phases, prompts } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const result = await provider(makeCtx({ animationDirectionDraft: STORYBOARD, validate: vi.fn() }));
+    expect(result.animationDirection).toContain('"carrier": "data-hero"');
+    expect(phases).not.toContain('复用分镜');
+    expect(phases[0]).toBe('导演');
+    expect(sessions.map((s) => s.role)).toContain('导演');
+    expect(prompts.some((p) => p.role === '导演')).toBe(true);
+  });
+
+  it('显式 reuseStoryboardDraft 时，合法 storyboard 草案会跳过导演', async () => {
+    const { provider, sessions, phases, prompts } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const result = await provider(makeCtx({
+      animationDirectionDraft: STORYBOARD,
+      reuseStoryboardDraft: true,
+      validate: vi.fn(),
+    }));
+    expect(result.animationDirection).toContain('"carrier": "data-hero"');
+    expect(phases).toContain('复用分镜');
+    expect(sessions.map((s) => s.role)).toEqual(['雕刻', '审查']);
+    expect(prompts.some((p) => p.role === '导演')).toBe(false);
+  });
+
   it('abort 信号已触发时立即失败', async () => {
     const controller = new AbortController();
     controller.abort();
@@ -467,7 +716,7 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
           }
           reviewTurn += 1;
           return reviewTurn === 1
-            ? '{"pass": false, "issues": [{"rule": "状态演进"}]}'
+            ? '{"pass": false, "issues": [{"code":"contradictory-state","rule": "状态演进"}]}'
             : '{"pass": true, "issues": []}';
         },
       },
@@ -542,7 +791,7 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
             await writeTsx(cwd);
             return 'ok';
           }
-          return '{"pass": false, "issues": [{"rule": "状态演进"}]}';
+          return '{"pass": true, "issues": []}';
         },
       },
       { directorModel: 'px/anim-model', sculptorModel: 'px/card-model' },
@@ -702,4 +951,28 @@ describe('观测事件：结构化 stage/round 与模型标注', () => {
     expect(byRole('sculptor')[0]).toMatchObject({ model: 'prov/sculpt-model' });
     expect(byRole('reviewer')[0]).toMatchObject({ model: 'prov/sculpt-model' });
   });
+});
+
+describe('production report contact sheet', () => {
+  it('启用 contactSheetCacheDir 时生成并记录 PNG 缓存路径', async () => {
+    const cacheDir = await mkdtemp(path.join(os.tmpdir(), 'lingji-agent-sheet-'));
+    const { provider } = providerWith(
+      {
+        reply: async (role, _text, cwd) => {
+          if (role === '导演') return STORYBOARD;
+          if (role === '雕刻') {
+            await writeTsx(cwd);
+            return 'ok';
+          }
+          return '{"pass": true, "issues": []}';
+        },
+      },
+      { contactSheetCacheDir: cacheDir },
+    );
+    const result = await provider(makeCtx());
+    expect(result.productionReport?.contactSheetCacheKey).toMatch(/^[a-f0-9]{24}$/);
+    expect(result.productionReport?.contactSheetPath).toContain(cacheDir);
+    expect(result.productionReport?.contactSheetCached).toBe(false);
+    expect(result.productionReport?.contactSheetError).toBeUndefined();
+  }, 120_000);
 });

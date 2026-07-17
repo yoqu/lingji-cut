@@ -17,6 +17,7 @@ function makeBaseProps(overrides: Partial<AutoRunOverlayProps> = {}): AutoRunOve
     error: null,
     onCancel: vi.fn(),
     onJumpToScriptWorkbench: vi.fn(),
+    onJumpToDirector: vi.fn(),
     onJumpToEditor: vi.fn(),
     ...overrides,
   };
@@ -66,7 +67,7 @@ describe('AutoRunOverlay', () => {
     const html = renderToStaticMarkup(
       <AutoRunOverlay {...makeBaseProps({ stepLabel: '合成语音中', progress: 42.6 })} />,
     );
-    expect(html).toContain('正在为你一键成稿');
+    expect(html).toContain('正在自动剪辑');
     expect(html).toContain('合成语音中');
     // 整体进度百分比四舍五入展示
     expect(html).toContain('43%');
@@ -77,7 +78,7 @@ describe('AutoRunOverlay', () => {
   it('clicking cancel button triggers onCancel callback', () => {
     const onCancel = vi.fn();
     const tree = AutoRunOverlay(makeBaseProps({ onCancel }));
-    const cancel = findClickableByText(tree, '取消');
+    const cancel = findClickableByText(tree, '停止');
     expect(cancel).not.toBeNull();
     const onClick = (cancel!.props as { onClick: () => void }).onClick;
     onClick();
@@ -95,9 +96,8 @@ describe('AutoRunOverlay', () => {
     expect(html).toContain('生成口播稿失败');
     expect(html).toContain('查看脚本工作台');
     // 出错态不应出现取消按钮
-    expect(html).not.toContain('>取消<');
-
     const tree = AutoRunOverlay(props);
+    expect(findClickableByText(tree, '停止')).toBeNull();
     const jump = findClickableByText(tree, '查看脚本工作台');
     expect(jump).not.toBeNull();
     const onClick = (jump!.props as { onClick: () => void }).onClick;
@@ -105,42 +105,74 @@ describe('AutoRunOverlay', () => {
     expect(onJumpToScriptWorkbench).toHaveBeenCalledTimes(1);
   });
 
-  it('error on cover_generating shows 进入编辑器 button', () => {
-    const onJumpToEditor = vi.fn();
+  it('error on cover_generating routes to the director workbench', () => {
+    const onJumpToDirector = vi.fn();
     const props = makeBaseProps({
       step: 'error',
       error: { message: '封面生成失败', failedStep: 'cover_generating' },
-      onJumpToEditor,
+      onJumpToDirector,
     });
     const html = renderToStaticMarkup(<AutoRunOverlay {...props} />);
     expect(html).toContain('封面生成失败');
-    expect(html).toContain('进入编辑器');
+    expect(html).toContain('进入导演台处理');
     expect(html).not.toContain('查看脚本工作台');
 
     const tree = AutoRunOverlay(props);
-    const jump = findClickableByText(tree, '进入编辑器');
+    const jump = findClickableByText(tree, '进入导演台处理');
     expect(jump).not.toBeNull();
     const onClick = (jump!.props as { onClick: () => void }).onClick;
     onClick();
-    expect(onJumpToEditor).toHaveBeenCalledTimes(1);
+    expect(onJumpToDirector).toHaveBeenCalledTimes(1);
   });
 
   it('fills first 3 segments at tts_done', () => {
     const html = renderToStaticMarkup(
       <AutoRunOverlay {...makeBaseProps({ step: 'tts_done', stepLabel: '', progress: 33 })} />,
     );
-    // tts_done 应归一化为 tts_generating，前 3 段（douyin/script/tts）填蓝，其余 3 段灰色
-    const filled = (html.match(/--color-system-blue/g) ?? []).length;
-    expect(filled).toBe(3);
+    // tts_done 应归一化为 tts_generating，前 2 段完成，第 3 段进行中。
+    expect((html.match(/data-status="completed"/g) ?? []).length).toBe(2);
+    expect((html.match(/data-status="active"/g) ?? []).length).toBe(1);
   });
 
   it('fills all 6 segments at done', () => {
     const html = renderToStaticMarkup(
       <AutoRunOverlay {...makeBaseProps({ step: 'done', stepLabel: '', progress: 100 })} />,
     );
-    // done 状态下所有 6 段都应填满
-    const filled = (html.match(/--color-system-blue/g) ?? []).length;
-    expect(filled).toBe(6);
+    expect((html.match(/data-status="completed"/g) ?? []).length).toBe(6);
+  });
+
+  it('导演模式在 Animatic 后显示进入编辑器确认', () => {
+    const onJumpToEditor = vi.fn();
+    const props = makeBaseProps({
+      step: 'animatic_review',
+      stepLabel: 'Animatic 已生成',
+      progress: 100,
+      onJumpToEditor,
+    });
+    const html = renderToStaticMarkup(<AutoRunOverlay {...props} />);
+    expect(html).toContain('Animatic 等待确认');
+    expect(html).toContain('进入编辑器确认');
+    expect((html.match(/data-status="completed"/g) ?? []).length).toBe(6);
+    const button = findClickableByText(AutoRunOverlay(props), '进入编辑器确认');
+    expect(button).not.toBeNull();
+    (button!.props as { onClick: () => void }).onClick();
+    expect(onJumpToEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it('导演方案检查点显示进入导演台按钮', () => {
+    const onJumpToDirector = vi.fn();
+    const props = makeBaseProps({
+      step: 'director_review',
+      stepLabel: '导演方案已就绪',
+      progress: 50,
+      onJumpToDirector,
+    });
+    const html = renderToStaticMarkup(<AutoRunOverlay {...props} />);
+    expect(html).toContain('导演方案等待批准');
+    const button = findClickableByText(AutoRunOverlay(props), '进入导演台');
+    expect(button).not.toBeNull();
+    (button!.props as { onClick: () => void }).onClick();
+    expect(onJumpToDirector).toHaveBeenCalledOnce();
   });
 });
 

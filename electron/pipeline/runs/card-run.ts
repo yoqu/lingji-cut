@@ -28,6 +28,7 @@ import type {
   CoverCandidate,
 } from '../../../src/types/ai';
 import type { SrtEntry } from '../../../src/types';
+import { requireApprovedDirectorPlan } from '../director-gate';
 
 /** image/video 卡本地重写时的兜底展示时长（ms），复刻 src/store/ai.ts 的 MEDIA_DEFAULT_DURATION_MS。 */
 const MEDIA_DEFAULT_DURATION_MS: Record<'image' | 'video', number> = {
@@ -48,6 +49,7 @@ interface Loaded {
 
 async function loadForCard(ctx: GenerationRunCtx): Promise<Loaded> {
   const { projectPath, userDataPath } = ctx;
+  await requireApprovedDirectorPlan(projectPath);
   const settings = await loadFullHeadlessAISettings(userDataPath);
   const projectBindings = await loadHeadlessProjectBindings(projectPath);
   const data = await loadProjectFile(projectPath);
@@ -148,6 +150,7 @@ function makeHeadlessMotionCardProvider(ctx: GenerationRunCtx, l: Loaded): Motio
       userDataPath: ctx.userDataPath,
       projectPath: ctx.projectPath,
       rolesSeedDir: join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
+      contactSheetCacheDir: join(ctx.userDataPath, 'motion-contact-sheets'),
       signal: ctx.handle.signal,
       onPhase: (phase) => ctx.handle.update({ phase }),
       // 观测面板关联键与统一进度条的 bridgeId 同值（pipeline:<taskId>）。
@@ -163,6 +166,7 @@ function makeHeadlessMotionCardProvider(ctx: GenerationRunCtx, l: Loaded): Motio
 async function buildRegenerateOptions(
   ctx: GenerationRunCtx,
   l: Loaded,
+  refineExistingMotion = false,
 ): Promise<Record<string, unknown>> {
   const { cardTemplate, imageTemplate, animationTemplate } = await loadCardTemplates({
     userDataPath: ctx.userDataPath,
@@ -176,10 +180,12 @@ async function buildRegenerateOptions(
     cardPrompt: l.card.cardPrompt,
     programSummary: l.result.summary,
     keywords: l.result.keywords,
+    motionBible: l.result.motionBible,
     cardTemplate,
     imageTemplate,
     animationTemplate,
-    animationDirection: l.card.animationDirection,
+    animationDirection: refineExistingMotion ? l.card.animationDirection : undefined,
+    refineExistingMotion,
     projectBindings: l.projectBindings,
     generateMotionCard: makeHeadlessMotionCardProvider(ctx, l),
     validateMotionSource: assertCardRenders,
@@ -215,7 +221,7 @@ export async function runSculptCard(ctx: GenerationRunCtx, deps: RegenDeps = {})
     throw new GenerationError('not_motion_card', `仅 motion 卡可精雕，卡片 ${l.card.id} 无 motionCard 源码`);
   }
   ctx.handle.update({ phase: '精雕', percent: 10 });
-  const opts = await buildRegenerateOptions(ctx, l);
+  const opts = await buildRegenerateOptions(ctx, l, true);
   const notes = String((ctx.params ?? {}).notes ?? '').trim();
   if (notes) {
     opts.cardPrompt = [l.card.cardPrompt, `精雕要求：${notes}`].filter(Boolean).join('\n');
@@ -333,6 +339,7 @@ export async function runConvertCard(ctx: GenerationRunCtx, deps: ConvertDeps = 
         defaultStylePresetId: l.settings.defaultStylePresetId,
         programSummary: l.result.summary,
         keywords: l.result.keywords,
+        motionBible: l.result.motionBible,
         cardTemplate,
         imageTemplate,
         animationTemplate,

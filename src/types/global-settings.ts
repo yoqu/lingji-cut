@@ -1,4 +1,5 @@
 import type { AISettings } from './ai';
+import type { AssetLibrarySettings } from './assets';
 
 export interface CustomScriptTemplate {
   id: string;
@@ -25,6 +26,7 @@ export interface GlobalSettingsMigrations {
 
 export interface GlobalSettingsFile {
   aiSettings?: AISettings;
+  assetLibrary?: Partial<AssetLibrarySettings>;
   customTemplates?: CustomScriptTemplate[];
   customRoles?: CustomRole[];
   selectedRole?: string;
@@ -38,6 +40,7 @@ export function normalizeGlobalSettingsFile(
 ): GlobalSettingsFile {
   return {
     aiSettings: input?.aiSettings,
+    assetLibrary: input?.assetLibrary,
     customTemplates: Array.isArray(input?.customTemplates) ? input.customTemplates : [],
     customRoles: Array.isArray(input?.customRoles) ? input.customRoles : [],
     selectedRole:

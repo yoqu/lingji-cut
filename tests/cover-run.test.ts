@@ -15,7 +15,13 @@ function project(withAnalysis: boolean): string {
       timeline: null,
       aiAnalysis: {
         analysisResult: withAnalysis
-          ? { segments: [], cards: [], coverPrompts: ['旧'], summary: '', keywords: [] }
+          ? {
+              segments: [{ id: 'legacy', title: '旧段落', summary: '', startMs: 0, endMs: 1000 }],
+              cards: [{ id: 'legacy-card', segmentId: 'legacy', enabled: true }],
+              coverPrompts: ['旧'],
+              summary: '',
+              keywords: [],
+            }
           : null,
         coverCandidates: [],
       },
@@ -95,7 +101,7 @@ describe('runCoverPromptHeadless', () => {
     }
   });
 
-  it('throws need_analysis when analysisResult is null', async () => {
+  it('requires director approval before checking the legacy analysis result', async () => {
     const dir = project(false);
     const u = ud();
     try {
@@ -104,7 +110,7 @@ describe('runCoverPromptHeadless', () => {
           { projectPath: dir, userDataPath: u, handle: handle() as never },
           { regenerate: async () => ['x'] },
         ),
-      ).rejects.toMatchObject({ code: 'need_analysis' });
+      ).rejects.toMatchObject({ code: 'director_approval_required' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(u, { recursive: true, force: true });

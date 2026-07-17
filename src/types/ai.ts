@@ -1,4 +1,6 @@
-import type { MotionCardPayload } from './motion';
+import type { MotionBible, MotionCardPayload } from './motion';
+import type { GenerationProvenance } from './director';
+import type { CardAssetBinding, StoryboardAssetRequest } from './assets';
 import type { PromptKind } from '../lib/prompts/types';
 import type { CoverEditState } from '../lib/cover-editor/contracts';
 export type { MotionCardPayload } from './motion';
@@ -50,6 +52,12 @@ export interface MediaCardContent {
   errorMessage?: string;
   generatedAt?: number;
   extraParams?: Record<string, unknown>;
+  /** 图片卡是否明确要求绿幕背景移除；完整场景图缺省保持原图。 */
+  backgroundRemoval?: 'none' | 'green-screen';
+  originalAssetPath?: string | null;
+  cutoutAssetPath?: string | null;
+  cutoutStatus?: 'not-requested' | 'ready' | 'unavailable' | 'failed';
+  cutoutMessage?: string;
 }
 
 export interface CardStyle {
@@ -172,9 +180,15 @@ export interface AICard {
   cardPrompt?: string;
   /** AI 生成的 JSON 分镜（storyboard），由 cards.animation 产出，注入 cards.segment 指导出卡。仅 motion 卡使用。 */
   animationDirection?: string;
+  /** 导演规划的卡片资产需求；由资产中心解析为 bindings 或待生成队列。 */
+  assetRequests?: StoryboardAssetRequest[];
+  /** 已解析并可渲染的资产绑定；预览 / 导出由 AICardOverlay 按 placement 合成。 */
+  assetBindings?: CardAssetBinding[];
   motionCard?: MotionCardPayload;
   /** 单卡级风格覆盖；缺省继承项目 / 全局 / 内置默认 */
   stylePresetId?: string;
+  /** 生成所依据的导演方案版本；人工精修后 modifiedByUser=true。 */
+  generationProvenance?: GenerationProvenance;
 }
 
 export interface CoverCandidate {
@@ -194,6 +208,8 @@ export interface CoverCandidate {
    * 旧工程候选无此字段，读取时按 '16:9' 处理（见 coverAspectRatio()）。
    */
   aspectRatio?: ImageAspectRatio;
+  /** 封面所依据的导演方案版本。 */
+  generationProvenance?: GenerationProvenance;
 }
 
 /** 读取封面候选的画幅比例，旧数据缺省按 16:9。 */
@@ -218,6 +234,8 @@ export interface AIAnalysisResult {
   summary: string;
   keywords: string[];
   globalPrompt?: string;
+  /** 整片 Motion Card 导演策略；失败时可为空，旧项目兼容。 */
+  motionBible?: MotionBible;
   /**
    * 段卡片生成中失败的段（不阻塞其它段）。UI 可据此在 Editor 里
    * 引导用户对失败段单独执行"重生成卡片"。
@@ -387,6 +405,18 @@ export interface TTSVoicePreset {
   updatedAt: number;
 }
 
+export interface SunoAudioGenerationSettings {
+  enabled: boolean;
+  /** 直连默认 https://api.sunoapi.org；也可填写兼容的灵机云端中继地址。 */
+  baseUrl: string;
+  apiKey: string;
+  /** Suno 强制要求；留空时归一为灵机内置回调入口，任务结果仍通过主动轮询读取。 */
+  callbackUrl: string;
+  musicModel: 'V5' | 'V5_5';
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+}
+
 export interface AISettings {
   // 多 Provider
   llmProviders: LLMProvider[];
@@ -415,6 +445,8 @@ export interface AISettings {
   ttsVoices: TTSVoicePreset[];
   /** MiMo 智能语气打标开关；缺省视为 true */
   ttsMimoAutoAnnotate?: boolean;
+  /** BGM / stinger / ambience / SFX 唯一生成服务。旁白 TTS 不使用此配置。 */
+  audioGeneration?: SunoAudioGenerationSettings;
   // —— 新增：图像 Provider ——
   imageProviders: ImageProvider[];
   defaultImageProviderId: string | null;
@@ -468,10 +500,16 @@ export interface AICardOverlayData {
   style: CardStyle;
   renderMode?: AICardRenderMode;
   cardPrompt?: string;
+  assetRequests?: StoryboardAssetRequest[];
+  assetBindings?: CardAssetBinding[];
   motionCard?: MotionCardPayload;
   sourceStartMs?: number;
   sourceEndMs?: number;
+  segmentId?: string;
   stylePresetId?: string;
+  /** 整片 Motion Bible 的只读快照；随 overlay 透传给 Remotion 渲染计划用于卡间转场。 */
+  motionBible?: MotionBible;
+  generationProvenance?: GenerationProvenance;
 }
 
 export interface AICardTimelineDraft {
@@ -540,7 +578,7 @@ export function isMediaCardType(t: AICardType): t is 'image' | 'video' {
   return t === 'image' || t === 'video';
 }
 
-export function buildAICardOverlayData(card: AICard): AICardOverlayData {
+export function buildAICardOverlayData(card: AICard, motionBible?: MotionBible): AICardOverlayData {
   return {
     sourceCardId: card.id,
     cardType: card.type,
@@ -551,10 +589,15 @@ export function buildAICardOverlayData(card: AICard): AICardOverlayData {
     style: card.style,
     renderMode: card.renderMode ?? 'legacy',
     cardPrompt: card.cardPrompt,
+    assetRequests: card.assetRequests,
+    assetBindings: card.assetBindings,
     motionCard: card.motionCard,
     sourceStartMs: card.startMs,
     sourceEndMs: card.endMs,
+    segmentId: card.segmentId,
     stylePresetId: card.stylePresetId,
+    ...(motionBible ? { motionBible } : {}),
+    ...(card.generationProvenance ? { generationProvenance: card.generationProvenance } : {}),
   };
 }
 
@@ -631,7 +674,7 @@ export interface PromptBinding {
  */
 export type PromptBindingMap = Partial<Record<string, PromptBinding>>;
 
-export function buildAICardTimelineDraft(card: AICard): AICardTimelineDraft {
+export function buildAICardTimelineDraft(card: AICard, motionBible?: MotionBible): AICardTimelineDraft {
   const sourceStartMs = Number.isFinite(card.startMs) ? Math.max(0, Math.round(card.startMs)) : 0;
   const sourceEndMs = Number.isFinite(card.endMs)
     ? Math.max(sourceStartMs, Math.round(card.endMs))
@@ -647,6 +690,6 @@ export function buildAICardTimelineDraft(card: AICard): AICardTimelineDraft {
     sourceCardId: card.id,
     startMs: timelineStartMs,
     durationMs,
-    aiCardData: buildAICardOverlayData(card),
+    aiCardData: buildAICardOverlayData(card, motionBible),
   };
 }

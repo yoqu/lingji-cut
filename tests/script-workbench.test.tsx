@@ -178,6 +178,47 @@ describe('ScriptWorkbench', () => {
     expect(source).toContain("setWorkspaceFiles({ hasOriginalFile: true, hasScriptFile: true })");
   });
 
+  it('binds streaming output to the generation target instead of the visible file', () => {
+    const source = readFileSync(
+      new URL('../src/pages/ScriptWorkbench.tsx', import.meta.url),
+      'utf8',
+    );
+    const editorSource = readFileSync(
+      new URL('../src/ui/components/script-editor.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain('generationSessionRef');
+    expect(source).toContain('latestState.openedFile !== session.filePath');
+    expect(source).toContain('latestState.setScriptText(session.receivedText)');
+    expect(source).toContain(
+      'editorAgent.streamingActive && activeStream.filePath === activeFile',
+    );
+    expect(source).toContain('const isBoundStreamTarget =');
+    expect(source).toContain('documentId={activeFile}');
+    expect(source).toContain('state.setEditorAgent({ virtualCursorPos: null })');
+    expect(editorSource).toMatch(
+      /clearVirtualCursor\.of\(null\)[\s\S]{0,160}\}, \[documentId\]\)/,
+    );
+    expect(source).not.toContain('流式输出期间不允许切换离开 script.md');
+  });
+
+  it('keeps both initial generation and regeneration cancellable', () => {
+    const source = readFileSync(
+      new URL('../src/pages/ScriptWorkbench.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toMatch(
+      /operationType: 'rewrite',[\s\S]{0,120}canInterrupt: true/,
+    );
+    expect(source).toMatch(
+      /const stopGenerationSession = \(\) => \{[\s\S]*stopAgentOperation\(\{ resetStream: false \}\)/,
+    );
+    expect(source).toContain('abortController.signal.throwIfAborted()');
+    expect(source).toContain('streamId: reviewTaskId');
+  });
+
   it('rehydrates the existing script project state when the workbench mounts with a projectDir', () => {
     const source = readFileSync(
       new URL('../src/pages/ScriptWorkbench.tsx', import.meta.url),

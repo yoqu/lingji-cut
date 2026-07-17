@@ -8,7 +8,7 @@ export function getAISettingsIssue(settings: AISettings | null): string | null {
   const provider = settings.llmProviders?.find((item) => item.id === settings.defaultProviderId)
     ?? settings.llmProviders?.[0];
   if (!provider) {
-    return '请先配置 LLM Provider';
+    return '请先配置文本生成服务';
   }
   if (!settings.defaultModel && provider.models.length === 0) {
     return '请先填写模型名称';

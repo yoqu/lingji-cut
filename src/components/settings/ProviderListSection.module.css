@@ -168,15 +168,12 @@
 
 .advancedToggle {
   align-self: flex-start;
-  appearance: none;
-  border: 0;
-  padding: 0;
+  height: auto !important;
+  padding: 0 !important;
   background: transparent;
   color: var(--color-accent, var(--color-text-primary));
-  font: inherit;
   font-size: var(--font-size-md);
   font-weight: 600;
-  cursor: pointer;
 }
 
 .advancedToggle:hover {

@@ -1,6 +1,6 @@
 import { AnimatePresence, m } from 'framer-motion';
 import { useState } from 'react';
-import { MoreHorizontal, RotateCcw } from 'lucide-react';
+import { Film, Image as ImageIcon, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react';
 import { toFileSrc } from '../lib/utils';
 import { useAIStore } from '../store/ai';
 import type { AICard, AICardType, MediaCardContent } from '../types/ai';
@@ -88,6 +88,7 @@ const CARD_TYPE_META: Record<AICardType, { label: string; color: string; tone: s
 export function AICardList({
   cards,
   onToggleEnabled,
+  onDeleteCard,
   onEditCard,
   onSelect,
   skeletons,
@@ -172,10 +173,15 @@ export function AICardList({
                 {isMedia ? (
                   <div className={styles.thumbnail} data-ai-card-thumbnail={card.type}>
                     {thumbSrc ? (
-                      <img src={thumbSrc} alt="" className={styles.thumbnailImg} />
+                      <img
+                        src={thumbSrc}
+                        alt={`${card.title} 缩略图`}
+                        className={styles.thumbnailImg}
+                        loading="lazy"
+                      />
                     ) : (
                       <span className={styles.thumbnailPlaceholder} aria-hidden="true">
-                        {card.type === 'image' ? '🖼' : '🎬'}
+                        {card.type === 'image' ? <ImageIcon size={16} /> : <Film size={16} />}
                       </span>
                     )}
                     {isGenerating ? (
@@ -249,6 +255,10 @@ export function AICardList({
                         }}
                       >
                         转为动画卡
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => onDeleteCard(card.id)}>
+                        <Trash2 size={13} />
+                        删除镜头
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

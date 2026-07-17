@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { Check, RefreshCw, Sparkles, Loader2, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 import type { CoverCandidate, ImageAspectRatio } from '../../types/ai';
 import { toFileSrc } from '../../lib/utils';
-import { PUBLISH_RATIOS, type CoverStudio } from './useCoverStudio';
+import {
+  PUBLISH_RATIOS,
+  resolvePublishRatioPrompt,
+  type CoverStudio,
+} from './useCoverStudio';
 
 const RATIO_CSS: Record<string, string> = { '16:9': '16 / 9', '4:3': '4 / 3', '3:4': '3 / 4' };
 
@@ -129,7 +133,7 @@ function CoverThumb({
           style={{ ...btn(), marginTop: 4, width: '100%', justifyContent: 'center', opacity: busy ? 0.6 : 1 }}
         >
           <RefreshCw size={11} />
-          单独重生
+          重新生成
         </button>
       )}
     </div>
@@ -190,7 +194,7 @@ export function PublishCoverPanel({
       {!canGenerate && (
         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', display: 'flex', gap: 6, alignItems: 'center' }}>
           <AlertTriangle size={13} style={{ color: 'var(--color-warning, #f59e0b)', flexShrink: 0 }} />
-          暂无封面提示词，AI 生成已禁用；可直接选用下方已有封面，或先在编辑器完成「AI 分析」。
+          暂无封面生成描述；可直接选用下方已有封面，或先在编辑器生成内容卡片。
         </div>
       )}
 
@@ -206,7 +210,11 @@ export function PublishCoverPanel({
         const group = studio.groups[ratio] ?? [];
         const ratioBusy = studio.busyRatios.includes(ratio);
         const promptOpen = !!expandedPrompt[ratio];
-        const groupPrompt = group[0]?.prompt ?? studio.basePrompt ?? '';
+        const groupPrompt = resolvePublishRatioPrompt(
+          studio.basePrompt,
+          ratio,
+          group[0]?.prompt,
+        );
         return (
           <div
             key={ratio}

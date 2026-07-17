@@ -60,6 +60,24 @@ describe('useTimelineStore', () => {
     ]);
   });
 
+  it('advances the preview revision when same-path podcast files are replaced', () => {
+    const initialRevision = useTimelineStore.getState().podcastRevision;
+
+    useTimelineStore.getState().setSrtEntries([
+      { index: 1, startMs: 0, endMs: 1000, text: '旧字幕' },
+    ]);
+    useTimelineStore.getState().setPodcast('/tmp/audio.mp3', '/tmp/subtitles.srt', 12000);
+    useTimelineStore.getState().setSrtEntries([
+      { index: 1, startMs: 0, endMs: 1200, text: '新字幕' },
+    ]);
+    useTimelineStore.getState().setPodcast('/tmp/audio.mp3', '/tmp/subtitles.srt', 12000);
+
+    expect(useTimelineStore.getState().podcastRevision).toBe(initialRevision + 2);
+    expect(useTimelineStore.getState().srtEntries).toEqual([
+      { index: 1, startMs: 0, endMs: 1200, text: '新字幕' },
+    ]);
+  });
+
   it('stores imported assets and uses their durations for overlays', () => {
     const store = useTimelineStore.getState();
     store.addAsset('/tmp/intro.mp4', 'video', 9000);

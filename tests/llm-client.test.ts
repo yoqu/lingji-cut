@@ -142,6 +142,15 @@ describe('llm-client langchain adapter', () => {
     );
   });
 
+  it('forwards AbortSignal for cancellable plain text generation', async () => {
+    invokeMock.mockResolvedValue({ content: '最终答案' });
+    const controller = new AbortController();
+
+    await generateText(BASE_SETTINGS, '系统提示', '用户输入', undefined, controller.signal);
+
+    expect(invokeMock.mock.calls[0]?.[1]).toEqual({ signal: controller.signal });
+  });
+
   it('parses fenced json blocks for structured output compatibility', () => {
     expect(parseLLMJsonResponse('```json\n{"cards":[]}\n```')).toEqual({ cards: [] });
   });

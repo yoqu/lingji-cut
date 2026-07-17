@@ -125,9 +125,9 @@
   flex-shrink: 0;
 }
 
-/* AI 铁律：AI 来源标识使用 #a78bfa 紫色 */
+/* AI 来源使用统一系统蓝；手动来源保持中性。 */
 .bar[data-source="ai"] {
-  background: #a78bfa;
+  background: var(--color-system-blue);
 }
 
 .bar[data-source="manual"] {
@@ -155,11 +155,10 @@
   border-radius: var(--radius-sm);
 }
 
-/* AI 铁律：AI 来源标签复用紫色系 */
 .sourceTag[data-source="ai"] {
-  color: #c4b5fd;
-  background: color-mix(in srgb, #a78bfa 15%, transparent);
-  border: 1px solid color-mix(in srgb, #a78bfa 25%, transparent);
+  color: var(--color-system-blue);
+  background: color-mix(in srgb, var(--color-system-blue) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-system-blue) 24%, transparent);
 }
 
 .sourceTag[data-source="manual"] {

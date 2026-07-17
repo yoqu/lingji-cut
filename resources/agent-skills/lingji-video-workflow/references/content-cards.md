@@ -4,16 +4,16 @@
 
 ## 卡片生成链路
 
-`subtitle analyze` 是内容卡片的核心步骤。应用会读取 `podcast-subtitles.srt`，并写入 `project.json.aiAnalysis`。
+导演方案是内容卡片的强制上游。人工流程先执行 `director plan` 与 `director approve`；兼容命令 `subtitle analyze` 会自动完成这两个步骤。批准前卡片 Agent 和图片 Provider 调用次数必须为 0。
 
 内部顺序：
 
-1. `planning.segment`：把字幕全文拆成语义 `segments`，再根据真实字幕时间重锚定，并拆分过长段落。
-2. `analyze.cover-prompt`：与卡片生成并行生成封面提示词。
-3. `cards.segment`：为每个 motion 段生成一份 Motion Card TSX 源码。
-4. `cards.animation`：可选，为 motion 卡片设计 JSON 分镜（storyboard：论点/载体/逐拍状态演进/焦点）。
-5. `card.image`：对 image 段生成图片 prompt，并通过图片 provider 物化资产。
-6. 持久化最终 `AIAnalysisResult`，编辑器再把启用的卡片排布到时间轴。
+1. `planning.segment` + Motion Bible：只生成结构化 `DirectorPlan` 草案。
+2. 批准草案并固定 `directorRevision`。
+3. cards / cover / audio / highlights 四轨并行；`cards.segment` 继续走 director → sculptor → mechqa → reviewer。
+4. `card.image`：对 image 段生成图片 prompt，并通过图片 provider 物化资产。
+5. 每张成功卡片立即持久化；失败时保留旧卡片，恢复只补缺失项。
+6. 全部轨道收尾后原子替换时间线，进入 Animatic 检查点。
 
 ## 输出契约
 

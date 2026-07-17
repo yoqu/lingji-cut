@@ -314,7 +314,6 @@ describe('script store', () => {
         originalText: '旧原稿',
         scriptText: '旧口播稿',
         openedFile: 'script.md',
-        fileEntries: [{ name: 'script.md', type: 'file' }],
         workspaceFiles: { hasOriginalFile: true, hasScriptFile: true },
         reviewState: 'issues',
       });
@@ -326,7 +325,6 @@ describe('script store', () => {
       expect(state.originalText).toBe('');
       expect(state.scriptText).toBe('');
       expect(state.openedFile).toBeNull();
-      expect(state.fileEntries).toEqual([]);
       expect(state.workspaceFiles).toEqual({
         hasOriginalFile: false,
         hasScriptFile: false,

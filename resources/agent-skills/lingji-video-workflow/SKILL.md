@@ -31,11 +31,12 @@ node "$LINGJI_CLI" <command> [flags]    # $LINGJI_CLI 为空则回退 PATH 上�
 1. `project current` 确认项目；没有则 `project create <path>` 或 `project open <path>`。
 2. 素材是抖音链接/本地音视频时：`import <url|file> --wait`（转录写入 original.md）。
 3. 整理 `original.md`、撰写 `script.md`（file-first，见 `script-editing.md`）。
-4. 生成：`run --wait`（一键 音频→分析→封面），或分步 `audio gen` / `subtitle analyze` / `cover gen`。
-5. 精修：改时间轴/字幕/Motion Card 走 file-first（`video-editing.md`）；改卡片结构/重生成看 `content-cards.md`；改稿后重跑 `audio gen` + `subtitle analyze`。
-6. 导出：`export --wait [--out <file>]`，报告输出路径。
-7. 发布（可选）：`publish accounts` 查账号 → `publish run --file <mp4> --title ... --to <账号>`（见 `publishing.md`）。
-8. 汇报：项目路径、执行的命令、产物与遗留修改。慢/卡时先读 auto-run 日志（`cli-workflow.md`）。
+4. 导演：人工流程先执行 `director plan --wait`，查看 `director status` 后用 `director approve --revision <n> --wait`；批准前禁止调用卡片或封面生成。
+5. 兼容生成：`subtitle analyze --wait` 会自动创建并批准导演方案；`run --wait` 继续保持一键行为，不增加人工等待。
+6. 精修：改时间轴/字幕/Motion Card 走 file-first（`video-editing.md`）；改卡片结构/重生成看 `content-cards.md`；改稿后重跑 `audio gen`，再重新生成导演方案。
+7. 导出：`export --wait [--out <file>]`，报告输出路径。
+8. 发布（可选）：`publish accounts` 查账号 → `publish run --file <mp4> --title ... --to <账号>`（见 `publishing.md`）。
+9. 汇报：项目路径、导演 revision、执行的命令、产物与遗留修改。慢/卡时先读 auto-run 日志（`cli-workflow.md`）。
 
 ## 按需读取参考
 

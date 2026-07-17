@@ -55,6 +55,7 @@ export async function generateAndInsertSingleCardFromSubtitles(
       globalPrompt: aiState.analysisResult?.globalPrompt,
       programSummary: aiState.analysisResult?.summary,
       keywords: aiState.analysisResult?.keywords,
+      motionBible: aiState.analysisResult?.motionBible,
       projectDir: projectDir || undefined,
       projectBindings: aiState.projectBindings,
       feedId: taskId,

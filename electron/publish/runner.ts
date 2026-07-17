@@ -51,6 +51,12 @@ export async function runPublishJob(
       emit('success', 100);
       results[target.accountId] = { state: 'success' };
     } catch (err) {
+      // 用户取消：中断句柄关掉浏览器/子进程导致的报错统一标「已取消」
+      if (isCancelled()) {
+        emit('failed', undefined, '已取消');
+        results[target.accountId] = { state: 'failed', message: '已取消' };
+        continue;
+      }
       // 登录态失效单独标记 'login-expired'：Renderer 据此弹窗重登并自动续发，
       // 区别于不可恢复的普通失败。
       const state = err instanceof LoginExpiredError ? 'login-expired' : 'failed';

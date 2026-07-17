@@ -70,6 +70,14 @@
   color: var(--color-brand-warm);
 }
 
+.statusState[data-tone="active"] {
+  color: var(--color-selection-blue);
+}
+
+.statusState[data-tone="danger"] {
+  color: var(--color-danger);
+}
+
 .errorBanner {
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--color-danger) 28%, var(--color-border-subtle));

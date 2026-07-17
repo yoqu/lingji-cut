@@ -2,6 +2,7 @@ import type { BrowserContext } from 'playwright';
 import { join } from 'node:path';
 import { applyStealth } from './stealth';
 import { getChromiumStatus } from './chromium-install';
+import { registerPublishCancelHandler } from './cancel';
 
 interface ContextOpts {
   storageStatePath?: string;
@@ -42,6 +43,8 @@ export async function withContext<T>(
   }
   const pw = playwrightModule ?? (await import('playwright'));
   const browser = await pw.chromium.launch({ headless: opts.headless });
+  // 用户取消发布时关闭浏览器，让 in-flight 自动化立即报错退出（close 幂等）
+  const unregisterCancel = registerPublishCancelHandler(() => browser.close());
   try {
     const context = await browser.newContext(
       opts.storageStatePath ? { storageState: opts.storageStatePath } : {},
@@ -53,6 +56,7 @@ export async function withContext<T>(
       await context.close();
     }
   } finally {
+    unregisterCancel();
     await browser.close();
   }
 }

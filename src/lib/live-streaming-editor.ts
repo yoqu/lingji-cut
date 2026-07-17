@@ -1,4 +1,4 @@
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { clearVirtualCursor, setVirtualCursor } from './virtual-cursor';
 import type { AnimationFrame, StreamingEditOperation } from './streaming-editor';
 
@@ -182,8 +182,12 @@ export class LiveStreamingEditor {
     const follow = this.isNearBottom();
     this.view.dispatch({
       changes: { from, insert: piece },
-      effects: setVirtualCursor.of(cursorPosition),
-      scrollIntoView: follow,
+      effects: follow
+        ? [
+            setVirtualCursor.of(cursorPosition),
+            EditorView.scrollIntoView(cursorPosition, { y: 'end' }),
+          ]
+        : setVirtualCursor.of(cursorPosition),
     });
 
     this.committedChars += piece.length;
@@ -332,8 +336,12 @@ export class LiveStreamingEditor {
     const follow = this.isNearBottom();
     this.view.dispatch({
       changes,
-      effects: setVirtualCursor.of(frame.cursorPosition),
-      scrollIntoView: follow,
+      effects: follow
+        ? [
+            setVirtualCursor.of(frame.cursorPosition),
+            EditorView.scrollIntoView(frame.cursorPosition, { y: 'end' }),
+          ]
+        : setVirtualCursor.of(frame.cursorPosition),
     });
     this.committedChars = this.view.state.doc.length;
   }

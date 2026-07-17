@@ -25,6 +25,10 @@ import path from 'node:path';
 import type { AgentStreamEvent } from './event-model';
 import { classifyToolKind } from './event-model';
 import { evaluateToolCallGate } from './pi-permission';
+import {
+  extractPiToolCallUpdate,
+  PiToolEventRelay,
+} from './pi-tool-events';
 import type { ResolvedAgentSkill } from '../acp/types';
 import type {
   AgentSession as PiAgentSession,
@@ -212,14 +216,16 @@ export class PiInProcessSession {
   private cwd: string | undefined;
   private getPermissionPolicy: (() => string) | undefined;
   private onEvent: (ev: AgentStreamEvent) => void = () => {};
+  private toolEvents: PiToolEventRelay | null = null;
 
   async start(input: PiInProcessStartInput): Promise<void> {
-    this.cwd = input.cwd;
+    const cwd = input.cwd ?? process.cwd();
+    this.cwd = cwd;
     this.getPermissionPolicy = input.getPermissionPolicy;
     this.onEvent = input.onEvent;
+    this.toolEvents = new PiToolEventRelay(this.cwd, this.onEvent);
 
     const sdk = await loadPiSdk();
-    const cwd = input.cwd ?? process.cwd();
     const agentDir = input.agentDir;
 
     // 复刻子进程时代的 env 契约：把 agentDir 写到 PI_CODING_AGENT_DIR，使 SDK 内部
@@ -357,6 +363,8 @@ export class PiInProcessSession {
       }
     }
     this.pendingPermissions.clear();
+    this.toolEvents?.clear();
+    this.toolEvents = null;
     try {
       this.session?.dispose();
     } catch {
@@ -369,59 +377,17 @@ export class PiInProcessSession {
 
   private handleEvent(ev: AgentSessionEvent): void {
     switch (ev.type) {
-      case 'message_update': {
-        const a = ev.assistantMessageEvent;
-        switch (a.type) {
-          case 'text_delta':
-            this.onEvent({ type: 'text_delta', delta: a.delta });
-            break;
-          case 'thinking_start':
-            this.onEvent({ type: 'thinking_start' });
-            break;
-          case 'thinking_delta':
-            this.onEvent({ type: 'thinking_delta', delta: a.delta });
-            break;
-          case 'thinking_end':
-            this.onEvent({ type: 'thinking_end' });
-            break;
-          case 'error':
-            this.onEvent({
-              type: 'error',
-              message: a.error?.errorMessage || a.reason || 'unknown error',
-            });
-            break;
-          default:
-            break;
-        }
+      case 'message_update':
+        this.handleMessageUpdate(ev);
         break;
-      }
 
-      case 'tool_execution_start': {
-        this.lastToolName = ev.toolName;
-        this.lastToolInput = ev.args;
-        this.onEvent({
-          type: 'tool_use',
-          id: ev.toolCallId,
-          name: ev.toolName,
-          input: ev.args ?? null,
-        });
+      case 'tool_execution_start':
+        this.handleToolExecutionStart(ev);
         break;
-      }
 
-      case 'tool_execution_end': {
-        const content = stringifyToolResult(ev.result);
-        // pi 的 bash 工具把所有非零退出都抛成 "Command exited with code N" → isError=true。
-        // 对 grep/diff/test 这类「用 exit code 表达布尔语义」的命令做软化，避免 UI 误报。
-        const softenedIsError = softenBashError(ev.toolName, this.lastToolInput, content, ev.isError);
-        this.onEvent({
-          type: 'tool_result',
-          toolUseId: ev.toolCallId,
-          content,
-          isError: softenedIsError,
-          name: ev.toolName,
-        });
+      case 'tool_execution_end':
+        this.handleToolExecutionEnd(ev);
         break;
-      }
 
       case 'turn_end': {
         // 每个 agent 轮结束：只上报 usage，不作为终态（终态见 agent_end）。
@@ -446,6 +412,78 @@ export class PiInProcessSession {
       default:
         break;
     }
+  }
+
+  private handleMessageUpdate(
+    ev: Extract<AgentSessionEvent, { type: 'message_update' }>,
+  ): void {
+    const event = ev.assistantMessageEvent;
+    switch (event.type) {
+      case 'text_delta':
+        this.onEvent({ type: 'text_delta', delta: event.delta });
+        break;
+      case 'thinking_start':
+        this.onEvent({ type: 'thinking_start' });
+        break;
+      case 'thinking_delta':
+        this.onEvent({ type: 'thinking_delta', delta: event.delta });
+        break;
+      case 'thinking_end':
+        this.onEvent({ type: 'thinking_end' });
+        break;
+      case 'toolcall_start':
+      case 'toolcall_delta':
+      case 'toolcall_end': {
+        const update = extractPiToolCallUpdate(event);
+        if (update) this.getToolEvents().observe(update);
+        break;
+      }
+      case 'error':
+        this.onEvent({
+          type: 'error',
+          message: event.error?.errorMessage || event.reason || 'unknown error',
+        });
+        break;
+      default:
+        break;
+    }
+  }
+
+  private handleToolExecutionStart(
+    ev: Extract<AgentSessionEvent, { type: 'tool_execution_start' }>,
+  ): void {
+    this.lastToolName = ev.toolName;
+    this.lastToolInput = ev.args;
+    this.getToolEvents().observe(
+      {
+        id: ev.toolCallId,
+        name: ev.toolName,
+        input: ev.args ?? null,
+      },
+      { captureSnapshot: true },
+    );
+  }
+
+  private handleToolExecutionEnd(
+    ev: Extract<AgentSessionEvent, { type: 'tool_execution_end' }>,
+  ): void {
+    const content = stringifyToolResult(ev.result);
+    const toolInput = this.getToolEvents().getInput(ev.toolCallId) ?? this.lastToolInput;
+    // Pi treats every non-zero bash exit as an error; keep boolean-style commands readable.
+    const isError = softenBashError(ev.toolName, toolInput, content, ev.isError);
+    this.getToolEvents().complete({
+      toolCallId: ev.toolCallId,
+      toolName: ev.toolName,
+      content,
+      isError,
+    });
+  }
+
+  private getToolEvents(): PiToolEventRelay {
+    if (!this.toolEvents) {
+      this.toolEvents = new PiToolEventRelay(this.cwd, this.onEvent);
+    }
+    return this.toolEvents;
   }
 
   // ── 审批门控 ─────────────────────────────────────────────────────────────────

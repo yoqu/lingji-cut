@@ -3,6 +3,7 @@ import {
   analyzeSrt,
   anchorSegmentsToTranscript,
   buildCoverPromptRegenerationPrompt,
+  buildMotionBiblePrompt,
   buildSegmentCardPrompt,
   buildSegmentPlanningPrompt,
   buildPlainTranscriptRange,
@@ -160,6 +161,37 @@ describe('buildSegmentPlanningPrompt', () => {
     expect(prompt).not.toContain('webCard');
     expect(prompt).not.toContain('srcDoc');
   });
+
+  it('always appends the effective director rules without requiring a template variable', () => {
+    const prompt = buildSegmentPlanningPrompt(undefined, undefined, {
+      name: 'production.director',
+      user: '自定义规则：章节转场必须克制，声音提示每分钟不超过 3 次。',
+    });
+
+    expect(prompt).toContain('【可配置导演制作规则】');
+    expect(prompt).toContain('声音提示每分钟不超过 3 次');
+  });
+});
+
+describe('buildMotionBiblePrompt', () => {
+  it('injects the same effective director rules into the whole-film strategy', () => {
+    const prompt = buildMotionBiblePrompt(
+      {
+        segments: [baseSegment, secondSegment],
+        summary: '节目总结',
+        keywords: ['AI', '播客'],
+        globalPrompt: '',
+      },
+      undefined,
+      {
+        name: 'production.director',
+        user: '自定义规则：每帧只允许一个主视觉焦点。',
+      },
+    );
+
+    expect(prompt).toContain('【可配置导演制作规则】');
+    expect(prompt).toContain('每帧只允许一个主视觉焦点');
+  });
 });
 
 describe('buildSegmentCardPrompt', () => {
@@ -255,19 +287,15 @@ describe('planTranscriptSegments', () => {
       generateStructuredData: modelCaller,
     });
 
-    expect(result.segments).toHaveLength(5);
-    expect(result.segments.every((segment) => segment.endMs - segment.startMs <= 60_000)).toBe(
+    expect(result.segments).toHaveLength(30);
+    expect(result.segments.every((segment) => segment.endMs - segment.startMs <= 10_000)).toBe(
       true,
     );
-    expect(result.segments.map((segment) => segment.id)).toEqual([
-      'long-seg-part-1',
-      'long-seg-part-2',
-      'long-seg-part-3',
-      'long-seg-part-4',
-      'long-seg-part-5',
-    ]);
-    expect(result.segments[0]?.title).toBe('超长主题（1/5）');
-    expect(result.segments[0]?.summary).toContain('第 1/5 小节');
+    expect(result.segments.map((segment) => segment.id)).toEqual(
+      Array.from({ length: 30 }, (_, index) => `long-seg-part-${index + 1}`),
+    );
+    expect(result.segments[0]?.title).toBe('超长主题（1/30）');
+    expect(result.segments[0]?.summary).toContain('第 1/30 小节');
     expect(result.segments[0]?.transcriptExcerpt).toContain('第 1 条长字幕内容');
     expect(result.segments[0]?.transcriptExcerpt).not.toContain('第 8 条长字幕内容');
     expect(result.segments[0]?.keywords).toEqual(['长视频', '分段']);
@@ -279,7 +307,21 @@ describe('generateCardForSegment', () => {
   it('builds a motion-card from the agent TSX source, synthesizing metadata from the segment', async () => {
     const motionCaller = vi
       .fn<MotionCardAgentProvider>()
-      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
+      .mockResolvedValue({
+        tsx: VALID_MOTION_TSX,
+        productionReport: {
+          status: 'acceptable',
+          generatedAt: 123,
+          framesChecked: [0, 75, 149],
+          lintIssues: [{ severity: 'warning', source: 'lint', code: 'cues-unused', message: '未使用 cues' }],
+          layoutIssues: [],
+          reviewIssues: [],
+          fallbackUsed: false,
+          fixRounds: 1,
+          reviewRounds: 0,
+          renderOk: true,
+        },
+      });
 
     const result = await generateCardForSegment(
       baseEntries,
@@ -308,6 +350,11 @@ describe('generateCardForSegment', () => {
     expect(result.cardPrompt).toBe('做成粒子聚合');
     expect(result.motionCard?.tsx).toContain('export default');
     expect(result.motionCard?.tsx).toContain('useCurrentFrame');
+    expect(result.motionCard?.productionReport).toMatchObject({
+      status: 'acceptable',
+      framesChecked: [0, 75, 149],
+      fixRounds: 1,
+    });
     expect(motionCaller).toHaveBeenCalledTimes(1);
     // ctx.segmentTranscript = 段内逐字稿；buildCardPrompt 渲染 cards.segment 提示词，提及当前段
     const ctx = motionCaller.mock.calls[0]![0];
@@ -460,10 +507,12 @@ describe('analyzeSrt', () => {
       globalPrompt: '整体偏商业分析风',
     });
 
-    expect(planningCaller).toHaveBeenCalledTimes(1);
+    expect(planningCaller).toHaveBeenCalledTimes(2);
     expect(planningCaller.mock.calls[0]?.[1]).toContain('segments');
+    expect(planningCaller.mock.calls[1]?.[1]).toContain('Motion Bible');
     expect(motionCaller).toHaveBeenCalledTimes(2);
     expect(motionCaller.mock.calls[0]?.[0]?.buildCardPrompt(undefined)).toContain('AI 视频生产背景');
+    expect(motionCaller.mock.calls[0]?.[0]?.buildCardPrompt(undefined)).toContain('Motion Bible');
     expect(motionCaller.mock.calls[1]?.[0]?.buildCardPrompt(undefined)).toContain('工作流拆分');
     expect(result.segments).toHaveLength(2);
     expect(result.cards).toHaveLength(2);
@@ -472,6 +521,7 @@ describe('analyzeSrt', () => {
     expect(result.cards[0]?.motionCard?.tsx).toContain('export default');
     expect(result.cards[1]?.motionCard?.tsx).toContain('export default');
     expect(result.coverPrompts).toEqual(['封面提示词']);
+    expect(result.motionBible?.carrierPlan).toHaveLength(2);
   });
 
   it('continues with other segments when one card generation fails and returns cardErrors', async () => {
@@ -496,7 +546,7 @@ describe('analyzeSrt', () => {
       globalPrompt: '整体偏商业分析风',
     });
 
-    expect(planningCaller).toHaveBeenCalledTimes(1);
+    expect(planningCaller).toHaveBeenCalledTimes(2);
     expect(motionCaller).toHaveBeenCalledTimes(2);
     expect(result.cards.map((card) => card.segmentId)).toEqual(['seg-2']);
     expect(result.cardErrors).toBeDefined();
@@ -588,17 +638,13 @@ describe('analyzeSrt', () => {
       generateMotionCard: motionCaller,
     });
 
-    expect(result.segments).toHaveLength(5);
-    expect(result.cards).toHaveLength(5);
-    expect(result.cards.map((card) => card.segmentId)).toEqual([
-      'long-seg-part-1',
-      'long-seg-part-2',
-      'long-seg-part-3',
-      'long-seg-part-4',
-      'long-seg-part-5',
-    ]);
-    expect(planningCaller).toHaveBeenCalledTimes(1);
-    expect(motionCaller).toHaveBeenCalledTimes(5);
+    expect(result.segments).toHaveLength(30);
+    expect(result.cards).toHaveLength(30);
+    expect(result.cards.map((card) => card.segmentId)).toEqual(
+      Array.from({ length: 30 }, (_, index) => `long-seg-part-${index + 1}`),
+    );
+    expect(planningCaller).toHaveBeenCalledTimes(2);
+    expect(motionCaller).toHaveBeenCalledTimes(30);
   });
 
   it('generateWorkTitle 结果注入内部 cover.regeneration 调用的 {{title}}', async () => {
@@ -610,6 +656,13 @@ describe('analyzeSrt', () => {
         summary: '节目总结',
         keywords: ['AI'],
         globalPrompt: '',
+      })
+      .mockResolvedValueOnce({
+        visualThesis: '统一整片信息动效',
+        rhythm: { density: 'balanced', heavySegments: [], quietSegments: [] },
+        carrierPlan: [{ segmentId: 'seg-1', preferredCarrier: 'data-hero', intensity: 2, reason: '核心段' }],
+        styleRules: { paletteUse: '沿用 tokens', typographyUse: '数字重' },
+        transitionRules: { default: 'crossfade', matchCutCandidates: [] },
       })
       .mockResolvedValueOnce({ coverPrompt: '带标题的封面提示词' });
     const motionCaller = vi
@@ -628,9 +681,9 @@ describe('analyzeSrt', () => {
 
     expect(generateWorkTitle).toHaveBeenCalledTimes(1);
     expect(generateWorkTitle.mock.calls[0][0].summary).toBe('节目总结');
-    // 第二次 structured 调用即 cover.regeneration，其 prompt 参数应含标题
-    expect(structuredCaller).toHaveBeenCalledTimes(2);
-    expect(structuredCaller.mock.calls[1]?.[1]).toContain('爆款标题X');
+    // 第三次 structured 调用为 cover.regeneration，其 prompt 参数应含标题
+    expect(structuredCaller).toHaveBeenCalledTimes(3);
+    expect(structuredCaller.mock.calls[2]?.[1]).toContain('爆款标题X');
     expect(onCoverPromptsReady).toHaveBeenCalledWith(['带标题的封面提示词']);
   });
 
@@ -643,6 +696,13 @@ describe('analyzeSrt', () => {
         summary: '节目总结',
         keywords: ['AI'],
         globalPrompt: '',
+      })
+      .mockResolvedValueOnce({
+        visualThesis: '统一整片信息动效',
+        rhythm: { density: 'balanced', heavySegments: [], quietSegments: [] },
+        carrierPlan: [{ segmentId: 'seg-1', preferredCarrier: 'data-hero', intensity: 2, reason: '核心段' }],
+        styleRules: { paletteUse: '沿用 tokens', typographyUse: '数字重' },
+        transitionRules: { default: 'crossfade', matchCutCandidates: [] },
       })
       .mockResolvedValueOnce({ coverPrompt: '无标题封面提示词' });
     const motionCaller = vi
@@ -657,8 +717,8 @@ describe('analyzeSrt', () => {
       generateWorkTitle: vi.fn().mockRejectedValue(new Error('LLM 超时')),
     });
 
-    expect(structuredCaller).toHaveBeenCalledTimes(2);
-    expect(structuredCaller.mock.calls[1]?.[1]).not.toContain('爆款标题X');
+    expect(structuredCaller).toHaveBeenCalledTimes(3);
+    expect(structuredCaller.mock.calls[2]?.[1]).not.toContain('爆款标题X');
   });
 });
 
@@ -699,8 +759,11 @@ describe('regenerateAICard', () => {
     );
 
     expect(motionCaller).toHaveBeenCalledTimes(1);
-    // 精雕/重生成：现有源码通过 ctx.existingTsx 交给导演诊断（baseCard 无 motionCard → undefined）
-    expect(motionCaller.mock.calls[0]?.[0]?.existingTsx).toBe(baseCard.motionCard?.tsx);
+    const ctx = motionCaller.mock.calls[0]?.[0];
+    expect(ctx?.existingTsx).toBeUndefined();
+    expect(ctx?.animationDirectionDraft).toBeUndefined();
+    expect(ctx?.buildCardPrompt(undefined)).not.toContain('旧标题');
+    expect(ctx?.buildCardPrompt(undefined)).not.toContain('旧内容');
     expect(result.id).toBe('card-1');
     expect(result.segmentId).toBe('seg-1');
     // 元信息从既有卡片延续（不再由模型决定）
@@ -708,6 +771,76 @@ describe('regenerateAICard', () => {
     expect(result.displayDurationMs).toBe(5_000);
     expect(result.renderMode).toBe('motion-card');
     expect(result.motionCard?.tsx).toContain('export default');
+  });
+
+  it('records previous storyboard and tsx in motion history when regenerating', async () => {
+    const storyboard = {
+      claim: '旧分镜',
+      carrier: 'concept',
+      scene: '旧场景',
+      focus: { beat: 0, emphasis: 'brighten' },
+      beats: [{ cue: null, kind: 'build', adds: '旧标题' }],
+    };
+    const cardWithMotion: AICard = {
+      ...baseCard,
+      renderMode: 'motion-card',
+      animationDirection: JSON.stringify(storyboard),
+      motionCard: {
+        tsx: VALID_MOTION_TSX,
+        compiledAt: 1,
+        prompt: 'old',
+        retryCount: 0,
+        storyboard: storyboard as never,
+      },
+    };
+    const motionCaller = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX.replace('摘要卡', '新版卡') });
+
+    const result = await regenerateAICard(baseEntries, cardWithMotion, baseSegment, settings, {
+      generateMotionCard: motionCaller,
+      animationDirection: JSON.stringify(storyboard),
+    });
+
+    expect(result.motionCard?.storyboardHistory).toHaveLength(1);
+    expect(result.motionCard?.storyboardHistory?.[0]?.storyboard?.claim).toBe('旧分镜');
+    expect(result.motionCard?.storyboardHistory?.[0]?.tsx).toContain('摘要卡');
+    expect(result.motionCard?.storyboardHistory?.[0]?.tsxHash).toBeTruthy();
+  });
+
+  it('only exposes the previous motion card to agents in explicit refine mode', async () => {
+    const storyboard = {
+      claim: '旧分镜',
+      carrier: 'concept',
+      scene: '旧场景',
+      focus: { beat: 0, emphasis: 'brighten' },
+      beats: [{ cue: null, kind: 'build', adds: '旧标题' }],
+    };
+    const cardWithMotion: AICard = {
+      ...baseCard,
+      animationDirection: JSON.stringify(storyboard),
+      motionCard: {
+        tsx: VALID_MOTION_TSX,
+        compiledAt: 1,
+        prompt: 'old',
+        retryCount: 0,
+        storyboard: storyboard as never,
+      },
+    };
+    const motionCaller = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
+
+    await regenerateAICard(baseEntries, cardWithMotion, baseSegment, settings, {
+      generateMotionCard: motionCaller,
+      refineExistingMotion: true,
+    });
+
+    const ctx = motionCaller.mock.calls[0]?.[0];
+    expect(ctx?.existingTsx).toBe(VALID_MOTION_TSX);
+    expect(ctx?.animationDirectionDraft).toContain('旧分镜');
+    expect(ctx?.buildCardPrompt(undefined)).toContain('旧标题');
+    expect(ctx?.buildCardPrompt(undefined)).toContain('旧内容');
   });
 
   it('fails fast when segment is missing', async () => {

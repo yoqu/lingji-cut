@@ -5,7 +5,6 @@ import {
 } from '../lib/script-persistence';
 import type { WorkbenchStage } from '../lib/script-workbench-stage';
 import { loadSelectedRole, saveSelectedRole } from '../lib/settings-storage';
-import type { FileEntry } from '../lib/electron-api';
 import type {
   VideoImportProgress,
   VideoImportResult,
@@ -96,7 +95,6 @@ interface ScriptState {
   drawerVisible: boolean;
   /** @deprecated 将在集成阶段移除 */
   drawerContent: 'template' | 'annotations' | null;
-  fileEntries: FileEntry[];
   // --- 新增工作区/审查/流式会话状态 ---
   workspaceFiles: WorkspaceFilesState;
   agentOperation: AgentOperationState;
@@ -172,7 +170,6 @@ interface ScriptActions {
   openDrawer: (content: 'template' | 'annotations') => void;
   /** @deprecated 将在集成阶段移除 */
   closeDrawer: () => void;
-  setFileEntries: (entries: FileEntry[]) => void;
   acceptAnnotation: (id: string) => void;
   dismissAnnotation: (id: string) => void;
   acceptAllAnnotations: () => void;
@@ -240,7 +237,6 @@ const initialState: ScriptState = {
   stashedContent: {},
   drawerVisible: false,
   drawerContent: null,
-  fileEntries: [],
   workspaceFiles: {
     hasOriginalFile: false,
     hasScriptFile: false,
@@ -374,7 +370,6 @@ export const useScriptStore = create<ScriptState & ScriptActions>((set, get) => 
     }),
   openDrawer: (content) => set({ drawerVisible: true, drawerContent: content }),
   closeDrawer: () => set({ drawerVisible: false, drawerContent: null }),
-  setFileEntries: (entries) => set({ fileEntries: entries }),
 
   acceptAnnotation: (id) => {
     const { annotations, scriptText } = get();
@@ -466,7 +461,6 @@ export const useScriptStore = create<ScriptState & ScriptActions>((set, get) => 
       stashedContent: {},
       drawerVisible: false,
       drawerContent: null,
-      fileEntries: [],
       workspaceFiles: params.workspaceFiles ?? {
         hasOriginalFile: false,
         hasScriptFile: false,

@@ -10,16 +10,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Field,
+  Select,
 } from '../ui';
+import { AutoModeSection, type AutoModeModelBinding } from './script/AutoModeSection';
 import {
-  AutoModeSection,
-  type AutoModeModelBinding,
-  type AutoModeOption,
-} from './script/AutoModeSection';
-import {
-  detectResumableAutoRun,
   getResumableStepLabel,
+  listStartableSteps,
   type ResumableAutoRunInfo,
+  type ResumableAutoRunStep,
 } from '../lib/auto-run-resume';
 import type { AutoWorkflowParams } from '../store/ai';
 import { loadAISettings, useAIStore } from '../store/ai';
@@ -28,93 +27,30 @@ import { getAllRoles } from '../lib/script-templates';
 import { normalizeTTSSettings } from '../lib/tts-settings';
 import { userPromptBindingKey } from '../lib/prompts';
 import type { AISettings } from '../types/ai';
-import type { ProjectData } from '../lib/project-persistence';
 import type { AppPage } from '../lib/electron-api';
+import {
+  detectLauncherAutoRun,
+  dismissLauncherForSession,
+  launcherSessionDismissed,
+} from '../lib/auto-run-launcher-detect';
+import {
+  flattenModelOptions,
+  resolveInitialModelBinding,
+  ResumeProductionModePicker,
+} from './auto-run-launcher-helpers';
 import styles from './AutoRunLauncher.module.css';
-
-const SESSION_DISMISS_KEY_PREFIX = 'auto-run-launcher-dismissed:';
 
 export interface AutoRunLauncherProps {
   projectDir: string;
   setPage: (next: AppPage) => void;
   /** 测试注入 */
-  detect?: typeof defaultDetect;
-}
-
-/** 把 provider×model 组合扁平成一个 Select 使用的 value/label 对 */
-function flattenModelOptions(settings: AISettings | null): AutoModeOption[] {
-  if (!settings) return [];
-  const out: AutoModeOption[] = [];
-  for (const provider of settings.llmProviders ?? []) {
-    for (const model of provider.models ?? []) {
-      out.push({
-        value: `${provider.id}::${model}`,
-        label: `${provider.name} / ${model}`,
-      });
-    }
-  }
-  return out;
-}
-
-/** 当前写稿模板在项目下的已绑定模型；没有则回退到全局 defaultProviderId/defaultModel */
-function resolveInitialModelBinding(
-  settings: AISettings | null,
-  projectBinding: { providerId: string | null; model: string | null } | null | undefined,
-): AutoModeModelBinding | null {
-  if (projectBinding?.providerId && projectBinding.model) {
-    return { providerId: projectBinding.providerId, model: projectBinding.model };
-  }
-  if (settings?.defaultProviderId && settings.defaultModel) {
-    return { providerId: settings.defaultProviderId, model: settings.defaultModel };
-  }
-  return null;
-}
-
-async function defaultDetect(projectDir: string): Promise<
-  | { kind: 'none' }
-  | ({ kind: 'resumable' } & ResumableAutoRunInfo)
-> {
-  const api = window.electronAPI;
-  if (!api) return { kind: 'none' };
-
-  const [scriptContent, originalContent, projectJson] = await Promise.all([
-    api.loadScriptFile(projectDir, 'script.md').catch(() => null),
-    api.loadScriptFile(projectDir, 'original.md').catch(() => null),
-    api.loadProject(projectDir).catch(() => null),
-  ]);
-
-  let project: ProjectData | null = null;
-  if (projectJson) {
-    try {
-      project = JSON.parse(projectJson) as ProjectData;
-    } catch {
-      project = null;
-    }
-  }
-
-  return detectResumableAutoRun({ scriptContent, originalContent, project });
-}
-
-function sessionDismissed(projectDir: string): boolean {
-  try {
-    return sessionStorage.getItem(SESSION_DISMISS_KEY_PREFIX + projectDir) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function markSessionDismissed(projectDir: string): void {
-  try {
-    sessionStorage.setItem(SESSION_DISMISS_KEY_PREFIX + projectDir, '1');
-  } catch {
-    // ignore
-  }
+  detect?: typeof detectLauncherAutoRun;
 }
 
 export function AutoRunLauncher({
   projectDir,
   setPage,
-  detect = defaultDetect,
+  detect = detectLauncherAutoRun,
 }: AutoRunLauncherProps) {
   const workflowStep = useAIStore((s) => s.workflow.step);
   const setPendingAutoParams = useAIStore((s) => s.setPendingAutoParams);
@@ -125,15 +61,17 @@ export function AutoRunLauncher({
   const selectedRole = useScriptStore((s) => s.selectedRole);
 
   const [resumable, setResumable] = useState<ResumableAutoRunInfo | null>(null);
-  const [dismissed, setDismissed] = useState<boolean>(() => sessionDismissed(projectDir));
+  const [dismissed, setDismissed] = useState<boolean>(() => launcherSessionDismissed(projectDir));
   const [configOpen, setConfigOpen] = useState(false);
   const [voiceIdDefault, setVoiceIdDefault] = useState('male-qn-qingse');
   const [aiSettings, setAiSettings] = useState<AISettings | null>(null);
   const [configParams, setConfigParams] = useState<AutoWorkflowParams | null>(null);
   const [modelBinding, setModelBinding] = useState<AutoModeModelBinding | null>(null);
+  const [resumeProductionMode, setResumeProductionMode] = useState<'auto' | 'director'>('auto');
+  const [startStep, setStartStep] = useState<ResumableAutoRunStep | null>(null);
 
   useEffect(() => {
-    setDismissed(sessionDismissed(projectDir));
+    setDismissed(launcherSessionDismissed(projectDir));
   }, [projectDir]);
 
   useEffect(() => {
@@ -172,11 +110,8 @@ export function AutoRunLauncher({
     void detect(projectDir).then((result) => {
       if (cancelled) return;
       if (result.kind === 'resumable') {
-        setResumable({
-          nextStep: result.nextStep,
-          nextStepLabel: result.nextStepLabel,
-          persistedAutoParams: result.persistedAutoParams,
-        });
+        setResumable(result);
+        setResumeProductionMode(result.persistedAutoParams?.productionMode ?? 'auto');
       } else {
         setResumable(null);
       }
@@ -200,34 +135,61 @@ export function AutoRunLauncher({
   );
 
   const launch = useCallback(
-    (params: AutoWorkflowParams) => {
-      if (!resumable) return;
+    (params: AutoWorkflowParams, step: ResumableAutoRunStep) => {
       setPendingAutoParams(params);
-      setPendingAutoResumeStep(resumable.nextStep);
+      setPendingAutoResumeStep(step);
       setPage('auto-run');
     },
-    [resumable, setPage, setPendingAutoParams, setPendingAutoResumeStep],
+    [setPage, setPendingAutoParams, setPendingAutoResumeStep],
   );
 
-  const handleResume = useCallback(() => {
-    if (!resumable?.persistedAutoParams) return;
-    launch(resumable.persistedAutoParams);
-  }, [launch, resumable]);
+  /** 点击启动前实时重检磁盘产物，避免使用挂载时的过期检测结果（如手动写完稿后仍从写稿起跑）。 */
+  const refreshDetection = useCallback(async (): Promise<ResumableAutoRunInfo | null> => {
+    const result = await detect(projectDir).catch(() => null);
+    if (!result || result.kind !== 'resumable') {
+      setResumable(null);
+      return null;
+    }
+    setResumable(result);
+    return result;
+  }, [detect, projectDir]);
 
-  const handleOpenConfig = useCallback(() => {
-    const templateId = selectedTemplate || 'news-broadcast';
+  const handleResume = useCallback(async () => {
+    const fresh = await refreshDetection();
+    if (!fresh?.persistedAutoParams) return;
+    launch(
+      { ...fresh.persistedAutoParams, productionMode: resumeProductionMode },
+      fresh.nextStep,
+    );
+  }, [launch, refreshDetection, resumeProductionMode]);
+
+  const handleOpenConfig = useCallback(async () => {
+    const fresh = await refreshDetection();
+    if (!fresh) return;
+    const persisted = fresh.persistedAutoParams;
+    const templateId = persisted?.templateId || selectedTemplate || 'news-broadcast';
     setConfigParams({
       templateId,
-      roleId: selectedRole || 'none',
-      voiceId: voiceIdDefault,
+      roleId: persisted?.roleId || selectedRole || 'none',
+      voiceId: persisted?.voiceId || voiceIdDefault,
+      productionMode: resumeProductionMode,
     });
     const projectBinding = projectBindings?.[userPromptBindingKey('script-template', templateId)] ?? null;
     setModelBinding(resolveInitialModelBinding(aiSettings, projectBinding));
+    setStartStep(fresh.nextStep);
     setConfigOpen(true);
-  }, [aiSettings, projectBindings, selectedRole, selectedTemplate, voiceIdDefault]);
+  }, [aiSettings, projectBindings, refreshDetection, resumeProductionMode, selectedRole, selectedTemplate, voiceIdDefault]);
+
+  const handleOpenOverview = useCallback(() => {
+    setPage('director-workbench');
+  }, [setPage]);
+
+  const handleOpenCheckpoint = useCallback(() => {
+    setPage(resumable?.checkpoint === 'animatic-review' ? 'editor' : 'director-workbench');
+  }, [resumable?.checkpoint, setPage]);
 
   const handleConfirmConfig = useCallback(async () => {
-    if (!configParams) return;
+    if (!configParams || !startStep) return;
     // 把写稿模型选择写入项目级绑定（下次一键 / 脚本工作台手动写稿都会用它）
     if (modelBinding) {
       await setProjectBinding(userPromptBindingKey('script-template', configParams.templateId), {
@@ -238,25 +200,42 @@ export function AutoRunLauncher({
       });
     }
     setConfigOpen(false);
-    launch(configParams);
-  }, [configParams, launch, modelBinding, setProjectBinding]);
+    launch(configParams, startStep);
+  }, [configParams, launch, modelBinding, setProjectBinding, startStep]);
 
   const handleDismiss = useCallback(() => {
-    markSessionDismissed(projectDir);
+    dismissLauncherForSession(projectDir);
     setDismissed(true);
   }, [projectDir]);
 
   if (dismissed || !resumable) return null;
 
-  const canResume = resumable.persistedAutoParams !== null;
-  const titleText = canResume ? '检测到未完成的 AI 一键剪辑' : 'AI 一键剪辑';
-  const stageText = canResume
-    ? `从「${getResumableStepLabel(resumable.nextStep)}」继续`
-    : `将从「${getResumableStepLabel(resumable.nextStep)}」开始`;
+  const isRestart = resumable.restart === true;
+  const hasCheckpoint = Boolean(resumable.checkpoint);
+  const canResume = resumable.persistedAutoParams !== null && !isRestart && !hasCheckpoint;
+  const startableSteps = listStartableSteps(resumable.nextStep, { restart: isRestart });
+  const titleText = resumable.checkpoint === 'director-review'
+    ? '导演方案等待批准'
+    : resumable.checkpoint === 'animatic-review'
+      ? 'Animatic 等待确认'
+      : isRestart
+    ? '重新制作当前项目'
+    : canResume
+      ? '检测到未完成的自动剪辑'
+      : '自动剪辑';
+  const stageText = resumable.checkpoint === 'director-review'
+    ? '批准前不会生成画面、封面或声音'
+    : resumable.checkpoint === 'animatic-review'
+      ? '进入编辑器审查镜头与时间线'
+      : isRestart
+    ? '可选择一键成片或导演确认'
+    : canResume
+      ? `从「${getResumableStepLabel(resumable.nextStep)}」继续`
+      : `将从「${getResumableStepLabel(resumable.nextStep)}」开始`;
 
   const modelHint =
     autoModeOptions.models.length === 0
-      ? '未发现可用模型，请先到系统设置添加 Provider。'
+      ? '未发现可用模型，请先到系统设置添加生成服务。'
       : '作为本项目当前模板的默认写稿模型，下次也会用它。';
 
   return (
@@ -271,22 +250,42 @@ export function AutoRunLauncher({
         </div>
         <div className={styles.actions}>
           {canResume ? (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleResume}
-              leftIcon={<AppIcon name="refresh-cw" size={12} />}
-            >
-              继续运行
+            <ResumeProductionModePicker
+              value={resumeProductionMode}
+              onChange={setResumeProductionMode}
+            />
+          ) : null}
+          {resumable.hasProductionPlan && !hasCheckpoint ? (
+            <Button variant="secondary" size="sm" onClick={handleOpenOverview}>
+              制作总览
             </Button>
+          ) : null}
+          {hasCheckpoint ? (
+            <Button variant="primary" size="sm" onClick={handleOpenCheckpoint}>
+              {resumable.checkpoint === 'animatic-review' ? '进入编辑器审查' : '进入导演台批准'}
+            </Button>
+          ) : canResume ? (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => void handleOpenConfig()}>
+                调整
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => void handleResume()}
+                leftIcon={<AppIcon name="refresh-cw" size={12} />}
+              >
+                继续运行
+              </Button>
+            </>
           ) : (
             <Button
               variant="primary"
               size="sm"
-              onClick={handleOpenConfig}
+              onClick={() => void handleOpenConfig()}
               leftIcon={<AppIcon name="sparkles" size={12} />}
             >
-              配置并开始
+              {isRestart ? '配置重新制作' : '配置并开始'}
             </Button>
           )}
           <Button
@@ -305,13 +304,31 @@ export function AutoRunLauncher({
         <DialogContent size="md">
           <DialogClose />
           <DialogHeader>
-            <DialogTitle>配置一键 AI 剪辑</DialogTitle>
+            <DialogTitle>配置自动剪辑</DialogTitle>
             <DialogDescription>
-              选择写稿模型、角色与 TTS 音色，确认后将自动完成：
-              写稿 → TTS → 内容分析 → 字幕高亮 → 封面 → 时间轴排布。
+              选择写稿模型、角色与口播音色，确认后将从所选起始阶段起自动完成：
+              生成口播稿 → 合成口播 → 生成画面 → 生成封面 → 排布时间线。
             </DialogDescription>
           </DialogHeader>
           <DialogBody>
+            {startableSteps.length > 1 ? (
+              <div style={{ marginBottom: 'var(--space-4)' }}>
+                <Field
+                  label="起始阶段"
+                  hint="按磁盘产物检测的默认起点；选择更早阶段会重新生成对应内容。"
+                >
+                  <Select
+                    aria-label="起始阶段"
+                    value={startStep ?? ''}
+                    options={startableSteps.map((step) => ({
+                      value: step,
+                      label: getResumableStepLabel(step),
+                    }))}
+                    onChange={(e) => setStartStep(e.target.value as ResumableAutoRunStep)}
+                  />
+                </Field>
+              </div>
+            ) : null}
             {configParams ? (
               <AutoModeSection
                 mode="always"
@@ -333,7 +350,7 @@ export function AutoRunLauncher({
             <Button
               variant="primary"
               onClick={() => void handleConfirmConfig()}
-              disabled={!configParams?.voiceId || !modelBinding}
+              disabled={!configParams?.voiceId || !modelBinding || !startStep}
             >
               开始
             </Button>

@@ -83,6 +83,55 @@ describe('task-progress store', () => {
     expect(useTaskProgressStore.getState().tasks.has('task-5')).toBe(false);
   });
 
+  it('cancelTask sets a neutral cancelled status and auto-removes after 5s', () => {
+    const onCancel = vi.fn();
+    const store = useTaskProgressStore.getState();
+    store.startTask(makeTask({ id: 'task-cancel', canCancel: true, onCancel }));
+    store.cancelTask('task-cancel', '用户停止');
+
+    const state = useTaskProgressStore.getState();
+    const task = state.tasks.get('task-cancel');
+    expect(task).toMatchObject({
+      status: 'cancelled',
+      cancelReason: '用户停止',
+      canCancel: false,
+      onCancel: undefined,
+    });
+    expect(task?.error).toBeUndefined();
+    expect(state.primaryTask?.id).toBe('task-cancel');
+    expect(state.activeCount).toBe(0);
+    expect(onCancel).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5000);
+    expect(useTaskProgressStore.getState().tasks.has('task-cancel')).toBe(false);
+  });
+
+  it('does not let late updates overwrite a cancelled task', () => {
+    const store = useTaskProgressStore.getState();
+    store.startTask(makeTask({ id: 'task-cancel-race' }));
+    store.cancelTask('task-cancel-race');
+    store.updateTask('task-cancel-race', { progress: 90, phase: '仍在回调' });
+    store.completeTask('task-cancel-race');
+    store.failTask('task-cancel-race', 'late error');
+
+    expect(useTaskProgressStore.getState().tasks.get('task-cancel-race')).toMatchObject({
+      status: 'cancelled',
+      progress: 0,
+      phase: null,
+    });
+  });
+
+  it('falls back to another active task after primary task is cancelled', () => {
+    const store = useTaskProgressStore.getState();
+    store.startTask(makeTask({ id: 'older-active' }));
+    store.startTask(makeTask({ id: 'newer-active' }));
+    store.cancelTask('newer-active');
+
+    const state = useTaskProgressStore.getState();
+    expect(state.primaryTask?.id).toBe('older-active');
+    expect(state.activeCount).toBe(1);
+  });
+
   it('removeTask deletes the task', () => {
     const store = useTaskProgressStore.getState();
     store.startTask(makeTask({ id: 'task-6' }));

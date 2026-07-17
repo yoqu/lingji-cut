@@ -22,6 +22,7 @@ import {
 } from '../lib/script-utils';
 import { ReviewCursorAnimator } from '../lib/review-cursor-animator';
 import { useScriptStore } from '../store/script';
+import { useProjectTreeStore } from '../store/project-tree';
 import { useAiEditStore } from '../store/ai-edit';
 import { useTaskProgressStore } from '../store/task-progress';
 import { loadAISettings, useAIStore } from '../store/ai';
@@ -33,12 +34,11 @@ import { openSearchPanel } from '@codemirror/search';
 import { setOpenWithReplace } from '../ui/components/script-editor-search';
 import { waitForValue } from '../lib/wait-for-value';
 import { AnnotationList } from '../components/script/AnnotationList';
-import { AgentCursor } from '../components/agent/AgentCursor';
 import { ConflictDialog } from '../components/script/ConflictDialog';
 import { DouyinImportDialog } from '../components/script/DouyinImportDialog';
 import { EmptyGuide } from '../components/script/EmptyGuide';
 import { FileTabs } from '../components/script/FileTabs';
-import { FileTreePanel } from '../components/script/FileTreePanel';
+import { ScriptFileTreePanel } from '../components/script/ScriptFileTreePanel';
 import { QuickActionBar } from '../components/script/QuickActionBar';
 import { VideoImportPreviewPane } from '../components/script/VideoImportPreviewPane';
 import { VersionPreviewBar } from '../components/script/VersionPreviewBar';
@@ -61,7 +61,7 @@ import type {
 } from '../lib/video-import-types';
 import { ScriptEditor } from '../ui/components/script-editor';
 import { AlertProvider } from '../ui/components/alert';
-import { Button } from '../ui';
+import { Alert, Button } from '../ui';
 import {
   getNextOpenedWorkbenchTab,
   getWorkbenchTabCloseTargets,
@@ -77,6 +77,13 @@ interface ScriptWorkbenchProps {
 }
 
 const SPECIAL_FILES = new Set(['original.md', 'script.md']);
+
+interface ScriptGenerationSession {
+  streamId: string;
+  filePath: 'script.md';
+  abortController: AbortController;
+  receivedText: string;
+}
 
 function getVideoImportTaskLabel(sourceType: VideoImportSourceType): string {
   if (sourceType === 'douyin') return '抖音视频导入';
@@ -115,8 +122,6 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     fileConflictMap,
     stashedContent,
     openedFile,
-    fileEntries,
-    setFileEntries,
     restoreState,
     acceptAnnotation,
     dismissAnnotation,
@@ -141,7 +146,6 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     mcpChangeHighlightLines,
     showReviewBanner,
     setShowReviewBanner,
-    reviewCursorPos,
     reviewBreathing,
     videoImportProgress,
     lastVideoImport,
@@ -154,6 +158,9 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     pendingImportedScript,
     setPendingImportedScript,
   } = useScriptStore();
+
+  // 目录树数据来自共享 store（由 App 层 useProjectTreeSync 统一加载/刷新）
+  const fileEntries = useProjectTreeStore((s) => s.fileEntries);
 
   const hasAICardOverlays = useTimelineStore(
     (state) => state.timeline.overlays?.some((o) => o.overlayType === 'ai-card') ?? false,
@@ -170,6 +177,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
   const [douyinImportOpen, setDouyinImportOpen] = useState(false);
   const [douyinImportBusy, setDouyinImportBusy] = useState(false);
   const [douyinImportError, setDouyinImportError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   /** 审查结论面板是否折叠 */
   const [annotationPanelCollapsed, setAnnotationPanelCollapsed] = useState(false);
   /** 用户手动切换过折叠状态后，不再自动折叠（否则展开 → 自动再收起会很烦） */
@@ -181,14 +189,15 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
 
   const editorViewRef = useRef<EditorView | null>(null);
   const liveStreamingRef = useRef<LiveStreamingEditor | null>(null);
+  const generationSessionRef = useRef<ScriptGenerationSession | null>(null);
   const reviewAnimatorRef = useRef<ReviewCursorAnimator | null>(null);
   /** 正在从磁盘加载文件时为 true，抑制 onChange 的 dirty 标记 */
   const loadingFileRef = useRef(false);
 
   const stopActivePlayback = useCallback(() => {
-    if (liveStreamingRef.current?.isPlaying) {
-      liveStreamingRef.current.stop();
-    }
+    const player = liveStreamingRef.current;
+    liveStreamingRef.current = null;
+    player?.stop();
   }, []);
 
   const waitForEditorViewReady = useCallback(
@@ -233,6 +242,24 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     if (openedFile && !closedTabs.has(openedFile)) return openedFile;
     return null;
   }, [openedFile, closedTabs]);
+
+  useEffect(() => {
+    const state = useScriptStore.getState();
+    const streamTarget = state.activeStream.filePath;
+    if (streamTarget && activeFile !== streamTarget) {
+      state.setEditorAgent({ virtualCursorPos: null });
+      editorViewRef.current?.dispatch({ effects: clearVirtualCursor.of(null) });
+      stopActivePlayback();
+      return;
+    }
+
+    const session = generationSessionRef.current;
+    if (session && activeFile === session.filePath && editorViewRef.current) {
+      replaceEditorContent(editorViewRef.current, session.receivedText, {
+        cursorPos: session.receivedText.length,
+      });
+    }
+  }, [activeFile, stopActivePlayback]);
 
   const activePreviewDocument = useMemo(() => {
     if (!activeFile || !isVideoImportPreviewFile(activeFile)) {
@@ -291,12 +318,13 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
   }, [activeFile, originalText.length, scriptText.length, extraFileContents, closedTabs]);
 
   const refreshFileTree = useCallback(
-    async (dir: string) => {
-      const entries = await window.electronAPI.readDirectory(dir);
-      setFileEntries(entries);
+    async (_dir: string) => {
+      // 目录树数据由 useProjectTreeStore 统一持有，App 层 useProjectTreeSync 负责加载/刷新。
+      // 这里仅触发一次刷新并返回最新 entries，便于调用方做工作区文件存在性判断。
+      const entries = await useProjectTreeStore.getState().refresh();
       return entries;
     },
-    [setFileEntries],
+    [],
   );
 
   const hydrateProjectDirectory = useCallback(
@@ -304,6 +332,10 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       hydratedDirRef.current = dir;
 
       try {
+        // 先把共享目录树 store 指向新目录，再写 script store.projectDir。
+        // useProjectTreeSync 订阅了 script store.projectDir 变化，此处提前同步可让
+        // 订阅判定「树端已指向同一目录」而跳过重复刷新，避免双加载。
+        useProjectTreeStore.getState().setProjectDir(dir);
         setProjectDir(dir);
         await window.electronAPI.startWatching(dir);
 
@@ -328,7 +360,6 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
             workspaceFiles: { hasOriginalFile: hasOriginal, hasScriptFile: hasScript },
             fileTreeView: 'resources',
           });
-          setFileEntries(entries);
           if (!openedFile) {
             const fileToOpen = hasScript ? 'script.md' : hasOriginal ? 'original.md' : null;
             if (fileToOpen) openFileTab(fileToOpen);
@@ -350,7 +381,6 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           manualStageOverride: null,
           workspaceFiles: { hasOriginalFile: hasOriginal, hasScriptFile: hasScript },
         });
-        setFileEntries(entries);
         if (!openedFile) {
           const fileToOpen = originalFromDisk !== null ? 'original.md' : scriptFromDisk !== null ? 'script.md' : null;
           if (fileToOpen) openFileTab(fileToOpen);
@@ -363,7 +393,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
         throw error;
       }
     },
-    [openedFile, refreshFileTree, restoreState, setFileEntries, openFileTab, setProjectDir, setWorkspaceFiles],
+    [openedFile, refreshFileTree, restoreState, openFileTab, setProjectDir, setWorkspaceFiles],
   );
 
   const ensureProjectDirectory = useCallback(async () => {
@@ -460,34 +490,36 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       }
     });
 
-    const unsubscribeTree = window.electronAPI.onFileTreeChanged(async () => {
-      const entries = await refreshFileTree(projectDir);
-      // 刷新 workspace 文件存在状态
-      const hasOriginal = entries.some((e: { name: string }) => e.name === 'original.md');
-      const hasScript = entries.some((e: { name: string }) => e.name === 'script.md');
-      useScriptStore.getState().setWorkspaceFiles({ hasOriginalFile: hasOriginal, hasScriptFile: hasScript });
-    });
-
     return () => {
       unsubscribeChanged();
-      unsubscribeTree();
     };
-  }, [projectDir, refreshFileTree]);
+  }, [projectDir]);
+
+  // 目录树变化时刷新工作区文件存在状态（original.md / script.md）。
+  // 树数据由 App 层 useProjectTreeSync 统一加载并推入 useProjectTreeStore，这里只做派生。
+  useEffect(() => {
+    const hasOriginal = fileEntries.some((e) => e.name === 'original.md');
+    const hasScript = fileEntries.some((e) => e.name === 'script.md');
+    useScriptStore.getState().setWorkspaceFiles({ hasOriginalFile: hasOriginal, hasScriptFile: hasScript });
+  }, [fileEntries]);
 
   const handleEditorChange = useCallback(
     (value: string) => {
-      if (!activeFile) return;
+      const state = useScriptStore.getState();
+      const filePath = state.openedFile;
+      if (!filePath) return;
       if (loadingFileRef.current) return; // 加载文件触发的 onChange，忽略
-      if (activeFile === 'script.md') {
+      if (state.editorAgent.streamingActive && state.activeStream.filePath === filePath) return;
+      if (filePath === 'script.md') {
         setScriptText(value);
-      } else if (activeFile === 'original.md') {
+      } else if (filePath === 'original.md') {
         setOriginalText(value);
       } else {
-        setExtraFileContent(activeFile, value);
+        setExtraFileContent(filePath, value);
       }
-      setFileDirty(activeFile, true);
+      setFileDirty(filePath, true);
     },
-    [activeFile, setFileDirty, setOriginalText, setScriptText, setExtraFileContent],
+    [setFileDirty, setOriginalText, setScriptText, setExtraFileContent],
   );
 
   const handleSelectDirectory = useCallback(async () => {
@@ -569,6 +601,14 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     async (file: string) => {
       loadingFileRef.current = true;
       openFileTab(file);
+      const stream = useScriptStore.getState().activeStream;
+      const isBoundStreamTarget =
+        stream.filePath === file &&
+        stream.phase !== 'idle';
+      if (isBoundStreamTarget) {
+        requestAnimationFrame(() => { loadingFileRef.current = false; });
+        return;
+      }
       if (!projectDir) {
         // 延迟一帧后解除，确保编辑器 onChange 已跳过
         requestAnimationFrame(() => { loadingFileRef.current = false; });
@@ -861,11 +901,47 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       replyChannel?: string;
     }) => {
       const streamId = `mcp-generate-${Date.now()}`;
-      // 中断控制器：取消时既停本地打字机，也 abort 底层 LLM 网络请求。
+      setOperationError(null);
       const abortController = new AbortController();
+      const session: ScriptGenerationSession = {
+        streamId,
+        filePath: 'script.md',
+        abortController,
+        receivedText: '',
+      };
+      const stopGenerationSession = () => {
+        if (generationSessionRef.current?.streamId !== streamId) return;
+
+        session.abortController.abort();
+        stopActivePlayback();
+        generationSessionRef.current = null;
+        loadingFileRef.current = false;
+
+        const currentState = useScriptStore.getState();
+        currentState.setScriptText(session.receivedText);
+        if (session.receivedText) {
+          currentState.setFileDirty(session.filePath, true);
+        }
+        currentState.setActiveStream({ phase: 'stopped' });
+        currentState.stopAgentOperation({ resetStream: false });
+        if (currentState.openedFile === session.filePath && editorViewRef.current) {
+          editorViewRef.current.dispatch({ effects: clearVirtualCursor.of(null) });
+        }
+      };
       try {
         const state = useScriptStore.getState();
         const streamKind = operationType === 'rewrite' ? 'rewrite' : 'generate';
+
+        const previousSession = generationSessionRef.current;
+        if (previousSession) {
+          previousSession.abortController.abort();
+          useTaskProgressStore.getState().cancelTask(
+            previousSession.streamId,
+            '已开始新的生成任务',
+          );
+        }
+        stopActivePlayback();
+        generationSessionRef.current = session;
 
         // 抑制编辑器 onChange 触发的 dirty 标记
         loadingFileRef.current = true;
@@ -901,7 +977,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
         useTaskProgressStore.getState().startTask({
           id: streamId,
           category: 'ai-write',
-          label: operationType === 'rewrite' ? 'AI 重写稿件' : 'AI 生成稿件',
+          label: operationType === 'rewrite' ? '重新生成口播稿' : '生成口播稿',
           mode: 'streaming',
           progress: 0,
           phase: '准备中',
@@ -910,19 +986,23 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           // 工作台的生成流不是 ACP 会话，而是内部 LLM 流。取消时同时停止本地
           // 打字机播放器并 abort 底层网络请求，避免请求继续跑到结束。
           onCancel: canInterrupt
-            ? () => {
-                abortController.abort();
-                stopActivePlayback();
-              }
+            ? stopGenerationSession
             : undefined,
         });
-
-        stopActivePlayback();
-        liveStreamingRef.current = null;
+        loadingFileRef.current = false;
 
         const ensureGeneratePlayer = (viewOverride?: EditorView | null) => {
+          const latestState = useScriptStore.getState();
           const view = viewOverride ?? editorViewRef.current;
-          if (!view) return null;
+          if (
+            !view ||
+            generationSessionRef.current?.streamId !== streamId ||
+            abortController.signal.aborted ||
+            latestState.activeStream.streamId !== streamId ||
+            latestState.openedFile !== session.filePath
+          ) {
+            return null;
+          }
           if (!liveStreamingRef.current) {
             liveStreamingRef.current = new LiveStreamingEditor(view, {
               chunkSize: 2,
@@ -937,24 +1017,15 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                   latestState.setActiveStream({ phase: 'streaming' });
                 }
               },
-              onComplete: (committedContent) => {
-                useScriptStore.getState().setScriptText(committedContent);
-              },
-              onStopped: (committedContent) => {
-                const latestState = useScriptStore.getState();
-                latestState.setScriptText(committedContent);
-                latestState.setActiveStream({ phase: 'stopped' });
-              },
             });
           }
           return liveStreamingRef.current;
         };
 
-        ensureGeneratePlayer(initialView);
         // 某些模型首包返回较慢，先切到 streaming，避免界面长时间停在 preparing。
         state.setActiveStream({ phase: 'streaming' });
         useTaskProgressStore.getState().updateTask(streamId, { phase: '写入中' });
-        let didEnqueueStreamText = false;
+        let didReceiveStreamText = false;
 
         // 流式调用 LLM：chunk 先进入实时播放器，再逐段写入编辑器
         // provider/model 由 script-utils 内部通过 resolveUserPromptBinding 自动解析：
@@ -965,16 +1036,31 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           state.selectedRole,
           (chunk) => {
             const latestState = useScriptStore.getState();
+            if (
+              !chunk ||
+              abortController.signal.aborted ||
+              generationSessionRef.current?.streamId !== streamId
+            ) {
+              return;
+            }
 
-            // 后台模式下跳过编辑器写入，最终一次性同步
-            if (latestState.agentOperation.backgrounded) return;
+            session.receivedText += chunk;
+            didReceiveStreamText = true;
+            latestState.setScriptText(session.receivedText);
+
+            // 可视化播放器只绑定启动时的目标文件；离开标签后仍持续更新目标 store。
+            if (
+              latestState.agentOperation.backgrounded ||
+              latestState.openedFile !== session.filePath
+            ) {
+              return;
+            }
             if (latestState.activeStream.phase !== 'streaming') {
               latestState.setActiveStream({ phase: 'streaming' });
             }
             const player = ensureGeneratePlayer(editorViewRef.current);
-            if (player && chunk) {
+            if (player) {
               player.pushText(chunk);
-              didEnqueueStreamText = true;
             }
           },
           {
@@ -985,17 +1071,25 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
             signal: abortController.signal,
           },
         );
+        abortController.signal.throwIfAborted();
 
-        if (!useScriptStore.getState().agentOperation.backgrounded) {
+        const stateAfterStream = useScriptStore.getState();
+        if (
+          !stateAfterStream.agentOperation.backgrounded &&
+          stateAfterStream.openedFile === session.filePath
+        ) {
           const player = ensureGeneratePlayer(editorViewRef.current);
           // 兜底：如果底层把全文缓冲到结束才返回，仍然回放最终文本，确保有打字机效果。
-          if (!didEnqueueStreamText && result) {
+          if (!didReceiveStreamText && result) {
+            session.receivedText = result;
+            stateAfterStream.setScriptText(result);
             useScriptStore.getState().setActiveStream({ phase: 'streaming' });
             player?.pushText(result);
           }
           useScriptStore.getState().setActiveStream({ phase: 'finalizing' });
           await player?.finish();
         }
+        abortController.signal.throwIfAborted();
 
         // 生成完成：同步 store 并退出操作状态
         const finalState = useScriptStore.getState();
@@ -1004,7 +1098,10 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
         finalState.stopAgentOperation();
         useTaskProgressStore.getState().completeTask(streamId);
         finalState.setShowReviewBanner(true);
-        liveStreamingRef.current = null;
+        if (generationSessionRef.current?.streamId === streamId) {
+          stopActivePlayback();
+          generationSessionRef.current = null;
+        }
         loadingFileRef.current = false;
 
         // 防御性清除 CM6 虚拟光标，确保任何路径下光标都不残留
@@ -1066,10 +1163,11 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           });
         }
       } catch (err: any) {
-        if (liveStreamingRef.current?.isPlaying) {
-          liveStreamingRef.current.stop();
+        const ownsSession = generationSessionRef.current?.streamId === streamId;
+        if (ownsSession) {
+          stopActivePlayback();
+          generationSessionRef.current = null;
         }
-        liveStreamingRef.current = null;
         loadingFileRef.current = false;
         const currentState = useScriptStore.getState();
 
@@ -1079,9 +1177,19 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           err?.name === 'AbortError' ||
           /abort/i.test(err?.message ?? '');
         if (aborted) {
+          useTaskProgressStore.getState().cancelTask(streamId, '用户停止');
+          if (!ownsSession) {
+            if (replyChannel) {
+              window.mcpAPI!.reply(replyChannel, { success: false, error: '已取消生成' });
+            }
+            return;
+          }
+          currentState.setScriptText(session.receivedText);
+          if (session.receivedText) {
+            currentState.setFileDirty(session.filePath, true);
+          }
           currentState.setActiveStream({ phase: 'stopped' });
           currentState.stopAgentOperation({ resetStream: false });
-          useTaskProgressStore.getState().completeTask(streamId);
           if (editorViewRef.current) {
             editorViewRef.current.dispatch({ effects: clearVirtualCursor.of(null) });
           }
@@ -1114,7 +1222,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           return;
         }
 
-        alert(`生成失败: ${errorMsg}`);
+        setOperationError(`生成口播稿失败：${errorMsg}`);
       }
     },
     [openFileTab, refreshFileTree, stopActivePlayback, waitForEditorViewReady],
@@ -1141,16 +1249,18 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       templateCode: state.selectedTemplate,
       rawText: state.originalText,
       operationType: 'rewrite',
-      canInterrupt: false,
+      canInterrupt: true,
     });
   }, [runInternalGenerateScript]);
 
-  // ── 内置 LLM 审稿流程（带扫描动画）──────────────────
+  // ── 内置 LLM 审稿流程（逐条定位批注）────────────────
   const runInternalReviewScript = useCallback(async () => {
     const state = useScriptStore.getState();
     if (!state.scriptText.trim()) return;
 
     const reviewTaskId = `ai-review-${Date.now()}`;
+    const abortController = new AbortController();
+    setOperationError(null);
     try {
       // 1. 准备状态
       state.setAnnotations([]);
@@ -1170,24 +1280,27 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       useTaskProgressStore.getState().startTask({
         id: reviewTaskId,
         category: 'ai-review',
-        label: 'AI 审稿',
+        label: '审查口播稿',
         mode: 'determinate',
         progress: 0,
         phase: '等待响应',
         level: 2,
         canCancel: true,
-        // AI 审稿同样走内部 LLM 流，取消只做本地光标 / 扫描动画停止。
-        onCancel: () => reviewAnimatorRef.current?.stop(),
+        // 同时停止网络请求与本地标注动画，避免界面停止后后台仍继续消耗。
+        onCancel: () => {
+          abortController.abort();
+          reviewAnimatorRef.current?.stop();
+        },
       });
       state.setEditorAgent({ readOnly: true, virtualCursorPos: 0, streamingActive: false });
       state.setActiveStream({
-        streamId: `internal-review-${Date.now()}`,
+        streamId: reviewTaskId,
         filePath: 'script.md',
         kind: 'generate', // 复用已有 phase 逻辑
         phase: 'preparing',
       });
 
-      // 2. 启动呼吸光效（等待 LLM 响应期间的视觉反馈）
+      // 2. 启动克制的等待态（LLM 响应前仅显示系统蓝边缘提示）
       const view = await waitForEditorViewReady();
       if (!view) throw new Error('编辑器未就绪');
 
@@ -1201,9 +1314,6 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       const animator = new ReviewCursorAnimator(view, {
         annotationPauseMs: 500,
         annotationPostPauseMs: 350,
-        onCursorMove: (pos) => {
-          useScriptStore.getState().setReviewCursorPos(pos);
-        },
         onPhaseChange: (phase) => {
           const s = useScriptStore.getState();
           if (phase === 'annotating') {
@@ -1222,7 +1332,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       reviewAnimatorRef.current = animator;
       animator.startBreathing();
 
-      // 3. 等待 LLM 响应（呼吸光效持续中）
+      // 3. 等待 LLM 响应（等待态持续中）
       const annotations = await runScriptReviewStream(
         state.scriptText,
         () => {},
@@ -1231,15 +1341,22 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
             if (!chunk) return;
             setThinkingText((prev) => prev + chunk);
           },
+          signal: abortController.signal,
         },
       );
+      if (abortController.signal.aborted) {
+        throw new Error('任务已取消');
+      }
       parsedAnnotations = annotations;
 
-      // 4. LLM 完成 → 关闭呼吸 → 播放指针批注动画
+      // 4. LLM 完成 → 关闭等待态 → 逐条定位批注
       useScriptStore.getState().setReviewBreathing(false);
 
       if (annotations.length > 0) {
         await animator.animateAnnotations(annotations.map((a) => a.startOffset));
+      }
+      if (abortController.signal.aborted) {
+        throw new Error('任务已取消');
       }
 
       // 5. 完成
@@ -1261,8 +1378,8 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
 
       const currentState = useScriptStore.getState();
       currentState.stopAgentOperation();
-      useTaskProgressStore.getState().failTask(reviewTaskId, String(err));
       currentState.setReviewState('idle');
+      currentState.setAnnotations([]);
       currentState.setReviewCursorPos(null);
       currentState.setReviewBreathing(false);
 
@@ -1270,14 +1387,25 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
         editorViewRef.current.dispatch({ effects: clearVirtualCursor.of(null) });
       }
 
+      const aborted =
+        abortController.signal.aborted ||
+        err?.name === 'AbortError' ||
+        /abort|取消/i.test(err?.message ?? '');
+      if (aborted) {
+        useTaskProgressStore.getState().cancelTask(reviewTaskId, '用户停止');
+        return;
+      }
+
+      useTaskProgressStore.getState().failTask(reviewTaskId, String(err));
       const errorMsg = err?.message ?? String(err);
       console.error('内置审稿失败:', err);
-      alert(`审稿失败: ${errorMsg}`);
+      setOperationError(`审查口播稿失败：${errorMsg}`);
     }
   }, [openFileTab, waitForEditorViewReady]);
 
   const handleGenerate = useCallback(async () => {
     if (!originalText.trim()) return;
+    setOperationError(null);
 
     // 清除旧审稿数据，避免历史批注影响新生成的文稿
     setAnnotations([]);
@@ -1293,7 +1421,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       setFileDirty('script.md', true);
     } catch (error) {
       console.error('生成口播稿失败:', error);
-      alert(`生成失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      setOperationError(`生成口播稿失败：${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       setGenerating(false);
     }
@@ -1301,6 +1429,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
 
   const handleReview = useCallback(async () => {
     if (!scriptText.trim()) return;
+    setOperationError(null);
 
     setReviewing(true);
     try {
@@ -1309,7 +1438,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
       openDrawer('annotations');
     } catch (error) {
       console.error('AI 审查失败:', error);
-      alert(`审查失败: ${error instanceof Error ? error.message : '未知错误'}`);
+      setOperationError(`审查口播稿失败：${error instanceof Error ? error.message : '未知错误'}`);
     } finally {
       setReviewing(false);
     }
@@ -1685,7 +1814,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
   return (
     <AlertProvider>
       <div className={styles.page} data-agent-zone="script">
-        <FileTreePanel
+        <ScriptFileTreePanel
           projectDir={projectDir}
           fileEntries={fileEntries}
           openedFile={activeFile}
@@ -1703,11 +1832,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
             openedFile={activeFile}
             fileDirtyMap={fileDirtyMap}
             fileConflictMap={fileConflictMap}
-            onOpenFile={(file) => {
-              // 流式输出期间不允许切换离开 script.md，避免编辑器内容与 tab 不一致
-              if (editorAgent.streamingActive && activeFile === 'script.md' && file !== 'script.md') return;
-              void handleOpenFile(file);
-            }}
+            onOpenFile={(file) => void handleOpenFile(file)}
             onCloseTab={handleCloseTab}
             onTabContextMenu={(file) => {
               void handleShowTabContextMenu(file);
@@ -1732,6 +1857,15 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
               }}
             />
           )}
+          {operationError ? (
+            <Alert
+              variant="error"
+              description={operationError}
+              dismissible
+              onDismiss={() => setOperationError(null)}
+              className={styles.operationError}
+            />
+          ) : null}
           {aiEditLocked ? (
             <div className={styles.aiEditLockBanner} role="status" aria-live="polite">
               <span>AI 正在编辑当前项目</span>
@@ -1813,7 +1947,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                   {activeFile === 'script.md' && showReviewBanner && !agentOperation.isOperating && (
                     <div className={styles.reviewBanner}>
                       <Sparkles size={14} />
-                      <span>口播稿已生成完成，建议进行 AI 审稿以提升质量</span>
+                      <span>口播稿已生成，可以继续检查表达、事实与口播节奏</span>
                       <button
                         type="button"
                         className={styles.reviewBannerBtn}
@@ -1822,7 +1956,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                           void runInternalReviewScript();
                         }}
                       >
-                        AI 审稿
+                        审查口播稿
                       </button>
                       <button
                         type="button"
@@ -1906,6 +2040,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                     ) : (
                       <>
                         <ScriptEditor
+                          documentId={activeFile}
                           value={
                             activeFile === 'script.md'
                               ? (historyPreview.active ? historyPreview.content ?? '' : scriptText)
@@ -1927,10 +2062,12 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                           editorViewRef={editorViewRef}
                           readOnly={
                             aiEditLocked ||
-                            ((activeFile === 'script.md' || activeFile === 'original.md') && editorAgent.readOnly) ||
+                            (activeStream.filePath === activeFile && editorAgent.readOnly) ||
                             historyPreview.active
                           }
-                          streamingActive={editorAgent.streamingActive}
+                          streamingActive={
+                            editorAgent.streamingActive && activeStream.filePath === activeFile
+                          }
                           mcpChangeHighlightLines={mcpChangeHighlightLines}
                           focusedAnnotationId={
                             activeFile === 'script.md' ? focusedAnnotationId : null
@@ -1953,21 +2090,21 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                             }>
                               {agentOperation.operationType === 'review'
                                 ? activeStream.phase === 'preparing'
-                                  ? 'AI 正在准备审稿'
+                                  ? '准备审查口播稿'
                                   : activeStream.phase === 'finalizing'
-                                    ? 'AI 正在标注问题'
-                                    : 'AI 正在审阅全文'
+                                    ? '正在标注审查建议'
+                                    : '正在审查口播稿'
                                 : activeStream.kind === 'update'
                                   ? activeStream.phase === 'preparing'
-                                    ? 'AI 正在准备更新'
+                                    ? '准备更新口播稿'
                                     : activeStream.phase === 'finalizing'
-                                      ? 'AI 正在同步修改'
-                                      : 'AI 正在写入改动'
+                                      ? '正在同步修改'
+                                      : '正在写入改动'
                                   : activeStream.phase === 'preparing'
-                                    ? 'AI 正在准备写稿'
+                                    ? '准备生成口播稿'
                                     : activeStream.phase === 'finalizing'
-                                      ? 'AI 正在收尾保存'
-                                      : 'AI 正在打字'}
+                                      ? '正在保存口播稿'
+                                      : '正在写入口播稿'}
                             </div>
                           )}
                       </>
@@ -2051,19 +2188,6 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           </div>
         </div>
       </div>
-
-      {/* 审稿浮动指针：AI 模拟人类审阅时的虚拟鼠标 */}
-      {reviewCursorPos && (
-        <div
-          className={styles.aiReviewCursor}
-          style={{
-            left: reviewCursorPos.x - 4,
-            top: reviewCursorPos.y - 2,
-          }}
-        >
-          <AgentCursor />
-        </div>
-      )}
 
       <ConflictDialog
         open={conflictDialogOpen}

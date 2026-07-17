@@ -41,6 +41,49 @@ export default function Card({ cues = [] }) {
   );
 }`;
 
+const PROFESSIONAL_CARRIER_CARD = `import { CardStage, useBeats, TimelineRail, MatrixQuadrant, FunnelStack, NetworkMap, BeforeAfter, StackedComposition } from '@lingji/motion-kit';
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 0, 1, 2, 3, 4]);
+  return (
+    <CardStage>
+      <TimelineRail items={['起步', '爆发', '分化']} beat={beats[0]} />
+      <MatrixQuadrant items={[{ label: '优先', x: 78, y: 72, focus: true }, { label: '暂缓', x: 28, y: 36 }]} beat={beats[1]} />
+      <FunnelStack steps={[{ label: '触达', value: '10万' }, { label: '转化', value: '1万' }]} beat={beats[2]} />
+      <NetworkMap nodes={['平台', '创作者', '观众']} links={[[0, 1], [1, 2]]} beat={beats[3]} />
+      <BeforeAfter before="旧流程慢" after="新流程快" beat={beats[4]} />
+      <StackedComposition items={[{ label: '内容', value: 55, display: '55%' }, { label: '分发', value: 30, display: '30%' }]} beat={beats[5]} />
+    </CardStage>
+  );
+}`;
+
+const TIMING_PLAN_CARD = `import { CardStage, useTimingPlan, Kicker, StatHero } from '@lingji/motion-kit';
+export default function Card({ cues = [], timingPlan }) {
+  const beats = useTimingPlan(timingPlan, cues, [null, 1]);
+  return (
+    <CardStage>
+      <Kicker text="节奏卡" beat={beats[0]} />
+      <StatHero value={28842} unit="人" label="重音落点" beat={beats[1]} max={40000} />
+    </CardStage>
+  );
+}`;
+
+const LIFECYCLE_CARD = `import { CardStage, SafeLayout, MotionSlot, useBeats, Kicker, ProcessFlow } from '@lingji/motion-kit';
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 0, 1]);
+  return (
+    <CardStage>
+      <SafeLayout variant="title-hero">
+        <MotionSlot name="header" lifecycle={{ enter: beats[0], collapse: beats[1] }}>
+          <Kicker text="资金成本" beat={beats[0]} />
+        </MotionSlot>
+        <MotionSlot name="main" lifecycle={{ enter: beats[1], update: beats[2] }}>
+          <ProcessFlow steps={['高利率', '成本抬升', '投资者算账']} beats={[beats[0], beats[1], beats[2]]} focusIndex={2} emphasis="slam" />
+        </MotionSlot>
+      </SafeLayout>
+    </CardStage>
+  );
+}`;
+
 describe('motion-kit 卡片端到端（编译 + 垫片求值 + 冒烟渲染）', () => {
   it('kit 组合卡通过冒烟渲染并在末帧呈现完整数字', async () => {
     const result = await validateMotionCardTsx(KIT_CARD, {
@@ -54,6 +97,43 @@ describe('motion-kit 卡片端到端（编译 + 垫片求值 + 冒烟渲染）',
   it('kit 与原生 remotion API 混用可正常渲染', async () => {
     const result = await validateMotionCardTsx(MIXED_CARD, {
       cues: [0, 15, 40],
+      checkRenderedLayout: false,
+    });
+    expect(result.render.ok).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  it('新增专业 carrier 原语可正常渲染', async () => {
+    const result = await validateMotionCardTsx(PROFESSIONAL_CARRIER_CARD, {
+      cues: [0, 15, 30, 45, 60],
+      checkRenderedLayout: false,
+    });
+    expect(result.render.ok).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  it('useTimingPlan 可消费注入的 TimingPlan 并保持旧 cues fallback', async () => {
+    const result = await validateMotionCardTsx(TIMING_PLAN_CARD, {
+      cues: [0, 45],
+      timingPlan: {
+        fps: 30,
+        cues: [0, 45],
+        pauses: [{ frame: 70, durationFrames: 18 }],
+        accents: [{ frame: 45, strength: 3, source: 'subtitle' }],
+        beats: [
+          { storyboardBeatIndex: 0, role: 'anticipation', startFrame: 0, landFrame: 12 },
+          { storyboardBeatIndex: 1, role: 'emphasis', startFrame: 39, landFrame: 45, holdUntil: 70 },
+        ],
+      },
+      checkRenderedLayout: false,
+    });
+    expect(result.render.ok).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  it('MotionSlot lifecycle 与逐拍 ProcessFlow/emphasis 可编译渲染', async () => {
+    const result = await validateMotionCardTsx(LIFECYCLE_CARD, {
+      cues: [20, 50],
       checkRenderedLayout: false,
     });
     expect(result.render.ok).toBe(true);
@@ -82,6 +162,21 @@ export default function Card({ cues = [] }) { return <div>{String(gsap)}</div>; 
     const result = await validateMotionCardTsx(bad, { checkRenderedLayout: false });
     expect(result.render.ok).toBe(false);
     expect(result.render.error).toContain('gsap');
+  });
+});
+
+describe('storyboard emphasis 映射', () => {
+  const kit = createMotionKit({
+    ...Remotion,
+    useCurrentFrame: () => 16,
+    useVideoConfig: () => ({ width: 1920, height: 1080, fps: 30, durationInFrames: 150 }),
+  } as unknown as MotionKitRemotion);
+
+  it('支持 countup-settle / slam / underline-sweep / brighten', () => {
+    expect(kit.emphasize(16, 12, 30, 'countup-settle').transform).toContain('scale');
+    expect(kit.emphasize(12, 12, 30, 'slam').transform).toContain('translateY');
+    expect(kit.emphasize(18, 12, 30, 'underline-sweep').backgroundImage).toContain('linear-gradient');
+    expect(kit.emphasize(16, 12, 30, 'brighten').filter).toContain('brightness');
   });
 });
 

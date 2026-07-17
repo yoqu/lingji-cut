@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { useAIStore } from '../src/store/ai';
 import { useTimelineStore } from '../src/store/timeline';
 import type { AIAnalysisResult, MediaCardContent } from '../src/types/ai';
+import { DEFAULT_ASSET_TREATMENT, EMPTY_ASSET_SEMANTIC, type AssetLibraryFile } from '../src/types/assets';
 
 function makeAnalysis(): AIAnalysisResult {
   return {
@@ -61,6 +62,63 @@ describe('AI store: media card actions', () => {
     expect(content.mediaType).toBe('video');
     expect(content.aspectRatio).toBe('16:9');
     expect(content.generationStatus).toBe('idle');
+  });
+
+  it('资产处理结果变化后刷新绑定，资产删除后写入生产风险', () => {
+    const motionCard = {
+      id: 'motion-1',
+      segmentId: 'seg-1',
+      type: 'motion' as const,
+      title: 'Motion',
+      content: 'content',
+      startMs: 0,
+      endMs: 1000,
+      displayDurationMs: 1000,
+      displayMode: 'fullscreen' as const,
+      template: 'motion',
+      enabled: true,
+      style: {} as never,
+      assetBindings: [{
+        slot: 'hero',
+        assetId: 'asset-1',
+        filePath: '/old.png',
+        treatment: DEFAULT_ASSET_TREATMENT,
+        placement: { x: 0, y: 0, width: 500 },
+      }],
+      motionCard: { tsx: 'export default () => null', compiledAt: 0, prompt: '', retryCount: 0 },
+    };
+    useAIStore.setState({
+      analysisResult: { ...makeAnalysis(), cards: [motionCard] },
+    });
+    const library: AssetLibraryFile = {
+      version: 2,
+      libraryId: 'test',
+      settings: { rootDir: '/tmp', defaultImportMode: 'copy', defaultProjectReferenceMode: 'copy-to-project' },
+      updatedAt: '2026-07-10T00:00:00.000Z',
+      assets: [{
+        id: 'asset-1',
+        name: 'Hero',
+        kind: 'image',
+        role: 'object',
+        sourceType: 'manual-import',
+        createdAt: '2026-07-10T00:00:00.000Z',
+        updatedAt: '2026-07-10T00:00:00.000Z',
+        files: { original: '/original.png', processed: '/cutout.png' },
+        metadata: { contentHash: 'hash', byteSize: 100, hasAlpha: true },
+        semantic: EMPTY_ASSET_SEMANTIC,
+        treatment: DEFAULT_ASSET_TREATMENT,
+        usage: { projectRefs: [], favorite: false },
+      }],
+    };
+
+    useAIStore.getState().reconcileAssetBindings(library);
+    expect(useAIStore.getState().analysisResult?.cards[0]?.assetBindings?.[0]?.filePath).toBe('/cutout.png');
+
+    useAIStore.getState().reconcileAssetBindings({ ...library, assets: [] });
+    const deleted = useAIStore.getState().analysisResult?.cards[0];
+    expect(deleted?.assetBindings).toEqual([]);
+    expect(deleted?.motionCard?.productionReport?.status).toBe('risk');
+    expect(deleted?.motionCard?.productionReport?.assetIssues[0]?.code).toBe('asset-binding-missing');
   });
 
   it('regenerateCardMedia 成功后写回 ready 与新内容', async () => {

@@ -2,6 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StreamingEditor } from '../src/lib/streaming-editor';
 import type { AnimationFrame } from '../src/lib/streaming-editor';
 
+vi.mock('@codemirror/view', () => ({
+  EditorView: {
+    scrollIntoView: (position: number, options: unknown) => ({
+      type: 'scrollIntoView',
+      position,
+      options,
+    }),
+  },
+}));
+
 // Mock virtual-cursor effects to avoid CodeMirror state dependencies
 vi.mock('../src/lib/virtual-cursor', () => ({
   setVirtualCursor: { of: (v: any) => ({ type: 'setVirtualCursor', value: v }) },
@@ -52,6 +62,17 @@ describe('StreamingEditor', () => {
 
     await vi.advanceTimersByTimeAsync(100);
     expect(onProgress).toHaveBeenCalledWith(50);
+    expect(mockView.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effects: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'scrollIntoView',
+            position: 0,
+            options: { y: 'end' },
+          }),
+        ]),
+      }),
+    );
 
     await vi.advanceTimersByTimeAsync(100);
     expect(onProgress).toHaveBeenCalledWith(100);

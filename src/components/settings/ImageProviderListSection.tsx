@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Plus, TestTube2, Trash2 } from 'lucide-react';
 import type { ImageProvider, ImageProviderType } from '../../types/ai';
 import {
   Badge,
@@ -174,7 +175,7 @@ function ImageProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
   const [setAsDefault, setSetAsDefault] = useState(isDefault);
   const [newModel, setNewModel] = useState('');
   const [errors, setErrors] = useState<ReturnType<typeof validateImageProviderDraft>>({});
-  const title = initial.name ? '编辑图像 Provider' : '添加图像 Provider';
+  const title = initial.name ? '编辑图片生成服务' : '添加图片生成服务';
 
   const clearFieldError = (key: keyof ReturnType<typeof validateImageProviderDraft>) =>
     setErrors((prev) => {
@@ -314,6 +315,7 @@ function ImageProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
                       type="button"
                       variant="ghost"
                       size="sm"
+                      leftIcon={<Trash2 size={12} />}
                       className={styles.removeModelButton}
                       onClick={() => removeModel(idx)}
                     >
@@ -340,14 +342,14 @@ function ImageProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
                 wrapperClassName={styles.modelInput}
                 aria-invalid={Boolean(errors.models)}
               />
-              <Button type="button" variant="secondary" size="sm" onClick={addModel}>
+              <Button type="button" variant="secondary" size="sm" leftIcon={<Plus size={12} />} onClick={addModel}>
                 添加
               </Button>
             </div>
           </Field>
 
           <Checkbox
-            label="设为默认图像 Provider"
+            label="设为默认图片生成服务"
             checked={setAsDefault}
             onChange={(checked) => setSetAsDefault(checked)}
             size="sm"
@@ -360,7 +362,7 @@ function ImageProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
             confirmLabel="保存"
             extra={
               Object.keys(errors).length > 0 ? (
-                <span className={styles.footerError}>请先补全 Provider 的必填项</span>
+                <span className={styles.footerError}>请先补全生成服务的必填项</span>
               ) : null
             }
           />
@@ -425,10 +427,12 @@ function TestButton({ provider }: TestButtonProps) {
         variant="ghost"
         size="sm"
         onClick={() => { void handleTest(); }}
-        disabled={status.kind === 'running'}
+        loading={status.kind === 'running'}
+        loadingText="测试中"
+        leftIcon={<TestTube2 size={12} />}
         className={styles.testButton}
       >
-        {status.kind === 'running' ? '测试中…' : '测试'}
+        测试
       </Button>
 
       {status.kind === 'unavailable' && (
@@ -473,11 +477,11 @@ export function ImageProviderListSection({
       getTypeLabel={(p) => getTypeLabel(p.type)}
       getCapsSummary={(p) => buildCapabilitiesSummaryText(p.type)}
       emptyState={{
-        eyebrow: 'Image Provider',
-        title: '暂无图像 Provider',
-        description: '点击下方按钮添加你的第一个图像 Provider。',
+        eyebrow: '图片生成',
+        title: '暂无图片生成服务',
+        description: '点击下方按钮添加你的第一个图片生成服务。',
       }}
-      addLabel="+ 添加图像 Provider"
+      addLabel="添加图片生成服务"
       renderCardExtras={(p) => <TestButton provider={p} />}
       renderDialog={(dialogProps) => <ImageProviderDialog {...dialogProps} />}
     />

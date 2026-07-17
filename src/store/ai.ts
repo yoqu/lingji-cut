@@ -6,10 +6,12 @@ import {
   toggleCardEnabledInResult,
   updateCardInResult,
 } from '../lib/ai-persistence';
+import { getProductionSaveGuard } from '../lib/production-save-guard';
 import { migrateToProviders } from '../lib/llm/provider-utils';
 import { isLingjiManagedProviderId } from '../lib/llm/lingji-gateway';
 import { migrateImageProviders } from '../lib/llm/migrate-image-providers';
 import { normalizeTTSSettings } from '../lib/tts-settings';
+import { normalizeSunoAudioSettings } from '../lib/audio-gen/settings';
 import { loadGlobalSettingsFile, updateGlobalSettingsFile } from '../lib/global-settings-client';
 import {
   DEFAULT_CARD_STYLE,
@@ -40,6 +42,8 @@ import type { SaveStatus } from './timeline';
 import { getCurrentProjectDir, useTimelineStore } from './timeline';
 import { getAISettingsIssue } from '../lib/ai-settings';
 import { planMotionConversion, mergeMotionConversionResult } from '../lib/ai-card-conversion';
+import type { AssetLibraryFile } from '../types/assets';
+import { buildMotionCardProductionReport } from '../lib/motion-production-report';
 
 export type WorkflowStep =
   | 'idle'
@@ -47,9 +51,14 @@ export type WorkflowStep =
   | 'script_generating'
   | 'tts_generating'
   | 'tts_done'
+  | 'director_planning'
+  | 'director_review'
+  | 'production_running'
+  | 'production_paused'
   | 'ai_analyzing'
   | 'cover_generating'
   | 'arranging'
+  | 'animatic_review'
   | 'done'
   | 'error';
 
@@ -57,6 +66,8 @@ export interface AutoWorkflowParams {
   templateId: string;
   roleId: string;
   voiceId: string;
+  /** 旧项目缺省为 auto。director 会在时间轴草稿生成后停下供人工确认。 */
+  productionMode?: 'auto' | 'director';
 }
 
 export interface WorkflowState {
@@ -159,6 +170,29 @@ function appendCardToStore(
   });
 }
 
+function markCardAsUserModified(
+  result: AIAnalysisResult | null,
+  cardId: string,
+): AIAnalysisResult | null {
+  const card = result?.cards.find((item) => item.id === cardId);
+  if (!card?.generationProvenance) return result;
+  return updateCardInResult(result, cardId, {
+    generationProvenance: {
+      ...card.generationProvenance,
+      modifiedByUser: true,
+    },
+  });
+}
+
+function markCoverAsUserModified(candidate: CoverCandidate): CoverCandidate {
+  return candidate.generationProvenance
+    ? {
+        ...candidate,
+        generationProvenance: { ...candidate.generationProvenance, modifiedByUser: true },
+      }
+    : candidate;
+}
+
 
 export function buildDefaultAISettings(): AISettings {
   return {
@@ -177,6 +211,7 @@ export function buildDefaultAISettings(): AISettings {
     defaultTtsProviderId: null,
     defaultTtsVoiceId: null,
     ttsVoices: [],
+    audioGeneration: normalizeSunoAudioSettings(),
     imageProviders: [],
     defaultImageProviderId: null,
     defaultImageModel: null,
@@ -190,7 +225,7 @@ export function buildDefaultAISettings(): AISettings {
   };
 }
 
-export type AITab = 'cards' | 'cover';
+export type AITab = 'cards' | 'cover' | 'production';
 
 /** 单个分段骨架占位（增量分析期间的瞬态 UI 状态）。 */
 export interface IncrementalSkeleton {
@@ -215,6 +250,11 @@ export const DEFAULT_INCREMENTAL_ANALYSIS: IncrementalAnalysisState = {
   cards: [],
 };
 
+export type AIPlanningSnapshot = Pick<
+  AIAnalysisResult,
+  'segments' | 'coverPrompts' | 'summary' | 'keywords' | 'globalPrompt'
+>;
+
 export interface AIStore {
   analysisResult: AIAnalysisResult | null;
   isAnalyzing: boolean;
@@ -230,13 +270,25 @@ export interface AIStore {
    */
   pendingAutoResumeStep: Extract<
     WorkflowStep,
-    'script_generating' | 'tts_generating' | 'ai_analyzing' | 'cover_generating' | 'arranging'
+    | 'script_generating'
+    | 'tts_generating'
+    | 'director_planning'
+    | 'production_running'
+    | 'ai_analyzing'
+    | 'cover_generating'
+    | 'arranging'
   > | null;
   setPendingAutoResumeStep: (
     step:
       | Extract<
           WorkflowStep,
-          'script_generating' | 'tts_generating' | 'ai_analyzing' | 'cover_generating' | 'arranging'
+          | 'script_generating'
+          | 'tts_generating'
+          | 'director_planning'
+          | 'production_running'
+          | 'ai_analyzing'
+          | 'cover_generating'
+          | 'arranging'
         >
       | null,
   ) => void;
@@ -277,10 +329,13 @@ export interface AIStore {
   }) => Promise<UserPromptEntry>;
   deleteUserPrompt: (category: PromptCategory, id: string) => Promise<void>;
   setAnalysisResult: (result: AIAnalysisResult) => void;
+  /** planning.segment 完成后立即写入正式分析结果，触发项目自动保存。 */
+  setPlannedAnalysisResult: (planning: AIPlanningSnapshot) => void;
   setAnalyzing: (analyzing: boolean) => void;
   setAnalysisError: (error: string | null) => void;
   toggleCardEnabled: (cardId: string) => void;
   updateCard: (cardId: string, updates: Partial<AICard>) => void;
+  reconcileAssetBindings: (library: AssetLibraryFile) => void;
   // —— 媒体卡（image/video）actions ——
   cardMediaTasks: Record<string, { taskId: string; phase: string; percent: number }>;
   createImageCard: (
@@ -351,6 +406,16 @@ export interface AIStore {
  * 用于 upsertAnalyzedCard 把 cards 始终维持在计划顺序（即便乱序到达），与持久化无关。
  */
 let incrementalPlannedOrder: string[] = [];
+
+function sortCardsBySegmentOrder(cards: AICard[], segmentOrder: string[]): AICard[] {
+  return [...cards].sort((a, b) => {
+    const ia = segmentOrder.indexOf(a.segmentId);
+    const ib = segmentOrder.indexOf(b.segmentId);
+    const ra = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
+    const rb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
+    return ra - rb || a.startMs - b.startMs;
+  });
+}
 
 export const useAIStore = create<AIStore>((set, get) => ({
   analysisResult: null,
@@ -510,6 +575,18 @@ export const useAIStore = create<AIStore>((set, get) => ({
     await saveAISettings({ ...baseSettings, promptBindings: nextBindings });
   },
   setAnalysisResult: (result) => set({ analysisResult: result, analysisError: null }),
+  setPlannedAnalysisResult: (planning) =>
+    set({
+      analysisResult: {
+        segments: planning.segments,
+        cards: [],
+        coverPrompts: planning.coverPrompts,
+        summary: planning.summary,
+        keywords: planning.keywords,
+        globalPrompt: planning.globalPrompt,
+      },
+      analysisError: null,
+    }),
   setAnalyzing: (analyzing) => set({ isAnalyzing: analyzing }),
   setAnalysisError: (error) =>
     set((state) => ({
@@ -517,13 +594,79 @@ export const useAIStore = create<AIStore>((set, get) => ({
       isAnalyzing: error ? false : state.isAnalyzing,
     })),
   toggleCardEnabled: (cardId) =>
-    set((state) => ({
-      analysisResult: toggleCardEnabledInResult(state.analysisResult, cardId),
-    })),
+    set((state) => {
+      const toggled = toggleCardEnabledInResult(state.analysisResult, cardId);
+      return { analysisResult: markCardAsUserModified(toggled, cardId) };
+    }),
   updateCard: (cardId, updates) =>
-    set((state) => ({
-      analysisResult: updateCardInResult(state.analysisResult, cardId, updates),
-    })),
+    set((state) => {
+      const updated = updateCardInResult(state.analysisResult, cardId, updates);
+      return { analysisResult: markCardAsUserModified(updated, cardId) };
+    }),
+  reconcileAssetBindings: (library) => {
+    const result = get().analysisResult;
+    if (!result) return;
+    const byId = new Map(library.assets.map((asset) => [asset.id, asset]));
+    const changedCards: AICard[] = [];
+    const cards = result.cards.map((card) => {
+      if (!card.assetBindings?.length) return card;
+      const missing = card.assetBindings.filter((binding) => !byId.has(binding.assetId));
+      const bindings = card.assetBindings.flatMap((binding) => {
+        const asset = byId.get(binding.assetId);
+        if (!asset) return [];
+        return [{
+          ...binding,
+          filePath: asset.files.processed || asset.files.thumbnail || asset.files.original,
+          treatment: asset.treatment,
+          metadata: {
+            width: asset.metadata.width,
+            height: asset.metadata.height,
+            hasAlpha: asset.metadata.hasAlpha,
+            processedAt: asset.metadata.processedAt,
+            processedColorKey: asset.metadata.processedColorKey,
+          },
+        }];
+      });
+      const existingReport = card.motionCard?.productionReport;
+      const retainedIssues = (existingReport?.assetIssues ?? [])
+        .filter((issue) => issue.code !== 'asset-binding-missing');
+      const missingIssues = missing.map((binding) => ({
+        severity: 'error' as const,
+        code: 'asset-binding-missing',
+        message: `资产“${binding.request?.query ?? binding.slot}”已不存在，请重新选择或生成。`,
+      }));
+      const productionReport = existingReport
+        ? {
+            ...existingReport,
+            status: missingIssues.length > 0 ? 'risk' as const : existingReport.status,
+            assetIssues: [...retainedIssues, ...missingIssues.map((issue) => ({ ...issue, source: 'asset' as const }))],
+          }
+        : missingIssues.length > 0
+          ? buildMotionCardProductionReport({ assetIssues: missingIssues })
+          : undefined;
+      const nextCard = {
+        ...card,
+        assetBindings: bindings,
+        motionCard: card.motionCard && productionReport
+          ? { ...card.motionCard, productionReport }
+          : card.motionCard,
+      };
+      if (JSON.stringify(nextCard.assetBindings) !== JSON.stringify(card.assetBindings) || missing.length > 0) {
+        changedCards.push(nextCard);
+        return nextCard;
+      }
+      return card;
+    });
+    if (changedCards.length === 0) return;
+    set({ analysisResult: { ...result, cards } });
+    const timeline = useTimelineStore.getState();
+    for (const card of changedCards) {
+      if (timeline.timeline.overlays.some((overlay) =>
+        overlay.overlayType === 'ai-card' && overlay.aiCardData?.sourceCardId === card.id)) {
+        timeline.addAICardsToTimeline([buildAICardTimelineDraft(card, result.motionBible)]);
+      }
+    }
+  },
   cardMediaTasks: {},
   createImageCard: async (segmentId, opts) => {
     const card = buildMediaCardSkeleton('image', segmentId, get().analysisResult, {
@@ -640,6 +783,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
           cardPrompt: card.cardPrompt,
           programSummary: result.summary,
           keywords: result.keywords,
+          motionBible: result.motionBible,
           projectDir,
           projectBindings,
           feedId: taskId,
@@ -652,6 +796,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
           globalPrompt,
           programSummary: result.summary,
           keywords: result.keywords,
+          motionBible: result.motionBible,
           projectDir,
           projectBindings,
           feedId: taskId,
@@ -675,7 +820,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
         (o) => o.overlayType === 'ai-card' && o.aiCardData?.sourceCardId === cardId,
       );
       if (placed) {
-        timeline.addAICardsToTimeline([buildAICardTimelineDraft(merged)]);
+        timeline.addAICardsToTimeline([buildAICardTimelineDraft(merged, result.motionBible)]);
       }
 
       taskProgress.completeTask(taskId);
@@ -782,6 +927,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
           cardId,
           prompt: mergedContent.prompt,
           negativePrompt: mergedContent.negativePrompt,
+          backgroundRemoval: mergedContent.backgroundRemoval ?? 'none',
           aspectRatio: mergedContent.aspectRatio,
           providerId: mergedContent.providerId,
           model: mergedContent.model,
@@ -867,7 +1013,7 @@ export const useAIStore = create<AIStore>((set, get) => ({
       }));
     }
     if (taskEntry) {
-      useTaskProgressStore.getState().failTask(taskEntry.taskId, 'cancelled');
+      useTaskProgressStore.getState().cancelTask(taskEntry.taskId, '用户取消生成');
       set((s) => {
         const next = { ...s.cardMediaTasks };
         delete next[cardId];
@@ -910,13 +1056,13 @@ export const useAIStore = create<AIStore>((set, get) => ({
   replaceCoverCandidate: (candidateId, patch) =>
     set((state) => ({
       coverCandidates: state.coverCandidates.map((c) =>
-        c.id === candidateId ? { ...c, ...patch } : c,
+        c.id === candidateId ? markCoverAsUserModified({ ...c, ...patch }) : c,
       ),
     })),
   updateCoverEdits: (candidateId, edits) =>
     set((state) => ({
       coverCandidates: state.coverCandidates.map((c) =>
-        c.id === candidateId ? { ...c, edits } : c,
+        c.id === candidateId ? markCoverAsUserModified({ ...c, edits }) : c,
       ),
     })),
   selectCover: (candidateId) =>
@@ -959,19 +1105,29 @@ export const useAIStore = create<AIStore>((set, get) => ({
       const prev = state.incrementalAnalysis;
       // 插入/替换 cards：按 segmentId 去重，再按计划顺序排序（乱序到达也稳定）
       const withoutSame = prev.cards.filter((c) => c.segmentId !== card.segmentId);
-      const nextCards = [...withoutSame, card].sort((a, b) => {
-        const ia = incrementalPlannedOrder.indexOf(a.segmentId);
-        const ib = incrementalPlannedOrder.indexOf(b.segmentId);
-        // 计划外的 segmentId（理论上不应出现）排到末尾，保持稳定
-        const ra = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-        const rb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-        return ra - rb;
-      });
+      const nextCards = sortCardsBySegmentOrder(
+        [...withoutSame, card],
+        incrementalPlannedOrder,
+      );
       // 该分段已由真实卡片代表，移除其骨架
       const nextSkeletons = prev.skeletons.filter(
         (s) => s.segmentId !== card.segmentId,
       );
+      const result = state.analysisResult;
+      const nextAnalysisResult = result
+        ? {
+            ...result,
+            cards: sortCardsBySegmentOrder(
+              [
+                ...result.cards.filter((c) => c.segmentId !== card.segmentId),
+                card,
+              ],
+              result.segments.map((segment) => segment.id),
+            ),
+          }
+        : result;
       return {
+        analysisResult: nextAnalysisResult,
         incrementalAnalysis: {
           ...prev,
           cards: nextCards,
@@ -1048,6 +1204,7 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
     defaultTtsProviderId: media.defaultTtsProviderId,
     defaultTtsVoiceId: raw.defaultTtsVoiceId ?? null,
     ttsVoices: raw.ttsVoices ?? [],
+    audioGeneration: normalizeSunoAudioSettings(raw.audioGeneration),
     imageProviders: raw.imageProviders ?? [],
     defaultImageProviderId: raw.defaultImageProviderId ?? null,
     defaultImageModel: raw.defaultImageModel ?? null,
@@ -1136,6 +1293,7 @@ if (typeof window !== 'undefined') {
     }
 
     emitAISaveStatus('saving');
+    const productionGuard = getProductionSaveGuard();
     if (aiSaveTimer) {
       clearTimeout(aiSaveTimer);
     }
@@ -1145,8 +1303,19 @@ if (typeof window !== 'undefined') {
         state.analysisResult,
         state.coverCandidates,
       );
-      void window.electronAPI
-        .saveProjectSection(projectDir, 'aiAnalysis', JSON.stringify(persistedState))
+      const saveRequest = productionGuard
+        ? window.electronAPI.saveProjectSection(
+            projectDir,
+            'aiAnalysis',
+            JSON.stringify(persistedState),
+            productionGuard,
+          )
+        : window.electronAPI.saveProjectSection(
+            projectDir,
+            'aiAnalysis',
+            JSON.stringify(persistedState),
+          );
+      void saveRequest
         .then(() => {
           emitAISaveStatus('saved');
         })

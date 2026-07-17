@@ -1,0 +1,31 @@
+.root { display: grid; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-8); border-top: 1px solid var(--color-separator); background: var(--color-panel-bg); }
+.header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.header > div:first-child { display: grid; gap: 3px; }
+.header span { color: var(--color-text-muted); font-size: var(--font-size-xs); }
+.header strong { color: var(--color-text-primary); font-size: var(--font-size-lg); }
+.headerActions { display: flex; align-items: center; gap: var(--space-2); }
+.progressGrid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: var(--space-2); overflow-x: auto; }
+.progressItem { display: grid; min-width: 120px; gap: 5px; padding: var(--space-2); border-radius: var(--radius-sm); background: var(--color-control-bg); }
+.progressItem span, .progressItem small { overflow: hidden; color: var(--color-text-secondary); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+.progressItem small { color: var(--color-text-muted); }
+.progressItem > div { height: 2px; overflow: hidden; border-radius: 1px; background: var(--color-separator); }
+.progressItem i { display: block; height: 100%; background: var(--color-system-blue); transition: width .2s ease; }
+.content { min-height: 260px; display: grid; gap: var(--space-3); align-content: start; }
+.failedPanel { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-danger) 8%, transparent); }
+.failedHeader { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.failedHeader > span { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.failedList { display: grid; max-height: 220px; margin: 0; padding: 0; gap: var(--space-2); list-style: none; overflow-y: auto; }
+.failedList li { display: grid; gap: 2px; }
+.failedList strong { color: var(--color-text-primary); font-size: var(--font-size-xs); }
+.failedList span { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; color: var(--color-text-muted); font-size: var(--font-size-xs); line-height: 1.5; word-break: break-all; }
+.empty { display: grid; min-height: 220px; place-items: center; color: var(--color-text-muted); font-size: var(--font-size-sm); }
+.coverWorkspace { display: grid; gap: var(--space-4); }
+.coverActions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+.promptField { display: grid; gap: 6px; }
+.promptField > span { color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.coverGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-3); }
+.coverButton { position: relative; min-width: 0; padding: 0; overflow: hidden; border: 1px solid var(--color-separator); border-radius: var(--radius-md); background: var(--color-control-bg); color: var(--color-text-muted); cursor: pointer; aspect-ratio: 16 / 9; }
+.coverButton[data-selected='true'] { border-color: var(--color-system-blue); box-shadow: inset 0 0 0 1px var(--color-system-blue); }
+.coverButton img { width: 100%; height: 100%; object-fit: cover; }
+@media (max-width: 900px) { .root { padding-inline: var(--space-4); } .progressGrid { grid-template-columns: repeat(5, 140px); } }
+@media (prefers-reduced-motion: reduce) { .progressItem i { transition: none; } }

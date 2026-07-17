@@ -84,6 +84,45 @@
   line-height: 1.6;
 }
 
+.approvalGroup {
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+}
+
+.approvalOption {
+  width: 100%;
+  height: auto !important;
+  min-height: 54px;
+  justify-content: flex-start !important;
+  align-items: flex-start !important;
+  padding: var(--space-3) var(--space-4) !important;
+  border: 1px solid var(--color-border-control) !important;
+  text-align: left;
+}
+
+.approvalIcon,
+.cautionIcon,
+.selectedIcon {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.approvalIcon { color: var(--color-text-muted); }
+.cautionIcon { color: var(--color-danger); }
+.selectedIcon { margin-left: auto; color: var(--color-system-blue); }
+
+.approvalCopy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.approvalLabel { color: var(--color-text-primary); font-size: var(--font-size-md); }
+.approvalDescription { color: var(--color-text-muted); font-size: var(--font-size-sm); }
+
 .skillRow {
   display: flex;
   align-items: center;
@@ -102,9 +141,11 @@
   gap: var(--space-1);
   min-width: 0;
   flex: 1;
-  padding: var(--space-1) 0;
-  border: none;
-  background: transparent;
+  height: auto !important;
+  align-items: stretch !important;
+  justify-content: center !important;
+  padding: var(--space-1) 0 !important;
+  background: transparent !important;
   text-align: left;
   cursor: pointer;
 }

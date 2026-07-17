@@ -247,7 +247,7 @@ export function AutoRunController({ setPage }: AutoRunControllerProps) {
   ]);
 
   // 统一取消处理：导入前置阶段 useAIVideoWorkflow 还没起跑，cancel() 是 no-op，
-  // 这里要主动失败掉导入任务，再清空所有 pending state 并打上 aborted 标记。
+  // 这里要主动取消导入任务，再清空所有 pending state 并打上 aborted 标记。
   const handleCancel = () => {
     // 先打 aborted 旗：cancel() 触发 workflow.error='任务已取消'，watch-effect 会复跑，
     // 此时通过 abortedRef 早退避免清理双发
@@ -255,7 +255,7 @@ export function AutoRunController({ setPage }: AutoRunControllerProps) {
     if (mediaTaskIdRef.current) {
       const task = useTaskProgressStore.getState().tasks.get(mediaTaskIdRef.current);
       if (task?.status === 'active') {
-        useTaskProgressStore.getState().failTask(mediaTaskIdRef.current, '任务已取消');
+        useTaskProgressStore.getState().cancelTask(mediaTaskIdRef.current, '任务已取消');
       }
     }
     cancel();
@@ -266,7 +266,7 @@ export function AutoRunController({ setPage }: AutoRunControllerProps) {
     startedRef.current = false;
     mediaKickedRef.current = false;
     mediaTaskIdRef.current = null;
-    setPage('script-workbench');
+    setPage(workflow.step === 'production_running' ? 'director-workbench' : 'script-workbench');
   };
 
   // ── overlay 展示用：导入期间把 workflow.step 虚拟成 'douyin_importing' ──
@@ -290,6 +290,7 @@ export function AutoRunController({ setPage }: AutoRunControllerProps) {
       step={effectiveStep}
       stepLabel={effectiveLabel}
       progress={effectiveProgress}
+      canCancel={mediaPhase ? false : workflow.canCancel}
       error={
         workflow.step === 'error' && workflow.error && workflow.error !== '任务已取消'
           ? { message: workflow.error, failedStep: workflow.failedStep ?? 'arranging' }
@@ -305,6 +306,16 @@ export function AutoRunController({ setPage }: AutoRunControllerProps) {
         abortedRef.current = true;
         setPage('script-workbench');
       }}
+      onJumpToDirector={() => {
+        setPendingAutoParams(null);
+        setPendingAutoResumeStep(null);
+        useScriptStore.getState().setPendingMediaImport(null);
+        useScriptStore.getState().clearVideoImportState();
+        startedRef.current = false;
+        abortedRef.current = true;
+        useAIStore.getState().resetWorkflow();
+        setPage('director-workbench');
+      }}
       onJumpToEditor={() => {
         setPendingAutoParams(null);
         setPendingAutoResumeStep(null);
@@ -312,6 +323,9 @@ export function AutoRunController({ setPage }: AutoRunControllerProps) {
         useScriptStore.getState().clearVideoImportState();
         startedRef.current = false;
         abortedRef.current = true;
+        if (workflow.step === 'animatic_review') {
+          useAIStore.getState().resetWorkflow();
+        }
         setPage('editor');
       }}
     />

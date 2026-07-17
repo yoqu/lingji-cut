@@ -6,6 +6,7 @@ import {
   runRegenerateCard,
   runRegenerateCardMedia,
   runConvertCard,
+  runSculptCard,
 } from '../electron/pipeline/runs/card-run';
 
 function project(card: unknown, segment: unknown): string {
@@ -96,7 +97,7 @@ describe('runRegenerateCard', () => {
     }
   });
 
-  it('loads cards.animation template and passes animationTemplate/animationDirection', async () => {
+  it('loads cards.animation template without passing the previous storyboard to regeneration', async () => {
     const motionCard = { ...CARD, type: 'summary', animationDirection: '逐拍：先标题后正文' };
     const dir = project(motionCard, SEG);
     const u = ud();
@@ -115,7 +116,8 @@ describe('runRegenerateCard', () => {
       expect((captured!.animationTemplate as { name?: string } | undefined)?.name).toBe(
         'cards.animation',
       );
-      expect(captured!.animationDirection).toBe('逐拍：先标题后正文');
+      expect(captured!.animationDirection).toBeUndefined();
+      expect(captured!.refineExistingMotion).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(u, { recursive: true, force: true });
@@ -132,6 +134,41 @@ describe('runRegenerateCard', () => {
           { regenerate: async () => ({}) as never },
         ),
       ).rejects.toMatchObject({ code: 'card_not_found' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(u, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runSculptCard', () => {
+  it('explicitly enables the previous storyboard and source only for refine mode', async () => {
+    const motionCard = {
+      ...CARD,
+      type: 'summary',
+      animationDirection: '逐拍：先标题后正文',
+      motionCard: {
+        tsx: 'export default function Card(){ return null; }',
+        compiledAt: 1,
+        prompt: '',
+        retryCount: 0,
+      },
+    };
+    const dir = project(motionCard, SEG);
+    const u = ud();
+    try {
+      let captured: Record<string, unknown> | undefined;
+      await runSculptCard(
+        { projectPath: dir, userDataPath: u, handle: handle() as never, params: { cardId: 'c1' } },
+        {
+          regenerate: async (_e, card, _s, _set, opts) => {
+            captured = opts;
+            return { ...card } as never;
+          },
+        },
+      );
+      expect(captured?.refineExistingMotion).toBe(true);
+      expect(captured?.animationDirection).toBe('逐拍：先标题后正文');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(u, { recursive: true, force: true });

@@ -58,8 +58,8 @@ export function pipelineTaskStoreId(taskId: string): string {
 
 const KIND_MAP: Record<PipelineTaskKind, { category: PipelineTaskCategory; label: string }> = {
   tts: { category: 'tts', label: '生成口播音频' },
-  write_script: { category: 'ai-write', label: 'AI 写稿' },
-  review_script: { category: 'ai-review', label: 'AI 审稿' },
+  write_script: { category: 'ai-write', label: '生成口播稿' },
+  review_script: { category: 'ai-review', label: '审查口播稿' },
   analyze_subtitles: { category: 'ai-analyze', label: '字幕分析' },
   generate_covers: { category: 'cover', label: '生成封面' },
   generate_storyboard: { category: 'ai-analyze', label: '生成分镜' },
@@ -108,7 +108,7 @@ export interface PipelineProgressBridgeDeps {
   updateTask: (id: string, patch: { progress: number; phase: string }) => void;
   completeTask: (id: string) => void;
   failTask: (id: string, error: string) => void;
-  removeTask: (id: string) => void;
+  cancelTask: (id: string, reason?: string) => void;
   hasTask: (id: string) => boolean;
   /** 取消 pipeline 任务（渲染端 → 主进程）。不提供则任务不可取消。 */
   cancel?: (taskId: string) => void;
@@ -121,7 +121,7 @@ export interface PipelineProgressBridge {
 /**
  * 创建进度桥：把每个 PipelineTask 快照按 `pipeline:<taskId>` 幂等落到统一进度系统。
  * - running/pending：首见 startTask，其后 updateTask（真实百分比）。
- * - succeeded：completeTask；failed：failTask；canceled：removeTask。
+ * - succeeded：completeTask；failed：failTask；canceled：cancelTask。
  * 调用方在卸载时必须 dispose()。
  */
 export function createPipelineProgressBridge(
@@ -142,7 +142,7 @@ export function createPipelineProgressBridge(
       return;
     }
     if (task.status === 'canceled') {
-      deps.removeTask(id);
+      deps.cancelTask(id, '任务已取消');
       return;
     }
 

@@ -2,12 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveStreamingEditor } from '../src/lib/live-streaming-editor';
 import type { AnimationFrame } from '../src/lib/streaming-editor';
 
+vi.mock('@codemirror/view', () => ({
+  EditorView: {
+    scrollIntoView: (position: number, options: unknown) => ({
+      type: 'scrollIntoView',
+      position,
+      options,
+    }),
+  },
+}));
+
 vi.mock('../src/lib/virtual-cursor', () => ({
   setVirtualCursor: { of: (value: number) => ({ type: 'setVirtualCursor', value }) },
   clearVirtualCursor: { of: (_value: null) => ({ type: 'clearVirtualCursor' }) },
 }));
 
-function makeMockView(initialDoc = '') {
+function makeMockView(
+  initialDoc = '',
+  scrollDOM = { scrollTop: 0, scrollHeight: 0, clientHeight: 100 },
+) {
   let doc = initialDoc;
   const view = {
     state: {
@@ -24,6 +37,7 @@ function makeMockView(initialDoc = '') {
         doc = doc.slice(0, from) + (insert ?? '') + doc.slice(to ?? from);
       }
     }),
+    scrollDOM,
   };
   return view;
 }
@@ -83,6 +97,54 @@ describe('LiveStreamingEditor', () => {
     await vi.advanceTimersByTimeAsync(20);
 
     expect(view.state.doc.toString().length).toBeGreaterThan(2);
+  });
+
+  it('follows the AI cursor while near the bottom and pauses after the user scrolls up', async () => {
+    const scrollDOM = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+    const view = makeMockView('', scrollDOM);
+    const player = new LiveStreamingEditor(view as any, {
+      chunkSize: 1,
+      frameDelayMs: 20,
+    });
+
+    player.pushText('A');
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(view.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effects: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'scrollIntoView',
+            position: 1,
+            options: { y: 'end' },
+          }),
+        ]),
+      }),
+    );
+
+    scrollDOM.scrollTop = 200;
+    view.dispatch.mockClear();
+    player.pushText('B');
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(
+      view.dispatch.mock.calls.some(([spec]: any[]) =>
+        Array.isArray(spec.effects) &&
+        spec.effects.some((effect: any) => effect.type === 'scrollIntoView'),
+      ),
+    ).toBe(false);
+
+    scrollDOM.scrollTop = 400;
+    view.dispatch.mockClear();
+    player.pushText('C');
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(
+      view.dispatch.mock.calls.some(([spec]: any[]) =>
+        Array.isArray(spec.effects) &&
+        spec.effects.some((effect: any) => effect.type === 'scrollIntoView'),
+      ),
+    ).toBe(true);
   });
 
   it('stop commits current content and halts remaining playback', async () => {

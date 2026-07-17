@@ -21,6 +21,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
 }
 
 .right {
@@ -164,7 +165,9 @@
 
 .progressFillLine {
   height: 100%;
+  background: var(--color-system-blue);
   transition: width 0.3s ease;
+  will-change: width, transform;
 }
 
 .progressFillLine[data-mode='indeterminate'],
@@ -183,3 +186,85 @@
   }
 }
 
+/* 底部任务摘要：活跃状态只使用系统蓝，终态颜色仅表达语义。 */
+.taskSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  height: 22px;
+  margin: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.taskSummary:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.taskSummary:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.taskSummaryIcon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--color-system-blue);
+}
+
+.taskSummary[data-status='completed'] .taskSummaryIcon {
+  color: var(--color-success);
+}
+
+.taskSummary[data-status='error'] .taskSummaryIcon {
+  color: var(--color-danger);
+}
+
+.taskSummary[data-status='cancelled'] .taskSummaryIcon {
+  color: var(--color-text-tertiary);
+}
+
+.taskSummaryLabel {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskSummaryProgress {
+  width: 64px;
+  flex-shrink: 0;
+}
+
+.taskSummaryPercent {
+  width: 30px;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.taskSummaryCount {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progressFillLine,
+  .progressFillLine[data-mode='indeterminate'],
+  .progressFillLine[data-mode='streaming'] {
+    animation: none;
+    transition: none;
+  }
+}

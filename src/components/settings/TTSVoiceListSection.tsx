@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import type { TTSProvider, TTSVoicePreset } from '../../types/ai';
 import { Badge, Button, EmptyState } from '../../ui';
 import { createDefaultTTSVoice, TTSVoiceDialog } from './TTSVoiceDialog';
@@ -49,8 +50,8 @@ export function TTSVoiceListSection({
         <EmptyState
           eyebrow="Voice"
           title="暂无音色"
-          description="添加系统音色或克隆音色后即可作为默认 TTS 音色。"
-          actions={<Button type="button" variant="secondary" onClick={openAdd} disabled={providers.length === 0}>+ 添加音色</Button>}
+          description="添加系统音色或克隆音色后即可作为默认口播音色。"
+          actions={<Button type="button" variant="secondary" leftIcon={<Plus size={14} />} onClick={openAdd} disabled={providers.length === 0}>添加音色</Button>}
         />
       ) : (
         <>
@@ -66,12 +67,12 @@ export function TTSVoiceListSection({
                       <Badge variant="secondary" size="xs">{voice.source === 'cloned' ? '克隆' : '系统'}</Badge>
                     </div>
                     <div className={styles.providerActions}>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setEditTarget(voice)}>编辑</Button>
-                      <Button type="button" variant="destructive" size="sm" onClick={() => handleDelete(voice.id)}>删除</Button>
+                      <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => setEditTarget(voice)}>编辑</Button>
+                      <Button type="button" variant="destructive" size="sm" leftIcon={<Trash2 size={12} />} onClick={() => handleDelete(voice.id)}>删除</Button>
                     </div>
                   </div>
                   <span className={styles.providerCapsSummary}>
-                    {provider?.name ?? '未知 Provider'} · {voice.model ?? '未配置模型'}
+                    {provider?.name ?? '未知生成服务'} · {voice.model ?? '未配置模型'}
                   </span>
                   <span className={styles.providerBaseUrl}>
                     {voice.source === 'cloned' ? voice.referenceAudioPath : voice.voiceId}
@@ -80,7 +81,7 @@ export function TTSVoiceListSection({
               );
             })}
           </div>
-          <Button type="button" variant="secondary" className={styles.addProviderButton} onClick={openAdd} disabled={providers.length === 0}>+ 添加音色</Button>
+          <Button type="button" variant="secondary" className={styles.addProviderButton} leftIcon={<Plus size={14} />} onClick={openAdd} disabled={providers.length === 0}>添加音色</Button>
         </>
       )}
 

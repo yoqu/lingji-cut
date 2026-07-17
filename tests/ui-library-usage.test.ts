@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +9,27 @@ function readSource(relativePath: string): string {
   return readFileSync(resolve(TEST_DIR, '..', relativePath), 'utf8');
 }
 
+function listTsxFiles(relativeDir: string): string[] {
+  const absoluteDir = resolve(TEST_DIR, '..', relativeDir);
+  return readdirSync(absoluteDir, { withFileTypes: true }).flatMap((entry) => {
+    const relativePath = `${relativeDir}/${entry.name}`;
+    if (entry.isDirectory()) return listTsxFiles(relativePath);
+    return entry.isFile() && entry.name.endsWith('.tsx') ? [relativePath] : [];
+  });
+}
+
 describe('AI assistant business components use the shared UI library', () => {
+  it('keeps settings business components free of raw form controls', () => {
+    const settingsFiles = [
+      'src/pages/Settings.tsx',
+      ...listTsxFiles('src/components/settings'),
+    ];
+
+    for (const file of settingsFiles) {
+      expect(readSource(file), file).not.toMatch(/<(?:button|input|select|textarea)\b/);
+    }
+  });
+
   it('keeps AI inspectors typography aligned with design.pen', () => {
     const cardInspectorCss = readSource('src/components/AICardInspector.module.css');
 
@@ -27,11 +47,22 @@ describe('AI assistant business components use the shared UI library', () => {
 
     expect(editorCss).toMatch(/\.sidebarTabsTrigger\s*{[^}]*min-height:\s*27px;/s);
     expect(editorSource).toContain('<AppIcon name="folder-open" size={14}');
-    expect(editorSource).toContain('<AppIcon name="sparkles" size={14}');
+    expect(editorSource).toContain('<AppIcon name="film" size={14}');
+    expect(editorSource).toContain('<EditorShotNavigator');
     expect(assetCardCss).toMatch(
       /\.root\s*{[^}]*width:\s*96px;[^}]*height:\s*96px;[^}]*border-radius:\s*var\(--radius-lg\);/s,
     );
     expect(assetPanelCss).toMatch(/\.filterPill\s*{[^}]*min-height:\s*22px\s*!important;/s);
+  });
+
+  it('keeps AssetCenter type filters on one line', () => {
+    const assetCenterCss = readSource('src/pages/AssetCenter.module.css');
+
+    expect(assetCenterCss).toMatch(
+      /\.filterTabs\s*{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(54px,\s*max-content\)\);/s,
+    );
+    expect(assetCenterCss).toMatch(/\.typeButton\s*{[^}]*white-space:\s*nowrap;/s);
+    expect(assetCenterCss).toMatch(/\.typeButton\s*{[^}]*min-width:\s*54px;/s);
   });
 
   it('keeps SubtitleInspector free of local compact field shells and raw select controls', () => {

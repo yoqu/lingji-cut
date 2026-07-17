@@ -272,6 +272,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.publishedAt {
+  font-size: 11px;
+  color: var(--color-mac-text-muted, var(--color-muted-foreground));
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .itemTitle {
   font-weight: 500;
   font-size: 13px;

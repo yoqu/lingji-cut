@@ -5,6 +5,7 @@ import { filterValidSubtitleHighlights } from "../lib/subtitle-highlights";
 import { getFileNameFromPath } from "../lib/utils";
 import type { SubtitleStyle } from "../types";
 import { loadAISettings } from "../store/ai";
+import { useTaskProgressStore } from "../store/task-progress";
 import { useTimelineStore } from "../store/timeline";
 import { Button, ColorField, NumberField, Select, Switch } from "../ui";
 import { AppIcon } from "./AppIcon";
@@ -21,9 +22,14 @@ const HIGHLIGHT_ANIMATION_OPTIONS: Array<{
 
 export function SubtitleInspector() {
   const [isGeneratingHighlights, setIsGeneratingHighlights] = useState(false);
+  const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
   const [subtitleHighlightError, setSubtitleHighlightError] = useState<
     string | null
   >(null);
+  const highlightInFlightRef = useRef(false);
+  const highlightTask = useTaskProgressStore((state) =>
+    highlightTaskId ? state.tasks.get(highlightTaskId) ?? null : null,
+  );
   const {
     srtEntries,
     originalSrtEntries,
@@ -50,37 +56,74 @@ export function SubtitleInspector() {
   );
 
   const handleGenerateSubtitleHighlights = useCallback(async () => {
-    const settings = await loadAISettings();
-    const settingsIssue = getAISettingsIssue(settings);
-    if (settingsIssue) {
-      setSubtitleHighlightError(settingsIssue);
-      return;
-    }
-    if (!settings) {
-      setSubtitleHighlightError("请先完成 AI 配置");
-      return;
-    }
-
-    if (srtEntries.length === 0) {
-      setSubtitleHighlightError("请先导入 SRT 字幕文件");
-      return;
-    }
-
+    if (highlightInFlightRef.current) return;
+    highlightInFlightRef.current = true;
     setIsGeneratingHighlights(true);
     setSubtitleHighlightError(null);
+    let taskId: string | null = null;
 
     try {
-      const highlights = await generateSubtitleHighlights(srtEntries, settings);
+      const settings = await loadAISettings();
+      const settingsIssue = getAISettingsIssue(settings);
+      if (settingsIssue || !settings) {
+        setSubtitleHighlightError(settingsIssue ?? "请先完成 AI 配置");
+        return;
+      }
+      if (srtEntries.length === 0) {
+        setSubtitleHighlightError("请先导入 SRT 字幕文件");
+        return;
+      }
+
+      const nextTaskId = `subtitle-highlights-${Date.now()}`;
+      taskId = nextTaskId;
+      setHighlightTaskId(nextTaskId);
+      useTaskProgressStore.getState().startTask({
+        id: nextTaskId,
+        category: "ai-analyze",
+        label: storedSubtitleHighlightCount > 0
+          ? "重新生成关键词高亮"
+          : "生成关键词高亮",
+        mode: "determinate",
+        progress: 0,
+        phase: `准备分析 ${srtEntries.length} 条字幕`,
+        level: 2,
+        canCancel: false,
+      });
+
+      const highlights = await generateSubtitleHighlights(srtEntries, settings, {
+        onProgress: ({ processedEntries, totalEntries, percent }) => {
+          useTaskProgressStore.getState().updateTask(nextTaskId, {
+            progress: percent,
+            phase: processedEntries === 0
+              ? `准备分析 ${totalEntries} 条字幕`
+              : `生成关键词高亮 ${processedEntries}/${totalEntries}`,
+          });
+        },
+      });
+      useTaskProgressStore.getState().updateTask(nextTaskId, {
+        progress: 100,
+        phase: highlights.length > 0
+          ? `应用 ${highlights.length} 个关键词高亮`
+          : "未识别到需要高亮的关键词",
+      });
       setSubtitleHighlights(highlights);
       updateSubtitleStyle({ highlightEnabled: true });
+      useTaskProgressStore.getState().updateTask(nextTaskId, {
+        phase: highlights.length > 0
+          ? `已生成 ${highlights.length} 个关键词高亮`
+          : "未识别到需要高亮的关键词",
+      });
+      useTaskProgressStore.getState().completeTask(nextTaskId);
     } catch (error) {
-      setSubtitleHighlightError(
-        error instanceof Error ? error.message : "字幕关键词高亮生成失败",
-      );
+      const message = error instanceof Error ? error.message : "关键词高亮生成失败";
+      const detail = message.replace(/[。！？.!?]+$/, "");
+      setSubtitleHighlightError(`${detail}。请检查 AI 配置或网络后重新生成。`);
+      if (taskId) useTaskProgressStore.getState().failTask(taskId, message);
     } finally {
+      highlightInFlightRef.current = false;
       setIsGeneratingHighlights(false);
     }
-  }, [setSubtitleHighlights, srtEntries, updateSubtitleStyle]);
+  }, [setSubtitleHighlights, srtEntries, storedSubtitleHighlightCount, updateSubtitleStyle]);
 
   const handleSubtitleStyleUpdate = useCallback(
     (updates: Partial<SubtitleStyle>) => {
@@ -95,6 +138,21 @@ export function SubtitleInspector() {
     : "等待导入字幕";
   const validHighlightCount = validSubtitleHighlights.length;
   const highlightStatus = useMemo(() => {
+    if (highlightTask?.status === "active") {
+      return {
+        text: highlightTask.phase ?? "准备生成关键词高亮",
+        tone: "active" as const,
+      };
+    }
+
+    if (highlightTask?.status === "error") {
+      return { text: "关键词高亮生成失败，请重新生成", tone: "danger" as const };
+    }
+
+    if (highlightTask?.status === "completed" && highlightTask.phase) {
+      return { text: highlightTask.phase, tone: "success" as const };
+    }
+
     if (!timeline.podcast.srtPath) {
       return { text: "等待导入字幕后生成高亮", tone: "muted" as const };
     }
@@ -116,6 +174,7 @@ export function SubtitleInspector() {
     return { text: "尚未生成高亮", tone: "muted" as const };
   }, [
     expiredSubtitleHighlightCount,
+    highlightTask,
     timeline.podcast.srtPath,
     validHighlightCount,
   ]);
@@ -267,10 +326,10 @@ export function SubtitleInspector() {
           disabled={!timeline.podcast.srtPath || isGeneratingHighlights}
         >
           {isGeneratingHighlights
-            ? "正在生成高亮…"
+            ? "生成中..."
             : storedSubtitleHighlightCount > 0
-              ? "重新生成高亮"
-              : "生成高亮"}
+              ? "重新生成关键词高亮"
+              : "生成关键词高亮"}
         </Button>
 
         <div className={styles.inlineRow}>

@@ -11,7 +11,7 @@ const TOKENS_JSON = JSON.stringify({
 
 const SB: MotionStoryboard = {
   claim: '硕士报名人数远超博士',
-  carrier: 'comparison',
+  carrier: 'data-hero',
   scene: '双栏对比',
   focus: { beat: 1, emphasis: 'countup-settle' },
   beats: [
@@ -31,14 +31,23 @@ describe('buildFallbackCardTsx（分镜确定性兜底渲染）', () => {
     expect(result.issues.filter((i) => i.severity === 'error')).toEqual([]);
   });
 
-  it('焦点数字提取为 StatHero（千分位归一化），其余拍进 ListBuild 并锚到各自 beat', () => {
+  it('焦点数字提取为唯一 StatHero，并使用安全布局槽位', () => {
     const tsx = buildFallbackCardTsx(SB, TOKENS_JSON);
     expect(tsx).toContain('StatHero value={28842}');
     expect(tsx).toContain('unit="人"');
     expect(tsx).toContain('useBeats(cues, [null, 1, 2, 4])');
-    expect(tsx).toContain('beats[3]');
+    expect(tsx).toContain('<SafeLayout');
+    expect(tsx).toContain('<MotionSlot name="main" role="focus">');
+    expect(tsx).not.toContain('<ListBuild');
     // 上屏文字已清洗（去引号装饰、取子句）且不含口播整句
     expect(tsx).not.toContain('「');
+  });
+
+  it('single-focus 不生成未声明的 header 隐式网格行', () => {
+    const tsx = buildFallbackCardTsx({ ...SB, layout: 'single-focus' }, TOKENS_JSON);
+    expect(tsx).toContain('<SafeLayout variant="single-focus">');
+    expect(tsx).not.toContain('<MotionSlot name="header"');
+    expect(tsx).toContain('<MotionSlot name="main" role="focus">');
   });
 
   it('6 拍长文本分镜：hero + 列表限额后通过完整布局探针（含字幕安全区）', async () => {
@@ -57,7 +66,7 @@ describe('buildFallbackCardTsx（分镜确定性兜底渲染）', () => {
       ],
     };
     const tsx = buildFallbackCardTsx(long, TOKENS_JSON);
-    // 有 hero 时列表限 2 条（垂直预算），保证不溢入字幕安全区
+    // 兜底只保留一个主原语，保证不溢入字幕安全区
     expect((tsx.match(/beats\[\d+\]/g) ?? []).length).toBeLessThanOrEqual(4);
     const result = await validateMotionCardTsx(tsx, { cues: [0, 96, 200, 300, 420], checkRenderedLayout: true });
     expect(result.render.ok).toBe(true);
@@ -80,4 +89,23 @@ describe('buildFallbackCardTsx（分镜确定性兜底渲染）', () => {
     const result = await validateMotionCardTsx(tsx, { cues: [], checkRenderedLayout: false });
     expect(result.render.ok).toBe(true);
   });
+
+  it('新增专业 carrier 均有对应 fallback 原语', async () => {
+    const carriers = [
+      ['timeline', 'TimelineRail'],
+      ['matrix', 'MatrixQuadrant'],
+      ['funnel', 'FunnelStack'],
+      ['network', 'NetworkMap'],
+      ['before-after', 'BeforeAfter'],
+      ['stacked-composition', 'StackedComposition'],
+    ] as const;
+
+    for (const [carrier, primitive] of carriers) {
+      const tsx = buildFallbackCardTsx({ ...SB, carrier }, TOKENS_JSON);
+      expect(tsx).toContain(`<${primitive}`);
+      expect(lintMotionCardTsx(tsx).ok).toBe(true);
+      const result = await validateMotionCardTsx(tsx, { cues: [0, 40, 80, 120], checkRenderedLayout: false });
+      expect(result.render.ok).toBe(true);
+    }
+  }, 120_000);
 });

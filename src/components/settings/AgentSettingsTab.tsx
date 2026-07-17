@@ -22,6 +22,7 @@ import {
   Button,
   ConfirmDialog,
   Divider,
+  PillGroup,
   SaveButton,
   SettingsPageHeader,
   Switch,
@@ -195,7 +196,7 @@ export function AgentSettingsTab() {
       />
 
       <p className={styles.guideText}>
-        Pi 以内置 SDK 运行，无需单独安装。对话使用的模型与凭证统一在「AI Provider」设置中配置，
+        Pi 以内置 SDK 运行，无需单独安装。对话使用的模型与凭证统一在「AI 生成服务」设置中配置，
         会话内可在输入框下方切换具体模型与思考程度。
       </p>
 
@@ -203,32 +204,28 @@ export function AgentSettingsTab() {
       <p className={styles.guideText}>
         控制 Pi 执行工具调用时的批准方式。该设置全局生效，并与对话输入框底部的审批开关实时同步。
       </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {APPROVAL_MODES.map((mode) => {
+      <PillGroup
+        direction="vertical"
+        fullWidth
+        value={permissionPolicy}
+        className={styles.approvalGroup}
+        itemClassName={styles.approvalOption}
+        onChange={handlePolicyChange}
+        items={APPROVAL_MODES.map((mode) => {
           const Icon = mode.Icon;
-          const selected = mode.id === permissionPolicy;
-          return (
-            <button
-              key={mode.id}
-              type="button"
-              onClick={() => handlePolicyChange(mode.id)}
-              className={`flex w-full items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left transition-colors ${
-                selected ? 'border-mac-blue bg-mac-blue/10' : 'border-mac-border hover:bg-white/5'
-              }`}
-            >
-              <Icon
-                size={16}
-                className={`mt-0.5 shrink-0 ${mode.caution ? 'text-mac-red' : 'text-mac-text-muted/70'}`}
-              />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[13px] font-medium text-foreground">{mode.label}</span>
-                <span className="text-[12px] text-mac-text-muted/60">{mode.description}</span>
+          return {
+            value: mode.id,
+            label: <>
+              <Icon size={16} className={mode.caution ? styles.cautionIcon : styles.approvalIcon} />
+              <span className={styles.approvalCopy}>
+                <span className={styles.approvalLabel}>{mode.label}</span>
+                <span className={styles.approvalDescription}>{mode.description}</span>
               </span>
-              {selected ? <Check size={16} className="mt-0.5 shrink-0 text-mac-blue" /> : null}
-            </button>
-          );
+              {mode.id === permissionPolicy ? <Check size={16} className={styles.selectedIcon} /> : null}
+            </>,
+          };
         })}
-      </div>
+      />
 
       <Divider label="Skills" />
       <p className={styles.guideText}>
@@ -283,8 +280,11 @@ export function AgentSettingsTab() {
             : (agent.skills?.find((s) => s.id === skill.id)?.enabled ?? skill.enabled);
           return (
             <div key={skill.id} className={styles.skillRow}>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
+                fullWidth
                 className={styles.skillInfo}
                 onClick={() => setDetailSkill(skill)}
                 aria-label={`查看 ${skill.displayName} 详情`}
@@ -303,7 +303,7 @@ export function AgentSettingsTab() {
                 {skill.description ? (
                   <span className={styles.skillDesc}>{truncateDesc(skill.description)}</span>
                 ) : null}
-              </button>
+              </Button>
               <div className={styles.skillActions}>
                 <Switch
                   checked={cfgEnabled}

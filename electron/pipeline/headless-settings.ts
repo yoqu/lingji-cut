@@ -26,13 +26,13 @@ export async function loadHeadlessTTSConfig(userDataPath: string): Promise<Headl
   }
   const { provider, voice } = resolveDefaultTTSConfig(settings);
   if (!provider) {
-    throw new GenerationError('no_tts_provider', '未配置 TTS Provider，请先在应用设置中配置。');
+    throw new GenerationError('no_tts_provider', '未配置口播生成服务，请先在应用设置中配置。');
   }
   if (!voice) {
-    throw new GenerationError('no_tts_voice', '未配置 TTS 音色，请先在应用设置中配置。');
+    throw new GenerationError('no_tts_voice', '未配置口播音色，请先在应用设置中配置。');
   }
   if (!provider.apiKey?.trim()) {
-    throw new GenerationError('no_api_key', 'TTS Provider 缺少 API Key，请在应用设置中填写。');
+    throw new GenerationError('no_api_key', '口播生成服务缺少 API Key，请在应用设置中填写。');
   }
   return { provider, voice };
 }

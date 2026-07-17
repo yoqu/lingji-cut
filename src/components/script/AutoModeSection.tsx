@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { Sparkles } from 'lucide-react';
 import type { AutoWorkflowParams } from '../../store/ai';
-import { Checkbox, Field, Select } from '../../ui';
+import { Checkbox, Field, PillGroup, Select } from '../../ui';
 
 export interface AutoModeOption {
   value: string;
@@ -125,7 +125,7 @@ export function AutoModeSection({
   return (
     <div
       role="group"
-      aria-label="一键成稿"
+      aria-label="自动剪辑"
       style={cardStyle}
       onClick={handleCardClick}
     >
@@ -135,15 +135,15 @@ export function AutoModeSection({
             <Checkbox
               checked={enabled}
               onChange={(next) => onToggle?.(next)}
-              aria-label="启用一键成稿"
+              aria-label="启用自动剪辑"
             />
             <span style={titleStyle}>
               <Sparkles size={14} strokeWidth={1.75} color="var(--color-system-blue)" />
-              一键成稿
+              自动剪辑
             </span>
           </div>
           <div style={hintStyle}>
-            勾选后将自动完成：写稿 → TTS → 卡片 → 封面，并跳过审稿环节。
+            勾选后将自动完成：生成口播稿 → 合成口播 → 生成画面 → 生成封面，并跳过审稿环节。
           </div>
         </>
       ) : null}
@@ -168,6 +168,18 @@ export function AutoModeSection({
               />
             </Field>
           ) : null}
+          <Field label="制作模式">
+            <PillGroup
+              fullWidth
+              wrap={false}
+              value={params.productionMode ?? 'auto'}
+              items={[
+                { value: 'auto', label: '一键成片' },
+                { value: 'director', label: '导演确认' },
+              ]}
+              onChange={(productionMode) => update({ productionMode })}
+            />
+          </Field>
           <div
             style={{
               display: 'grid',
@@ -175,7 +187,7 @@ export function AutoModeSection({
               gap: 'var(--space-4)',
             }}
           >
-            <Field label="写稿角色" hint="等同 AI 写稿工作台的角色选项（含内置模板与自定义角色）">
+            <Field label="写稿角色" hint="等同写稿工作台的角色选项（含内置模板与自定义角色）">
               <Select
                 aria-label="写稿角色"
                 value={params.roleId}
@@ -183,9 +195,9 @@ export function AutoModeSection({
                 onChange={(e) => update({ roleId: e.target.value })}
               />
             </Field>
-            <Field label="TTS 音色" hint="可从列表选择，也可直接输入 voice_id（如 MiniMax 克隆音色）">
+            <Field label="口播音色" hint="可从列表选择，也可输入已配置的音色 ID">
               <Select
-                aria-label="TTS 音色"
+                aria-label="口播音色"
                 value={params.voiceId}
                 options={voiceOptions}
                 onChange={(e) => update({ voiceId: e.target.value })}

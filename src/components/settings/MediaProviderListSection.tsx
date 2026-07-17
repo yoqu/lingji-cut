@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { Badge, Button, EmptyState } from '../../ui';
 import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import styles from './ImageProviderListSection.module.css';
@@ -95,7 +96,7 @@ export function MediaProviderListSection<T extends MediaProviderBase>({
           title={emptyState.title}
           description={emptyState.description}
           actions={
-            <Button type="button" variant="secondary" onClick={openAdd}>
+            <Button type="button" variant="secondary" onClick={openAdd} leftIcon={<Plus size={14} />}>
               {addLabel}
             </Button>
           }
@@ -107,7 +108,7 @@ export function MediaProviderListSection<T extends MediaProviderBase>({
               <div key={p.id} className={styles.providerCard}>
                 <div className={styles.providerHeader}>
                   <div className={styles.providerTitleGroup}>
-                    <span className={styles.providerName}>{p.name || '未命名 Provider'}</span>
+                    <span className={styles.providerName}>{p.name || '未命名生成服务'}</span>
                     {p.id === defaultProviderId ? (
                       <Badge variant="info" size="xs">
                         默认
@@ -125,13 +126,14 @@ export function MediaProviderListSection<T extends MediaProviderBase>({
                       </Badge>
                     ) : (
                       <>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => openEdit(p)}>
+                        <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => openEdit(p)}>
                           编辑
                         </Button>
                         <Button
                           type="button"
                           variant="destructive"
                           size="sm"
+                          leftIcon={<Trash2 size={12} />}
                           onClick={() => handleDelete(p.id)}
                         >
                           删除
@@ -166,6 +168,7 @@ export function MediaProviderListSection<T extends MediaProviderBase>({
             type="button"
             variant="secondary"
             className={styles.addProviderButton}
+            leftIcon={<Plus size={14} />}
             onClick={openAdd}
           >
             {addLabel}

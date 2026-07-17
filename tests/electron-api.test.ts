@@ -42,6 +42,15 @@ describe('electron menu actions', () => {
     expect(source).toContain('getVideoImportStatus');
   });
 
+  it('exposes main-process reusable media search for file-health filtering', () => {
+    const api = readFileSync(new URL('../src/lib/electron-api.ts', import.meta.url), 'utf8');
+    const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/asset-library.ts', import.meta.url), 'utf8');
+    expect(api).toContain('searchReusableMediaAssets');
+    expect(preload).toContain("ipcRenderer.invoke('asset-library:search-reusable'");
+    expect(main).toContain('normalizeResolvableAssetLibrary(library)');
+  });
+
   it('no longer exposes the deprecated html-card import bridge', () => {
     const source = readFileSync(
       new URL('../src/lib/electron-api.ts', import.meta.url),

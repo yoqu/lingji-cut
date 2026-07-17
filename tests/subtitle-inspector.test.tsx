@@ -48,7 +48,7 @@ describe('SubtitleInspector', () => {
     expect(html).toContain('关键词高亮');
     expect(html).toContain('颜色与圆角');
     expect(html).toContain('动画与预览');
-    expect(html).toContain('重新生成高亮');
+    expect(html).toContain('重新生成关键词高亮');
     expect(html).toContain('高亮已生成');
     expect(html).toContain('启用高亮');
     expect(html).toContain('动画效果');

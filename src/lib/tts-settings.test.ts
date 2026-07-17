@@ -38,6 +38,7 @@ describe('normalizeTTSSettings', () => {
 
     expect(settings.ttsProviders).toHaveLength(1);
     expect(settings.ttsProviders[0]).toMatchObject({
+      name: 'MiniMax 默认口播',
       type: 'minimax',
       apiKey: 'legacy-key',
       models: ['speech-2.8-hd'],
@@ -56,6 +57,24 @@ describe('normalizeTTSSettings', () => {
     });
     expect(settings.defaultTtsProviderId).toBe(settings.ttsProviders[0].id);
     expect(settings.defaultTtsVoiceId).toBe(settings.ttsVoices[0].id);
+  });
+
+  it('updates the legacy default service name to the current product wording', () => {
+    const settings = normalizeTTSSettings(
+      baseSettings({
+        ttsProviders: [{
+          id: 'tts-provider-minimax-default',
+          name: 'MiniMax 默认 TTS',
+          type: 'minimax',
+          baseUrl: 'https://api.minimaxi.com',
+          apiKey: 'key',
+          models: ['speech-2.8-hd'],
+        }],
+        defaultTtsProviderId: 'tts-provider-minimax-default',
+      }),
+    );
+
+    expect(settings.ttsProviders[0]?.name).toBe('MiniMax 默认口播');
   });
 
   it('resolves the default provider from the default voice provider', () => {

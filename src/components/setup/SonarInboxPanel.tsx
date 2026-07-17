@@ -54,6 +54,15 @@ interface InboxRowProps {
  * 单条收件项（网格卡片）。memo + content-visibility（见 CSS）一起把长列表的渲染/排版成本降到只算可视区。
  * 封面用 loading="lazy"，滚动到才解码，避免几十张抖音 CDN 大图一次性占满主线程。
  */
+/** 视频发布时间 → 短格式：当年省略年份（07-05 12:53），跨年带年份。 */
+function formatPublishedAt(ts: number): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.getFullYear() === new Date().getFullYear() ? md : `${d.getFullYear()}-${md}`;
+}
+
 const InboxRow = memo(function InboxRow({ item, onDraft, onRemove }: InboxRowProps) {
   return (
     <li className={styles.item}>
@@ -70,6 +79,7 @@ const InboxRow = memo(function InboxRow({ item, onDraft, onRemove }: InboxRowPro
       )}
       <div className={styles.itemMeta}>
         <span className={styles.creator}>{item.creatorName}</span>
+        <span className={styles.publishedAt}>{formatPublishedAt(item.publishedAt)}</span>
         <span className={`${styles.badge} ${styles[`badge_${item.status}`]}`}>
           {STATUS_LABEL[item.status]}
         </span>

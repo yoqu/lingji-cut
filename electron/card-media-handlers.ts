@@ -1,4 +1,5 @@
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { getImageProvider } from '../src/lib/image-gen/registry';
 import { getVideoProvider } from '../src/lib/video-gen/registry';
 import { resolvePromptBinding } from '../src/lib/llm/binding-resolver';
@@ -9,6 +10,7 @@ import {
   writeCardVideo,
   writeCardPoster,
 } from './ai-card-assets';
+import { keyGreenScreenPngBuffer } from './green-screen-keyer';
 import type {
   AISettings,
   MediaCardContent,
@@ -24,13 +26,20 @@ import type {
   VideoGenerationContext,
   VideoGenerationProgressUpdate,
 } from '../src/lib/video-gen/types';
-import { resolveFfmpegPath } from './runtime-binaries';
+import { resolveFfmpegPath, resolveFfprobePath } from './runtime-binaries';
+import {
+  importGeneratedMediaAsset,
+  resolveReusableMediaAssetForProject,
+} from './asset-library';
+import { buildMediaReuseKey } from '../src/lib/media-asset-resolution';
+import type { MediaAssetRequest } from '../src/types/production';
 
 export interface GenerateCardImageArgs {
   projectDir: string;
   cardId: string;
   prompt: string;
   negativePrompt?: string;
+  backgroundRemoval?: 'none' | 'green-screen';
   aspectRatio: ImageAspectRatio;
   providerId?: string | null;
   model?: string | null;
@@ -83,9 +92,16 @@ export async function handleGenerateCardImage(
     signal,
     onProgress: ctx.onProgress,
   };
+  const generationPrompt = [
+    args.prompt.trim(),
+    args.backgroundRemoval === 'green-screen'
+      ? '主体完整、边缘清晰，使用均匀纯绿色背景，背景不要出现阴影或其他物体。'
+      : '',
+    args.negativePrompt?.trim() ? `避免出现：${args.negativePrompt.trim()}` : '',
+  ].filter(Boolean).join('\n');
   const result = await adapter.generate(
     {
-      prompt: args.prompt,
+      prompt: generationPrompt,
       model,
       aspectRatio: args.aspectRatio,
       n: 1,
@@ -98,8 +114,31 @@ export async function handleGenerateCardImage(
   const img = result.images[0];
   if (!img) throw new Error('image provider 未返回图片');
   const buf = await imageToBuffer(img);
+  const png = await normalizeImagePng(buf, img.mimeType);
   ctx.onProgress({ percent: 95, phase: 'downloading', message: '保存图片…' });
-  const assetPath = await writeCardImage(args.projectDir, args.cardId, buf);
+  const originalAssetPath = await writeCardImage(args.projectDir, args.cardId, png);
+  let assetPath = originalAssetPath;
+  let cutoutAssetPath: string | null = null;
+  let cutoutStatus: MediaCardContent['cutoutStatus'] = 'not-requested';
+  let cutoutMessage: string | undefined;
+  if (args.backgroundRemoval === 'green-screen') {
+    try {
+      ctx.onProgress({ percent: 97, phase: 'postprocessing', message: '移除绿幕背景…' });
+      const cutoutAbs = path.join(args.projectDir, 'ai-cards', args.cardId, 'image-cutout.png');
+      const keyed = await keyGreenScreenPngBuffer(png, cutoutAbs);
+      if (keyed.ok && keyed.outputPath) {
+        cutoutAssetPath = path.relative(args.projectDir, keyed.outputPath);
+        assetPath = cutoutAssetPath;
+        cutoutStatus = 'ready';
+      } else {
+        cutoutStatus = 'unavailable';
+        cutoutMessage = keyed.reason ?? '没有检测到可移除的绿幕背景，已保留原图。';
+      }
+    } catch (error) {
+      cutoutStatus = 'failed';
+      cutoutMessage = error instanceof Error ? error.message : '背景移除失败，已保留原图。';
+    }
+  }
   const generatedAt = Date.now();
   await writeCardMeta(args.projectDir, args.cardId, {
     cardId: args.cardId,
@@ -110,7 +149,14 @@ export async function handleGenerateCardImage(
     model,
     aspectRatio: args.aspectRatio,
     generatedAt,
-    extras: args.extraParams,
+    extras: {
+      ...(args.extraParams ?? {}),
+      originalAssetPath,
+      cutoutAssetPath,
+      backgroundRemoval: args.backgroundRemoval ?? 'none',
+      cutoutStatus,
+      autoCutout: cutoutStatus === 'ready',
+    },
   });
   ctx.onProgress({ percent: 100, phase: 'rendering', message: '完成' });
 
@@ -125,7 +171,20 @@ export async function handleGenerateCardImage(
     generationStatus: 'ready',
     generatedAt,
     extraParams: args.extraParams,
+    backgroundRemoval: args.backgroundRemoval ?? 'none',
+    originalAssetPath,
+    cutoutAssetPath,
+    cutoutStatus,
+    cutoutMessage,
   };
+}
+
+async function normalizeImagePng(buf: Buffer, mimeType?: string): Promise<Buffer> {
+  if (!mimeType || mimeType.toLowerCase().includes('png')) return buf;
+  const { nativeImage } = await import('electron');
+  const image = nativeImage.createFromBuffer(buf);
+  if (image.isEmpty()) throw new Error(`无法解码生成图片（${mimeType}）`);
+  return image.toPNG();
 }
 
 async function imageToBuffer(img: {
@@ -165,6 +224,74 @@ export async function handleGenerateCardVideo(
   args: GenerateCardVideoArgs,
   ctx: CardVideoHandlerCtx,
 ): Promise<MediaCardContent> {
+  const requestBase = {
+    kind: 'video' as const,
+    role: 'broll',
+    query: args.prompt,
+    reusePolicy: 'prefer-library' as const,
+    constraints: {
+      aspectRatio: args.aspectRatio,
+      durationRangeMs: [
+        Math.max(0, args.durationSeconds * 1_000 - 1_000),
+        args.durationSeconds * 1_000 + 1_000,
+      ] as [number, number],
+    },
+  };
+  const request: MediaAssetRequest = {
+    id: `card-video-${args.cardId}`,
+    ...requestBase,
+    reuseKey: buildMediaReuseKey(requestBase),
+  };
+  const reused = await resolveReusableMediaAssetForProject({
+    projectDir: args.projectDir,
+    request,
+    sourceCardId: args.cardId,
+  });
+  if (reused) {
+    const generatedAt = Date.now();
+    const assetPath = reused.asset.files.processed || reused.asset.files.original;
+    ctx.onProgress({ percent: 100, phase: 'rendering', message: '已复用本地视频素材' });
+    await writeCardMeta(args.projectDir, args.cardId, {
+      cardId: args.cardId,
+      mediaType: 'video',
+      prompt: args.prompt,
+      negativePrompt: args.negativePrompt,
+      providerId: reused.asset.metadata.provenance?.provider ?? null,
+      model: reused.asset.metadata.provenance?.model ?? null,
+      aspectRatio: args.aspectRatio,
+      durationSeconds: args.durationSeconds,
+      mediaDurationMs: reused.asset.metadata.durationMs ?? args.durationSeconds * 1_000,
+      width: reused.asset.metadata.width ?? undefined,
+      height: reused.asset.metadata.height ?? undefined,
+      generatedAt,
+      extras: {
+        ...(args.extraParams ?? {}),
+        reusedAssetId: reused.asset.id,
+        reuseScore: reused.score,
+        reuseReasons: reused.reasons,
+      },
+    });
+    return {
+      mediaType: 'video',
+      assetPath,
+      posterPath: reused.asset.files.thumbnail ?? null,
+      mediaDurationMs: reused.asset.metadata.durationMs ?? args.durationSeconds * 1_000,
+      aspectRatio: args.aspectRatio,
+      prompt: args.prompt,
+      negativePrompt: args.negativePrompt,
+      providerId: reused.asset.metadata.provenance?.provider ?? null,
+      model: reused.asset.metadata.provenance?.model ?? null,
+      generationStatus: 'ready',
+      generatedAt,
+      extraParams: {
+        ...(args.extraParams ?? {}),
+        reusedAssetId: reused.asset.id,
+        reuseScore: reused.score,
+        reuseReasons: reused.reasons,
+      },
+    };
+  }
+
   let providerId = args.providerId ?? null;
   let model = args.model ?? null;
 
@@ -248,6 +375,35 @@ export async function handleGenerateCardVideo(
     generatedAt,
     extras: args.extraParams,
   });
+  ctx.onProgress({ percent: 98, phase: 'postprocessing', message: '沉淀到全局素材库…' });
+  const binaryOptions = {
+    appPath: process.defaultApp ? process.cwd() : path.resolve(__dirname, '..'),
+    resourcesPath: process.resourcesPath ?? '',
+    cwd: process.cwd(),
+    moduleDir: __dirname,
+  };
+  await importGeneratedMediaAsset({
+    filePath: path.resolve(args.projectDir, assetPath),
+    projectDir: args.projectDir,
+    name: args.prompt.slice(0, 64),
+    role: 'broll',
+    reuseKey: request.reuseKey,
+    semantic: { tags: [args.prompt], usableAs: ['broll'] },
+    licenseNote: 'AI 视频生成；商业使用权由当前视频 Provider 条款决定。',
+    provenance: {
+      provider: provider.id,
+      model,
+      taskId: vgCtx.taskId,
+      promptHash: crypto.createHash('sha256').update(args.prompt).digest('hex'),
+      requestHash: crypto.createHash('sha256').update(request.reuseKey).digest('hex'),
+      generatedAt: new Date(generatedAt).toISOString(),
+    },
+    video: {
+      aspectRatio: args.aspectRatio,
+      motionIntensity: 2,
+      shotType: 'broll',
+    },
+  }, resolveFfprobePath(binaryOptions), resolveFfmpegPath(binaryOptions));
   ctx.onProgress({ percent: 100, phase: 'rendering', message: '完成' });
 
   return {

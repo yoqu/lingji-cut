@@ -10,6 +10,7 @@ import type {
   PiThinkingFormat,
   PiThinkingLevelMap,
   VideoProvider,
+  SunoAudioGenerationSettings,
 } from '../../types/ai';
 import {
   applyPiProviderPreset,
@@ -67,6 +68,7 @@ interface AIConfigSnapshotInput {
   videoProviders?: VideoProvider[];
   defaultVideoProviderId?: string | null;
   defaultVideoModel?: string | null;
+  audioGeneration?: SunoAudioGenerationSettings;
 }
 
 /** 修剪空白并去重的模型列表归一化，LLM / 图像 / 视频 provider 共用。 */
@@ -107,7 +109,7 @@ export function validateProviderDraft(provider: LLMProvider): ProviderDraftError
   const errors: ProviderDraftErrors = {};
 
   if (!normalized.name) {
-    errors.name = '请输入 Provider 名称';
+    errors.name = '请输入生成服务名称';
   }
 
   if (
@@ -171,6 +173,7 @@ export function createAIConfigSnapshot({
   videoProviders,
   defaultVideoProviderId,
   defaultVideoModel,
+  audioGeneration,
 }: AIConfigSnapshotInput): string {
   const normalizedProviders = normalizeProviderDrafts(providers);
   const selection = normalizeProviderSelection(
@@ -196,6 +199,7 @@ export function createAIConfigSnapshot({
     videoProviders: normalizedVideoProviders,
     defaultVideoProviderId: defaultVideoProviderId ?? null,
     defaultVideoModel: defaultVideoModel ?? null,
+    audioGeneration: audioGeneration ?? null,
   });
 }
 
@@ -359,7 +363,7 @@ function validateMediaProviderDraft(
   apiKeyLabel: string,
 ): { name?: string; baseUrl?: string; apiKey?: string; models?: string } {
   const errors: { name?: string; baseUrl?: string; apiKey?: string; models?: string } = {};
-  if (!normalized.name) errors.name = '请输入 Provider 名称';
+  if (!normalized.name) errors.name = '请输入生成服务名称';
   if (!normalized.baseUrl) errors.baseUrl = '请输入 Base URL';
   if (!normalized.apiKey) errors.apiKey = `请输入 ${apiKeyLabel}`;
   if (normalized.models.length === 0) errors.models = '请至少添加一个模型';

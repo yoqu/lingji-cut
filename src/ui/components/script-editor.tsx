@@ -233,6 +233,8 @@ const highlightLineField = StateField.define<DecorationSet>({
 // --- ScriptEditor ---
 
 interface ScriptEditorProps {
+  /** 当前编辑器承载的文件标识；切换文件时用于清理文档级临时装饰。 */
+  documentId?: string;
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
@@ -253,6 +255,7 @@ interface ScriptEditorProps {
 }
 
 export function ScriptEditor({
+  documentId,
   value,
   onChange,
   placeholder,
@@ -348,6 +351,19 @@ export function ScriptEditor({
       });
     }
   }, [value, streamingActive]);
+
+  // 同一个 EditorView 会被多个工作台文件复用，虚拟光标和审稿行高亮不能跨文件继承。
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: [
+        clearVirtualCursor.of(null),
+        setReviewHighlightLine.of(null),
+      ],
+    });
+    setClickInfo(null);
+  }, [documentId]);
 
   // React → CM6: sync annotations
   useEffect(() => {

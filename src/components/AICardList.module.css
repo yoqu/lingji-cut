@@ -134,8 +134,9 @@
 }
 
 .thumbnailPlaceholder {
-  font-size: 16px;
-  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--color-text-tertiary, #888);
 }
 
@@ -262,14 +263,8 @@
 .skeletonBar {
   height: 8px;
   border-radius: var(--radius-sm, 6px);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--color-text-secondary) 10%, transparent) 25%,
-    color-mix(in srgb, var(--color-text-secondary) 20%, transparent) 50%,
-    color-mix(in srgb, var(--color-text-secondary) 10%, transparent) 75%
-  );
-  background-size: 200% 100%;
-  animation: aiCardSkeletonSweep 1.6s ease-in-out infinite;
+  background: color-mix(in srgb, var(--color-text-secondary) 14%, transparent);
+  animation: aiCardSkeletonShimmer 1.6s ease-in-out infinite;
 }
 
 .skeletonBarShort {
@@ -292,11 +287,11 @@
   }
 }
 
-@keyframes aiCardSkeletonSweep {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
+@media (prefers-reduced-motion: reduce) {
+  .badgeGenerating,
+  .skeletonDot,
+  .skeletonLabel,
+  .skeletonBar {
+    animation: none;
   }
 }

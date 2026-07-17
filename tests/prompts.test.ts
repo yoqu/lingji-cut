@@ -75,9 +75,16 @@ describe('PROMPT_KINDS and metadata', () => {
       expect(tpl.user).toBeTruthy();
     }
   });
+
+  it('exposes director rules as an editable non-model prompt', () => {
+    expect(PROMPT_KINDS).toContain('production.director');
+    expect(PROMPT_KIND_META['production.director'].label).toBe('导演制作规则');
+    expect(PROMPT_KIND_META['production.director'].supportsBinding).toBe(false);
+    expect(getBuiltinPromptTemplate('production.director').user).toContain('每分钟 2-4 次');
+  });
 });
 
-describe('cards.animation default template（v5 JSON 分镜）', () => {
+describe('cards.animation default template（JSON 分镜）', () => {
   it('has a builtin template mentioning 分镜 and segmentCues', () => {
     const tpl = getBuiltinPromptTemplate('cards.animation');
     expect(tpl.user).toContain('{{segmentCues}}');
@@ -146,19 +153,24 @@ describe('cards.segment v19 / cards.animation v5 契约', () => {
     expect(cards).toContain('CardStage');
     expect(cards).toContain('useBeats');
     expect(cards).toContain('状态演进');
+    expect(cards).toContain('MotionSlot.lifecycle');
+    expect(cards).toContain('emphasis={分镜 focus.emphasis}');
+    expect(cards).toContain('process / timeline 的逐项建立必须传 beats 数组');
     expect(cards).toContain('storyboard');
     // 机器可查的规则已迁出提示词（lint / kit / 布局探针承担）
     expect(cards).not.toContain('动效词汇表');
     expect(cards).not.toContain('编排三律');
   });
 
-  it('cards.animation v5 是 JSON 分镜契约：7 种载体 + adds/changes + focus', () => {
+  it('cards.animation 是可由 Motion Kit 兑现的 JSON 分镜契约', () => {
     const anim = DEFAULT_PROMPT_YAML['cards.animation'];
     expect(anim).toContain('claim');
     expect(anim).toContain('data-hero');
     expect(anim).toContain('adds');
     expect(anim).toContain('changes');
     expect(anim).toContain('状态演进');
+    expect(anim).toContain('lifecycle 只操作 elements 中的整体语义区块');
+    expect(anim).toContain('不要要求内部子项换位');
     expect(anim).toContain('{{segmentCues}}');
   });
 

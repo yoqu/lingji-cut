@@ -92,13 +92,15 @@ describe('SonarInboxStore', () => {
     expect(await store.list()).toHaveLength(1); // 不新增
   });
 
-  it('list 按 receivedAt 倒序', async () => {
+  it('list 按 publishedAt 倒序，同刻按 receivedAt', async () => {
     const store = mkStore();
-    await store.enqueue(sampleInput({ awemeId: 'a1' }));
+    await store.enqueue(sampleInput({ awemeId: 'a1', publishedAt: 2_000 }));
     clock = 3000;
-    await store.enqueue(sampleInput({ awemeId: 'a2' }));
+    await store.enqueue(sampleInput({ awemeId: 'a2', publishedAt: 1_000 }));
+    clock = 4000;
+    await store.enqueue(sampleInput({ awemeId: 'a3', publishedAt: 2_000 }));
     const list = await store.list();
-    expect(list.map((i) => i.awemeId)).toEqual(['a2', 'a1']);
+    expect(list.map((i) => i.awemeId)).toEqual(['a3', 'a1', 'a2']);
   });
 
   it('markStatus 更新状态与补丁字段', async () => {

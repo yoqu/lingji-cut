@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// AgentOpOverlay 测试：控制服务 op 事件 → 虚拟鼠标 + 状态标签的全局反馈层。
+// AgentOpOverlay 测试：控制服务 op 事件 → 克制的全局状态提示。
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -47,11 +47,11 @@ describe('AgentOpOverlay', () => {
     expect(overlay()).toBeNull();
   });
 
-  it('start 事件 → 显示虚拟鼠标 + 操作标签', () => {
+  it('start 事件 → 显示操作状态', () => {
     act(() => emit({ op: 'lingji_update_card', title: '更新卡片', phase: 'start', ts: 1 }));
     expect(overlay()).toBeTruthy();
     expect(chip()?.textContent).toContain('更新卡片');
-    expect(container.textContent).toContain('AI');
+    expect(overlay()?.getAttribute('role')).toBe('status');
   });
 
   it('任务型 success → 标签提示交接到底部进度', () => {

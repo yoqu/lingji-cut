@@ -6,7 +6,7 @@ interface RunSettingsLeaveGuardOptions {
   title: string;
   hasUnsavedChanges: boolean;
   onSave: () => Promise<boolean>;
-  confirm?: (message: string) => boolean;
+  confirm: (message: string) => boolean | Promise<boolean>;
 }
 
 interface UseSettingsTabGuardOptions {
@@ -14,6 +14,7 @@ interface UseSettingsTabGuardOptions {
   hasUnsavedChanges: boolean;
   onSave: () => Promise<boolean>;
   onRegisterLeaveGuard?: (guard: SettingsLeaveGuard | null) => void;
+  confirmLeave?: (title: string) => Promise<boolean>;
 }
 
 export function buildUnsavedChangesConfirmMessage(title: string): string {
@@ -24,13 +25,13 @@ export async function runSettingsLeaveGuard({
   title,
   hasUnsavedChanges,
   onSave,
-  confirm = (message) => window.confirm(message),
+  confirm,
 }: RunSettingsLeaveGuardOptions): Promise<boolean> {
   if (!hasUnsavedChanges) {
     return true;
   }
 
-  if (!confirm(buildUnsavedChangesConfirmMessage(title))) {
+  if (!(await confirm(buildUnsavedChangesConfirmMessage(title)))) {
     return false;
   }
 
@@ -42,6 +43,7 @@ export function useSettingsTabGuard({
   hasUnsavedChanges,
   onSave,
   onRegisterLeaveGuard,
+  confirmLeave,
 }: UseSettingsTabGuardOptions): void {
   const handleBeforeLeave = useCallback(
     () =>
@@ -49,8 +51,9 @@ export function useSettingsTabGuard({
         title,
         hasUnsavedChanges,
         onSave,
+        confirm: confirmLeave ? () => confirmLeave(title) : () => false,
       }),
-    [title, hasUnsavedChanges, onSave],
+    [confirmLeave, title, hasUnsavedChanges, onSave],
   );
 
   useEffect(() => {

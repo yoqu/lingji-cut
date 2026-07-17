@@ -32,7 +32,9 @@ const EASE_APPLE: [number, number, number, number] = [0.25, 0.1, 0.25, 1];
  */
 const WORKSPACE_PAGES: ReadonlySet<AppPage> = new Set([
   'script-workbench',
+  'director-workbench',
   'editor',
+  'asset-center',
   'publish',
 ]);
 

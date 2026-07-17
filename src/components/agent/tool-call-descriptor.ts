@@ -210,6 +210,10 @@ interface ReplacementEdit {
   newText: string;
 }
 
+function normalizeDiffBoundary(text: string): string {
+  return text && !text.endsWith('\n') ? `${text}\n` : text;
+}
+
 /**
  * 从工具入参里抽取 pi 风格的 edits 数组：`{ path, edits:[{oldText,newText}] }`。
  *
@@ -251,7 +255,15 @@ function makeEditsDiff(path: string, edits: ReplacementEdit[]): string {
   for (const { oldText, newText } of edits) {
     // structuredPatch 对最后一行无换行的内容会写出 `\ No newline at end of file` 元行；
     // 我们在序列化时统一吃掉，但 patch 算法本身仍按真实内容跑。
-    const patch = structuredPatch(path, path, oldText ?? '', newText ?? '', '', '', { context: 3 });
+    const patch = structuredPatch(
+      path,
+      path,
+      normalizeDiffBoundary(oldText ?? ''),
+      normalizeDiffBoundary(newText ?? ''),
+      '',
+      '',
+      { context: 3 },
+    );
     for (const hunk of patch.hunks) {
       body.push(`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`);
       for (const raw of hunk.lines) {

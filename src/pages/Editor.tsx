@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AIPanel } from '../components/AIPanel';
 import { AssetPanel } from '../components/AssetPanel';
+import { EditorAnimaticReviewBar } from '../components/EditorAnimaticReviewBar';
 import { EditorInspector, type InspectorSelection } from '../components/EditorInspector';
+import { EditorShotNavigator } from '../components/EditorShotNavigator';
 import { ResizeHandle } from '../components/ResizeHandle';
 import { useTaskProgressStore } from '../store/task-progress';
 import { ExportSettingsModal } from '../components/ExportSettingsModal';
@@ -15,10 +16,10 @@ import type { AppPage, ProjectMetadata } from '../lib/electron-api';
 import { createPersistedAIState } from '../lib/ai-persistence';
 import { mergeCoverCandidatesFromScannedAssets } from '../lib/ai-persistence';
 import { getAISettingsIssue } from '../lib/ai-settings';
+import { requestDirectorPlan } from '../lib/director-plan-client';
 import type { ExportConfig } from '../lib/export-settings';
 import { createDefaultTextData } from '../lib/text-templates';
 import { DEFAULT_VISUAL_TRACK_ID, type OverlayPosition } from '../types';
-import type { AIAnalysisResult } from '../types/ai';
 import { useAIVideoWorkflow } from '../hooks/useAIVideoWorkflow';
 import { useViewportSize } from '../hooks/useViewportSize';
 import { getEditorLayoutMode, getTimelinePanelBounds } from '../lib/layout';
@@ -64,7 +65,7 @@ import styles from './Editor.module.css';
 
 interface EditorProps {
   onAddAsset: () => Promise<void>;
-  initialActivePanel?: 'assets' | 'ai';
+  initialActivePanel?: 'assets' | 'ai' | 'shots';
   onOpenSettings: () => void;
   onUseAsPodcastAudio: (path: string, durationMs: number) => Promise<void>;
   onUseAsPodcastSrt: (path: string) => Promise<void>;
@@ -73,6 +74,7 @@ interface EditorProps {
   isActive?: boolean;
   /** 供 AutoRunResumeBanner 恢复 auto-run 使用 */
   setPage?: (next: AppPage) => void;
+  onOpenAssetCenter?: (assetId?: string) => void;
 }
 
 const TIMELINE_PANEL_HEIGHT_KEY = 'podcast-editor-timeline-panel-height';
@@ -116,6 +118,7 @@ export function Editor({
   projectDir = '',
   isActive = false,
   setPage,
+  onOpenAssetCenter,
 }: EditorProps) {
   const viewport = useViewportSize();
   const layout = getEditorLayoutMode(viewport.width, viewport.height);
@@ -144,15 +147,15 @@ export function Editor({
   const [pendingReanalyzeEntries, setPendingReanalyzeEntries] = useState<
     ReturnType<typeof useTimelineStore.getState>['srtEntries'] | null
   >(null);
-  const [activePanel, setActivePanel] = useState<'assets' | 'ai'>(initialActivePanel);
+  const [activePanel, setActivePanel] = useState<'assets' | 'shots'>(
+    initialActivePanel === 'assets' ? 'assets' : 'shots',
+  );
   const [sourcePreviewAsset, setSourcePreviewAsset] = useState<SourcePreviewAsset | null>(null);
   const [inspectorSelection, setInspectorSelection] = useState<InspectorSelection>({ type: 'empty' });
   const [projectMeta, setProjectMeta] = useState<ProjectOverviewMeta | null>(null);
   const [isProjectMetaLoading, setIsProjectMetaLoading] = useState(false);
   const store = useTimelineStore();
-  const clearAIAnalysis = useAIStore((state) => state.clearAnalysis);
   const setAIAnalysisError = useAIStore((state) => state.setAnalysisError);
-  const setAIAnalysisResult = useAIStore((state) => state.setAnalysisResult);
   const setCoverCandidates = useAIStore((state) => state.setCoverCandidates);
   const {
     start: startWorkflow,
@@ -521,60 +524,57 @@ export function Editor({
     setIsExportSettingsOpen(true);
   }, []);
 
-  const persistAIState = useCallback(
-    async (result: AIAnalysisResult | null) => {
-      if (!projectDir) {
-        return;
-      }
-
-      const persistedState = createPersistedAIState(result, []);
-      await window.electronAPI.saveProjectSection(
-        projectDir,
-        'aiAnalysis',
-        JSON.stringify(persistedState),
-      );
-    },
-    [projectDir],
-  );
-
   const rerunAiAnalysisForCurrentSrt = useCallback(
     async (entries: ReturnType<typeof useTimelineStore.getState>['srtEntries']) => {
       const settings = await loadAISettings();
       const settingsIssue = getAISettingsIssue(settings);
 
-      clearAIAnalysis();
-      await persistAIState(null);
-
       if (settingsIssue || !settings) {
         setAIAnalysisError(settingsIssue ?? '请先完成 AI 配置后再重新分析');
-        setActivePanel('ai');
+        setActivePanel('shots');
         return;
       }
 
+      if (!projectDir) return;
+      const taskId = `director-replan-current-srt-${Date.now()}`;
+      useTaskProgressStore.getState().startTask({
+        id: taskId,
+        category: 'ai-analyze',
+        label: '根据新字幕重拟导演方案',
+        mode: 'determinate',
+        progress: 0,
+        phase: '保留当前成片并分析影响',
+        level: 2,
+        canCancel: false,
+      });
       try {
-        const result = (await window.electronAPI.analyzeSrt({
+        setAIAnalysisError(null);
+        await requestDirectorPlan({
           entries,
           settings,
-          projectDir: projectDir || undefined,
-          projectBindings: useAIStore.getState().projectBindings,
-        })) as AIAnalysisResult;
-        setAIAnalysisResult(result);
-        setCoverCandidates([]);
-        await persistAIState(result);
+          projectDir,
+          taskId,
+          onProgress: (progress, phase) => {
+            useTaskProgressStore.getState().updateTask(taskId, { progress, phase });
+          },
+        });
+        useTaskProgressStore.getState().completeTask(taskId);
+        setPage?.('director-workbench');
       } catch (error) {
-        console.error('重新分析字幕失败:', error);
+        console.error('重新制定导演方案失败:', error);
         setAIAnalysisError(
-          error instanceof Error ? error.message : '重新分析字幕失败，请稍后重试。',
+          error instanceof Error ? error.message : '重新制定导演方案失败，请稍后重试。',
+        );
+        useTaskProgressStore.getState().failTask(
+          taskId,
+          error instanceof Error ? error.message : '重新制定导演方案失败，请稍后重试。',
         );
       }
     },
     [
-      clearAIAnalysis,
-      persistAIState,
       projectDir,
+      setPage,
       setAIAnalysisError,
-      setAIAnalysisResult,
-      setCoverCandidates,
     ],
   );
 
@@ -616,8 +616,13 @@ export function Editor({
     clearSourcePreview();
     // Motion Card 编排模块已下线；所有卡片统一按 ai-card 类型打开 inspector
     setInspectorSelection({ type: 'ai-card', cardId });
-    setActivePanel('ai');
+    setActivePanel('shots');
   }, [clearSourcePreview]);
+
+  const handleSelectShot = useCallback((cardId: string, startMs: number) => {
+    handleSeek(startMs);
+    handleOpenAICardInspector(cardId);
+  }, [handleOpenAICardInspector, handleSeek]);
 
   const handleOpenSubtitleInspector = useCallback(() => {
     clearSourcePreview();
@@ -827,6 +832,12 @@ export function Editor({
     >
       <div data-editor-region="banners">
         {projectDir && setPage ? (
+          <EditorAnimaticReviewBar
+            projectDir={projectDir}
+            onOpenDirector={() => setPage('director-workbench')}
+          />
+        ) : null}
+        {projectDir && setPage ? (
           <AutoRunLauncher projectDir={projectDir} setPage={setPage} />
         ) : null}
         {projectDir ? (
@@ -896,6 +907,7 @@ export function Editor({
                 timelineWidth={timeline.width}
                 timelineHeight={timeline.height}
                 onClose={handleCloseInspector}
+                onOpenAssetCenter={onOpenAssetCenter}
               />
             </div>
           </>
@@ -914,7 +926,7 @@ export function Editor({
                   if (next !== 'assets') {
                     clearSourcePreview();
                   }
-                  setActivePanel(next as 'assets' | 'ai');
+                  setActivePanel(next as 'assets' | 'shots');
                 }}
                 className={styles.sidebarTabs}
               >
@@ -928,11 +940,11 @@ export function Editor({
                       素材
                     </TabsTrigger>
                     <TabsTrigger
-                      value="ai"
+                      value="shots"
                       className={styles.sidebarTabsTrigger}
-                      icon={<AppIcon name="sparkles" size={14} />}
+                      icon={<AppIcon name="film" size={14} />}
                     >
-                      AI 助手
+                      镜头
                     </TabsTrigger>
                   </TabsList>
                 </div>
@@ -962,14 +974,13 @@ export function Editor({
                       }
                     />
                   </TabsContent>
-                  <TabsContent value="ai" className={styles.sidebarTabsContent}>
-                    <AIPanel
+                  <TabsContent value="shots" className={styles.sidebarTabsContent}>
+                    <EditorShotNavigator
                       compact={layout.stackSidebar}
                       railHeight={layout.sidebarRailHeight}
                       inspectedCardId={inspectorSelection.type === 'ai-card' ? inspectorSelection.cardId : null}
-                      onClearInspector={handleCloseInspector}
-                      onOpenCardInspector={handleOpenAICardInspector}
-                      onOpenSettings={onOpenSettings}
+                      onSelectCard={handleSelectShot}
+                      onOpenDirector={setPage ? () => setPage('director-workbench') : undefined}
                     />
                   </TabsContent>
                 </div>
@@ -1036,6 +1047,7 @@ export function Editor({
                     timelineWidth={timeline.width}
                     timelineHeight={timeline.height}
                     onClose={handleCloseInspector}
+                    onOpenAssetCenter={onOpenAssetCenter}
                   />
                 </div>
               </>
@@ -1081,15 +1093,14 @@ export function Editor({
           onOpenSubtitleInspector={handleOpenSubtitleInspector}
           onOpenOverlayInspector={handleOpenOverlayInspector}
         />
+        <TimelineAIOverlay
+          workflow={workflow}
+          timelineContainerRef={timelineWrapRef}
+          compactTimeline={layout.compactTimeline}
+          onCancel={cancelWorkflow}
+          onRetry={retryWorkflow}
+        />
       </div>
-
-      <TimelineAIOverlay
-        workflow={workflow}
-        timelineContainerRef={timelineWrapRef}
-        compactTimeline={layout.compactTimeline}
-        onCancel={cancelWorkflow}
-        onRetry={retryWorkflow}
-      />
 
       <ExportSettingsModal
         visible={isExportSettingsOpen}
@@ -1113,7 +1124,7 @@ export function Editor({
           <DialogHeader>
             <DialogTitle>从文稿重新生成口播</DialogTitle>
             <DialogDescription>
-              将读取当前工程的 script.md，使用 MiniMax TTS 重新合成口播音频与字幕，并覆盖现有的口播资源。
+              将读取当前工程的 script.md，使用已配置的默认语音服务与音色重新合成口播，并覆盖现有音频与字幕。
             </DialogDescription>
           </DialogHeader>
           <DialogBody>
@@ -1131,11 +1142,11 @@ export function Editor({
               <Alert
                 variant="warning"
                 className="mt-3"
-                description={'注意：时间线上已有 AI 内容卡片。新字幕的时间点可能发生变化，卡片位置可能与音频不再对齐，建议随后在 AI 面板重新运行"内容分析"来刷新卡片。'}
+                description="时间线上已有内容卡片。新字幕的时间点可能发生变化，建议合成完成后重新生成内容卡片，以免画面与口播错位。"
               />
             ) : null}
             <div style={{ marginTop: 12, fontSize: 12, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-              本次仅重跑 TTS，不会自动运行 AI 分析、封面与排版。
+              本次只更新口播音频与字幕，不会重新生成画面、封面或时间线排布。
             </div>
           </DialogBody>
           <DialogFooter>
@@ -1149,7 +1160,7 @@ export function Editor({
               取消
             </Button>
             <Button variant="primary" onClick={handleConfirmRegeneratePodcast}>
-              开始生成
+              开始合成
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1161,16 +1172,15 @@ export function Editor({
             setPendingReanalyzeEntries(null);
           }
         }}
-        title="替换字幕后重新分析？"
-        description="替换字幕后，现有 AI 卡片分析会失效。建议立即重新分析以保持卡片内容准确。"
-        confirmText="立即重新分析"
-        cancelText="稍后再说"
-        onConfirm={() => {
+        title="重新分析字幕？"
+        description="字幕已经替换，现有内容卡片可能与新时间点不一致。重新分析会生成新的分段与内容卡片。"
+        confirmText="重新分析"
+        cancelText="暂不分析"
+        onConfirm={async () => {
           if (!pendingReanalyzeEntries) {
             return;
           }
-          void rerunAiAnalysisForCurrentSrt(pendingReanalyzeEntries);
-          setPendingReanalyzeEntries(null);
+          await rerunAiAnalysisForCurrentSrt(pendingReanalyzeEntries);
         }}
       />
       <ConfirmDialog

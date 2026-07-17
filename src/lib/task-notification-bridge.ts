@@ -3,8 +3,8 @@
  * 完成 / 失败时弹出系统通知（mac 通知中心 / Windows 通知），提醒用户回到软件。
  *
  * 背景：耗时任务（导出 / TTS / 导入 / AI 分析 / 封面 / 卡片）跑在后台时，用户切走
- * 就看不到底部进度条，无法及时进行下一步。本桥把「active → completed/error」的状态
- * 跃迁映射为一次系统通知，点击通知由主进程聚焦主窗口。
+ * 就看不到底部进度条，无法及时进行下一步。本桥只把「active → completed/error」的状态
+ * 跃迁映射为一次系统通知；用户主动取消属于中性终态，不发送系统通知。
  */
 
 import { useTaskProgressStore, type TaskProgressItem } from '../store/task-progress';
@@ -32,18 +32,21 @@ export function shouldNotifyTask(
   return duration >= NOTIFY_MIN_DURATION_MS;
 }
 
-/** 根据任务状态生成通知文案。 */
-export function buildTaskNotification(task: TaskProgressItem): TaskNotificationPayload {
+/** 根据可通知的终态生成通知文案，活动或取消状态不产生通知。 */
+export function buildTaskNotification(task: TaskProgressItem): TaskNotificationPayload | null {
   if (task.status === 'error') {
     return {
-      title: `⚠️ ${task.label}失败`,
+      title: `${task.label}失败`,
       body: task.error?.trim() || '任务执行失败，点此回到灵机剪影查看。',
     };
   }
-  return {
-    title: `✅ ${task.label}已完成`,
-    body: '任务已完成，点此回到灵机剪影继续下一步。',
-  };
+  if (task.status === 'completed') {
+    return {
+      title: `${task.label}已完成`,
+      body: '任务已完成，点此回到灵机剪影继续下一步。',
+    };
+  }
+  return null;
 }
 
 /**
@@ -57,7 +60,8 @@ export function attachTaskNotificationBridge(): () => void {
     const now = Date.now();
     for (const [id, task] of state.tasks) {
       if (shouldNotifyTask(task, prev.tasks.get(id), now)) {
-        notify(buildTaskNotification(task));
+        const notification = buildTaskNotification(task);
+        if (notification) notify(notification);
       }
     }
   });

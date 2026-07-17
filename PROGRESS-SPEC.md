@@ -14,25 +14,45 @@
 2. **无侵入**：不增加 28px 高度，仅叠加 2px 进度线
 3. **可展开**：点击状态栏摘要 → 上方浮动详情面板
 4. **多任务并行**：支持同时显示多个独立进度
-5. **编辑器内动画保留**：打字机/审阅光标/虚拟光标不受影响
+5. **局部反馈可选**：打字机/审阅标注可作为内容变化的增强，但不能替代统一任务状态
 
 ## 统一 Store
 
 - 文件：`src/store/task-progress.ts`
-- API：`startTask` / `updateTask` / `completeTask` / `failTask` / `removeTask`
+- API：`startTask` / `updateTask` / `completeTask` / `failTask` / `cancelTask` / `removeTask`
 
-## 分类颜色
+## 分类与图标
 
-| category | 颜色 | 图标 |
-|----------|------|------|
-| `ai-write` | `#a78bfa` 紫色 | 🤖 |
-| `ai-review` | `#34d399` 绿色 | 🔍 |
-| `ai-analyze` | `#60a5fa` 蓝色 | 🧠 |
-| `import` | `#fbbf24` 琥珀 | 📥 |
-| `export` | `#0A84FF` 系统蓝 | 🎬 |
-| `tts` | `#f472b6` 粉色 | 🎙️ |
-| `cover` | `#c084fc` 浅紫 | 🖼️ |
-| `io` | `#9ca3af` 灰色 | 📁 |
+分类只决定任务名称与 Lucide 图标，不决定活动色。所有 active 任务统一使用
+`var(--color-system-blue)`；完成、失败、取消分别使用 success、danger、text-tertiary 语义色。
+
+| category | 用途 | Lucide 图标 |
+|----------|------|-------------|
+| `ai-write` | 文稿与发布文本 | `FilePenLine` |
+| `ai-review` | 文稿审查 | `Search` |
+| `ai-analyze` | 字幕、卡片与 Motion 分析 | `Sparkles` |
+| `import` | 媒体与文件导入 | `Download` |
+| `export` | 视频导出 | `Film` |
+| `tts` | 口播音频合成 | `Mic` |
+| `cover` | 封面与图片生成 | `Image` |
+| `io` | 文件读写 | `FolderOpen` |
+| `publish` | 平台发布 | `Upload` |
+
+导演优先工作流仍复用这些 category，不新建第二套进度系统：
+
+- `director-planning` 使用 `ai-analyze`，完成后任务进入 completed，并由导演台承接批准动作。
+- `production-running` 是同一父任务下的画面、封面、声音、高亮和时间线轨道；局部进度可在导演台展示，但必须同步到底部任务。
+- `director-review` / `animatic-review` 是持久化检查点，不允许用永远 active 的进度任务模拟等待。
+- 暂停制作必须写入 `production-paused`，将仍为 generating 的输出改为 stale；恢复只补 stale / failed / missing 产物。
+- 所有迟到产物提交必须同时校验 `taskId + directorRevision`，不能覆盖新任务或新导演版本。
+
+## 终态语义
+
+- `completed`：真实完成，进度归 100%，5 秒后自动移除。
+- `error`：仅用于真实失败，展示错误与恢复动作，10 秒后自动移除。
+- `cancelled`：用户主动停止或上游取消，中性反馈，5 秒后自动移除。
+- 终态任务拒绝迟到的 `updateTask` / `completeTask` / `failTask`，避免竞态覆盖。
+- 父任务进入终态时，同步收尾仍 active 的子任务；已完成的子任务保持原终态。
 
 ## 观测面板（AI 生成过程）
 
@@ -55,8 +75,10 @@
 
 1. 禁止新功能中创建独立进度展示组件
 2. 禁止修改 AppStatusBar 的 28px 高度
-3. 禁止移除编辑器内打字机/审阅光标动画
+3. 禁止用彩虹分类色、emoji、渐变或辉光包装 AI 进度
 4. 禁止进度展示阻塞用户操作
+5. 禁止伪造百分比或展示永远 active 的装饰步骤
+6. 不能真实中断底层任务时，禁止显示取消按钮
 
 ---
 

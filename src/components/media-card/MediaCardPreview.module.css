@@ -17,17 +17,25 @@
 }
 
 .errorBox {
-  background: var(--color-fill-error, rgba(255, 69, 58, 0.1));
-  color: var(--color-text-error, #ff453a);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-danger);
 }
 
-.errorTitle {
+.errorTitle,
+.stateTitle {
   font-weight: 600;
 }
 
-.errorMsg {
+.stateMessage,
+.stateAction {
+  max-width: 34ch;
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+}
+
+.stateAction {
+  color: var(--color-text-primary);
 }
 
 .loadingLabel {
@@ -54,5 +62,5 @@
   aspect-ratio: 16 / 9;
   object-fit: cover;
   border-radius: var(--radius-md);
-  background: black;
+  background: var(--color-preview-bg);
 }

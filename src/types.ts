@@ -1,4 +1,5 @@
 import type { AICardOverlayData } from './types/ai';
+import type { MotionTimingMetadata } from './types/motion';
 
 export interface SrtEntry {
   index: number;
@@ -27,6 +28,8 @@ export interface TimelineTrack {
 }
 
 export interface AudioOverlayData {
+  /** 制作计划中的声音 cue ID；用于素材替换时精确定位，避免按时间猜测。 */
+  cueId?: string;
   /** 线性音量 0..1.5，1 表示原始响度 */
   volume: number;
   /** 淡入时长（毫秒） */
@@ -39,6 +42,17 @@ export interface AudioOverlayData {
   sourceDurationMs: number;
   /** 静音 */
   muted?: boolean;
+  role?: 'dialogue' | 'bgm' | 'stinger' | 'sfx' | 'ambience' | 'transition-sound';
+  loop?: boolean;
+  /** 关键帧音量，atMs 相对当前 overlay 起点。 */
+  volumeEnvelope?: Array<{ atMs: number; volume: number }>;
+  ducking?: {
+    enabled: boolean;
+    reductionDb: number;
+    attackMs: number;
+    releaseMs: number;
+    holdMs: number;
+  };
 }
 
 export interface OverlayItem {
@@ -64,6 +78,8 @@ export function createDefaultAudioOverlayData(sourceDurationMs: number): AudioOv
     fadeOutMs: 0,
     trimStartMs: 0,
     sourceDurationMs: Math.max(0, Math.round(sourceDurationMs)),
+    role: 'sfx',
+    loop: false,
   };
 }
 
@@ -167,6 +183,7 @@ export interface TimelineData {
   audioClips?: AudioClip[];
   ttsAssets?: TTSAsset[];
   editedSubtitles?: SrtEntry[];
+  motionTimingMetadata?: MotionTimingMetadata;
 }
 
 export type AssetType = 'video' | 'image' | 'audio' | 'srt' | 'text';

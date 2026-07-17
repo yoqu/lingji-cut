@@ -7,6 +7,29 @@
 
 .previewSection {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 6px);
+}
+
+.previewMode {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-1, 4px);
+}
+
+.cutoutSetting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 6px);
+  padding: var(--space-3, 8px) 0;
+}
+
+.cutoutMessage {
+  margin: 0;
+  color: var(--color-warning);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
 }
 
 .field {
@@ -21,21 +44,39 @@
 }
 
 .summary {
-  font-size: var(--font-size-sm, 12px);
-  color: var(--color-text-secondary, var(--mac-text-sec, rgba(255, 255, 255, 0.65)));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
   cursor: pointer;
   user-select: none;
-  margin-bottom: var(--space-2, 6px);
+}
+
+.summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid color-mix(in srgb, var(--color-system-blue) 60%, transparent);
+  outline-offset: var(--space-2);
+}
+
+.advanced {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-separator);
+}
+
+.advancedBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
 }
 
 .row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4, 12px);
 }
 
 .buttonRow {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2, 6px);
   margin-top: var(--space-4, 12px);

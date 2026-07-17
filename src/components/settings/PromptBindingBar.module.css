@@ -56,22 +56,13 @@
 
 .resetLink {
   margin-left: auto;
-  font-size: var(--font-size-xs);
   color: var(--color-system-blue);
   background: transparent;
-  border: none;
-  cursor: pointer;
   padding: var(--space-1) var(--space-2);
 }
 
 .resetLink:hover {
   text-decoration: underline;
-}
-
-.resetLink:disabled {
-  color: var(--color-text-secondary);
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 .divider {

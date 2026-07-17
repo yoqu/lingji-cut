@@ -18,6 +18,7 @@ import { runScriptCommand } from './commands/script';
 import { runSettingsCommand } from './commands/settings';
 import { runRunCommand } from './commands/run';
 import { runPublishCommand } from './commands/publish';
+import { runDirectorCommand } from './commands/director';
 import { CliError } from './errors';
 
 async function dispatch(
@@ -36,6 +37,8 @@ async function dispatch(
       return runAudioCommand(action, flags, client);
     case 'subtitle':
       return runSubtitleCommand(action, flags, client);
+    case 'director':
+      return runDirectorCommand(action, flags, client);
     case 'cards':
       return runCardsCommand(action, positionals, flags, client);
     case 'cover':
@@ -58,7 +61,7 @@ async function dispatch(
       return runPublishCommand(action, positionals, flags, client);
     default:
       throw new CliError(
-        `未知命令组: ${group}（支持 project/state/import/script/task/audio/subtitle/edit/cards/cover/publish/settings/run/export）`,
+        `未知命令组: ${group}（支持 project/state/import/script/task/audio/subtitle/director/edit/cards/cover/publish/settings/run/export）`,
         'bad_args',
         2,
       );

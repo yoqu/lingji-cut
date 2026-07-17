@@ -33,10 +33,14 @@ vi.mock('../src/components/AutoRunLauncher', () => ({
   ),
 }));
 
-vi.mock('../src/components/AIPanel', () => ({
-  AIPanel: (props: { onOpenSettings?: () => void }) => (
-    <div data-ai-open-settings-hook={String(Boolean(props.onOpenSettings))}>ai-panel</div>
+vi.mock('../src/components/EditorShotNavigator', () => ({
+  EditorShotNavigator: (props: { onOpenDirector?: () => void }) => (
+    <div data-director-hook={String(Boolean(props.onOpenDirector))}>shot-navigator</div>
   ),
+}));
+
+vi.mock('../src/components/EditorAnimaticReviewBar', () => ({
+  EditorAnimaticReviewBar: () => <div>animatic-review-bar</div>,
 }));
 
 vi.mock('../src/components/EditorInspector', () => ({
@@ -113,7 +117,7 @@ describe('Editor', () => {
     expect(html).toContain('data-editor-sidebar-style="flat-panel"');
     expect(html).toContain('data-editor-sidebar-width="340"');
     expect(html).toContain('素材');
-    expect(html).toContain('AI 助手');
+    expect(html).toContain('镜头');
     expect(html).toContain('data-editor-region="inspector-shell"');
     expect(html).toContain('340px 6px minmax(0, 1fr) 6px 260px');
     expect(html).toContain('aria-label="调整侧边栏宽度"');
@@ -161,7 +165,7 @@ describe('Editor', () => {
     expect(html).toContain('data-has-retry="true"');
   });
 
-  it('passes the system settings entry into the AI panel', async () => {
+  it('keeps the legacy ai panel selection as a shot navigator alias', async () => {
     const { Editor } = await import('../src/pages/Editor');
     const html = renderToStaticMarkup(
       <Editor
@@ -174,6 +178,6 @@ describe('Editor', () => {
       />,
     );
 
-    expect(html).toContain('data-ai-open-settings-hook="true"');
+    expect(html).toContain('shot-navigator');
   });
 });

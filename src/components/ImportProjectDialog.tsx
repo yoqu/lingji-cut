@@ -69,7 +69,7 @@ const ASSET_KIND_LABEL = {
   overlayAsset: '时间线素材',
   podcastAudio: '口播音频',
   podcastSubtitle: '口播字幕',
-  ttsAsset: 'TTS 素材',
+  ttsAsset: '口播素材',
 } as const;
 
 function summarizeDetectedFiles(files: ImportProjectScanResult['detectedFiles']): string[] {

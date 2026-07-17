@@ -6,7 +6,7 @@ import type {
   MediaCardContent,
   VideoAspectRatio,
 } from '../../types/ai';
-import { Button, Input, Select, Textarea } from '../../ui';
+import { Button, Checkbox, ConfirmDialog, Input, Select, Textarea } from '../../ui';
 import { MediaCardPreview } from './MediaCardPreview';
 import { useVideoGenConfirm } from './useVideoGenConfirm';
 import styles from './VideoCardForm.module.css';
@@ -30,7 +30,7 @@ export interface VideoCardFormProps {
   /** 受控：当前选中的时长档位（秒） */
   durationSeconds: number;
   onDurationSecondsChange: (seconds: number) => void;
-  onGenerate: () => void;
+  onGenerate: (updates: Partial<AICard>) => void;
   onCancel: () => void;
   onClose: () => void;
   onSave: (cardId: string, updates: Partial<AICard>) => void;
@@ -88,7 +88,7 @@ export function VideoCardForm({
   const [providerId, setProviderId] = useState<string | null>(initialContent?.providerId ?? null);
   const [model, setModel] = useState<string | null>(initialContent?.model ?? null);
 
-  const confirmGen = useVideoGenConfirm();
+  const confirmation = useVideoGenConfirm();
 
   // 外部 card 变化时同步本地 state
   useEffect(() => {
@@ -106,27 +106,17 @@ export function VideoCardForm({
 
   const status = initialContent?.generationStatus ?? 'idle';
   const isGenerating = status === 'generating' || status === 'pending';
-  const clampedPercent = Math.max(0, Math.min(100, percent ?? 0));
   const primaryButtonLabel = isGenerating
-    ? `取消生成 ${clampedPercent}%`
+    ? '停止'
     : status === 'ready'
-      ? '重新生成'
-      : '生成';
+      ? '重新生成视频'
+      : '生成视频';
 
-  const selectedProvider =
-    videoProviders.find((p) => p.id === providerId) ?? videoProviders[0] ?? null;
-  const durationOptions = selectedProvider?.durationOptions ?? DEFAULT_DURATION_OPTIONS;
+  const selectedProvider = videoProviders.find((p) => p.id === providerId) ?? null;
+  const durationProvider = selectedProvider ?? videoProviders[0] ?? null;
+  const durationOptions = durationProvider?.durationOptions ?? DEFAULT_DURATION_OPTIONS;
 
-  const handlePrimary = async () => {
-    if (isGenerating) {
-      onCancel();
-      return;
-    }
-    const ok = await confirmGen();
-    if (ok) onGenerate();
-  };
-
-  const handleSave = () => {
+  const buildUpdates = (): Partial<AICard> => {
     const base = initialContent ?? buildFallbackContent(aspectRatio, prompt, providerId, model);
     const updatedContent: MediaCardContent = {
       ...base,
@@ -135,13 +125,26 @@ export function VideoCardForm({
       aspectRatio: aspectRatio as ImageAspectRatio,
       providerId,
       model,
+      extraParams: { ...base.extraParams, durationSeconds },
     };
-    onSave(card.id, {
+    return {
       title,
       displayMode,
+      displayDurationMs: durationSeconds * 1_000,
       content: updatedContent,
-    });
+    };
   };
+
+  const handlePrimary = async () => {
+    if (isGenerating) {
+      onCancel();
+      return;
+    }
+    const ok = await confirmation.requestConfirmation();
+    if (ok) onGenerate(buildUpdates());
+  };
+
+  const handleSave = () => onSave(card.id, buildUpdates());
 
   const previewContent: MediaCardContent =
     initialContent ?? buildFallbackContent(aspectRatio, prompt, providerId, model);
@@ -158,7 +161,7 @@ export function VideoCardForm({
       </div>
 
       <div className={styles.field}>
-        <label className={styles.label}>提示词</label>
+        <label className={styles.label}>生成描述</label>
         <Textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -166,16 +169,6 @@ export function VideoCardForm({
           placeholder="描述主体、动作、镜头运动、转场"
         />
       </div>
-
-      <details className={styles.field}>
-        <summary className={styles.summary}>负面提示词（可选）</summary>
-        <Textarea
-          value={negativePrompt}
-          onChange={(e) => setNegativePrompt(e.target.value)}
-          rows={2}
-          placeholder="不希望出现的元素"
-        />
-      </details>
 
       <div className={styles.row}>
         <div className={styles.field}>
@@ -185,20 +178,6 @@ export function VideoCardForm({
             onChange={(e) => setAspectRatio(e.target.value as VideoAspectRatio)}
             options={ASPECT_OPTIONS.map((v) => ({ value: v, label: v }))}
           />
-          {/* a11y / SSR fallback：枚举可选 aspect ratio，便于无脚本环境与测试断言 */}
-          <select
-            aria-hidden="true"
-            tabIndex={-1}
-            style={{ display: 'none' }}
-            value={aspectRatio}
-            onChange={(e) => setAspectRatio(e.target.value as VideoAspectRatio)}
-          >
-            {ASPECT_OPTIONS.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
         </div>
         <div className={styles.field}>
           <label className={styles.label}>显示模式</label>
@@ -213,77 +192,97 @@ export function VideoCardForm({
         </div>
       </div>
 
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>时长档位</label>
-          <Select
-            value={String(durationSeconds)}
-            onChange={(e) => onDurationSecondsChange(Number(e.target.value))}
-            options={durationOptions.map((s) => ({ value: String(s), label: `${s}s` }))}
-          />
-          {/* a11y / SSR fallback：枚举可选时长档位 */}
-          <select
-            aria-hidden="true"
-            tabIndex={-1}
-            style={{ display: 'none' }}
-            value={String(durationSeconds)}
-            onChange={(e) => onDurationSecondsChange(Number(e.target.value))}
-          >
-            {durationOptions.map((s) => (
-              <option key={s} value={String(s)}>{`${s}s`}</option>
-            ))}
-          </select>
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label}>显示时长（ms，由生成产物决定）</label>
-          <Input value={String(card.displayDurationMs)} readOnly />
-        </div>
+      <div className={styles.field}>
+        <label className={styles.label}>生成时长</label>
+        <Select
+          value={String(durationSeconds)}
+          onChange={(e) => onDurationSecondsChange(Number(e.target.value))}
+          options={durationOptions.map((s) => ({ value: String(s), label: `${s} 秒` }))}
+        />
       </div>
 
-      <div className={styles.row}>
-        <div className={styles.field}>
-          <label className={styles.label}>Provider</label>
-          <Select
-            value={providerId ?? ''}
-            onChange={(e) => {
-              const v = e.target.value || null;
-              setProviderId(v);
-              setModel(null);
-            }}
-            options={[
-              { value: '', label: '使用默认绑定' },
-              ...videoProviders.map((p) => ({ value: p.id, label: p.name })),
-            ]}
-          />
+      <details className={styles.advanced}>
+        <summary className={styles.summary}>高级生成设置</summary>
+        <div className={styles.advancedBody}>
+          <div className={styles.field}>
+            <label className={styles.label}>排除内容（可选）</label>
+            <Textarea
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              rows={2}
+              placeholder="描述不希望出现在视频中的内容"
+            />
+          </div>
+          <div className={styles.row}>
+            <div className={styles.field}>
+              <label className={styles.label}>生成服务</label>
+              <Select
+                value={providerId ?? ''}
+                onChange={(e) => {
+                  setProviderId(e.target.value || null);
+                  setModel(null);
+                }}
+                options={[
+                  { value: '', label: '使用项目默认设置' },
+                  ...videoProviders.map((p) => ({ value: p.id, label: p.name })),
+                ]}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label}>模型</label>
+              <Select
+                value={model ?? ''}
+                onChange={(e) => setModel(e.target.value || null)}
+                disabled={!selectedProvider}
+                options={[
+                  { value: '', label: '使用服务默认模型' },
+                  ...(selectedProvider?.models ?? []).map((m) => ({ value: m, label: m })),
+                ]}
+              />
+            </div>
+          </div>
         </div>
-        <div className={styles.field}>
-          <label className={styles.label}>Model</label>
-          <Select
-            value={model ?? ''}
-            onChange={(e) => setModel(e.target.value || null)}
-            disabled={!selectedProvider}
-            options={[
-              { value: '', label: '使用默认绑定' },
-              ...(selectedProvider?.models ?? []).map((m) => ({ value: m, label: m })),
-            ]}
-          />
-        </div>
-      </div>
+      </details>
 
       <div className={styles.buttonRow}>
         <Button variant="secondary" onClick={onClose}>
-          取消编辑
+          关闭
         </Button>
-        <Button variant="secondary" onClick={handleSave}>
-          保存
+        <Button variant="secondary" disabled={isGenerating} onClick={handleSave}>
+          保存设置
         </Button>
         <Button
-          variant={isGenerating ? 'destructive' : 'primary'}
+          variant={isGenerating ? 'secondary' : 'primary'}
+          disabled={!isGenerating && !prompt.trim()}
           onClick={handlePrimary}
         >
           {primaryButtonLabel}
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={confirmation.open}
+        onOpenChange={confirmation.onOpenChange}
+        title="开始生成视频？"
+        description={(
+          <>
+            <span className={styles.confirmCopy}>
+              视频生成通常需要数分钟，并可能按次计费。开始后可在任务栏查看进度或停止。
+            </span>
+            <Checkbox
+              className={styles.confirmRemember}
+              size="sm"
+              label="下次不再提示"
+              checked={confirmation.rememberChoice}
+              onChange={confirmation.setRememberChoice}
+            />
+          </>
+        )}
+        confirmText="开始生成"
+        cancelText="返回调整"
+        onConfirm={confirmation.confirm}
+        onCancel={confirmation.cancel}
+      />
     </div>
   );
 }

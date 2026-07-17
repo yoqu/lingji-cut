@@ -1,4 +1,5 @@
 import { app, ipcMain, type BrowserWindow } from 'electron';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   analyzeSrt,
@@ -8,6 +9,7 @@ import {
   materializeImageCard,
   regenerateAICard,
   regenerateCoverPrompt,
+  type ResolveCardAssetsFn,
   type SegmentPlanningResult,
   type SubtitleCardDraftInput,
 } from '../src/lib/ai-analysis';
@@ -23,6 +25,7 @@ import {
 } from '../src/lib/publish-metadata';
 import { recommendBilibiliPartition } from '../src/lib/publish-partition-recommend';
 import { resolvePromptBinding } from '../src/lib/llm/binding-resolver';
+import { getImageProvider } from '../src/lib/image-gen/registry';
 import {
   handleGenerateCardImage,
   handleGenerateCardVideo,
@@ -33,6 +36,7 @@ import { parseSrt } from '../src/lib/srt-parser';
 import type { SrtEntry } from '../src/types';
 import type {
   AICard,
+  AIAnalysisResult,
   AISegment,
   AISegmentVisualType,
   AISettings,
@@ -40,10 +44,22 @@ import type {
   PromptBindingMap,
 } from '../src/types/ai';
 import { loadCardTemplates, loadEffectivePromptTemplate } from './prompts-io';
-import { loadProjectFile, saveProjectSection } from './project-file';
+import { loadProjectFile, mutateProjectProduction, saveProjectSection } from './project-file';
 import { resolveWorkTitle } from '../src/lib/project-persistence';
 import { emitProjectUpdated } from './pipeline/headless-generation';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
+import {
+  resolveAssetRequestsForProject,
+  type GenerateMissingAssetFileFn,
+} from './asset-library';
+import type { AssetGenerationRequest } from '../src/types/assets';
+import type { TelemetryHook } from '../src/lib/telemetry/auto-run';
+import { createDirectorPlan } from '../src/lib/director-planning';
+import {
+  DirectorApprovalRequiredError,
+  generateCardsFromDirectorPlan,
+} from '../src/lib/director-production';
+import { createEmptyProductionState } from '../src/lib/director-workflow';
 
 export interface AiGenerationIpcContext {
   getMainWindow: () => BrowserWindow | null;
@@ -75,6 +91,14 @@ async function loadProjectWorkTitle(projectDir?: string): Promise<string | undef
   }
 }
 
+async function requireApprovedDirector(projectDir?: string): Promise<void> {
+  if (!projectDir) throw new DirectorApprovalRequiredError();
+  const project = await loadProjectFile(projectDir);
+  if (!project.production?.approvedPlan?.approvedAt) {
+    throw new DirectorApprovalRequiredError();
+  }
+}
+
 /**
  * Motion TSX 生成唯一路径：pi 多 agent（导演→雕刻→审查）provider 工厂。
  * 所有 motion 卡生成入口（analyze / regenerate / segment 补生成 / 手选字幕 / pipeline）
@@ -93,10 +117,145 @@ function makeMotionCardProvider(
     userDataPath: app.getPath('userData'),
     projectPath: projectDir ?? process.cwd(),
     rolesSeedDir: path.join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
+    contactSheetCacheDir: path.join(app.getPath('userData'), 'motion-contact-sheets'),
     onPhase,
     onAgentEvent: makeAgentFeedCallback(feedId),
     ...models,
   });
+}
+
+async function imageToBuffer(img: {
+  url?: string;
+  base64?: string;
+  mimeType?: string;
+}): Promise<Buffer> {
+  if (img.base64) return Buffer.from(img.base64, 'base64');
+  if (img.url) {
+    const res = await fetch(img.url);
+    if (!res.ok) throw new Error(`下载资产生成图片失败 HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  throw new Error('image provider 未返回可下载图片');
+}
+
+function imageExt(mimeType?: string): string {
+  if (mimeType?.includes('jpeg') || mimeType?.includes('jpg')) return '.jpg';
+  if (mimeType?.includes('webp')) return '.webp';
+  return '.png';
+}
+
+function makeAssetImageGenerator(params: {
+  projectDir: string;
+  settings: AISettings;
+  projectBindings: PromptBindingMap | null;
+  writeAppLog: AiGenerationIpcContext['writeAppLog'];
+  telemetry?: TelemetryHook;
+}): GenerateMissingAssetFileFn {
+  return async (request: AssetGenerationRequest, context: { signal?: AbortSignal }) => {
+    const binding = resolvePromptBinding('card.image', params.settings, params.projectBindings);
+    const providerId = binding.imageProvider?.id ?? null;
+    const model = binding.imageModel ?? null;
+    const provider = providerId
+      ? params.settings.imageProviders.find((item) => item.id === providerId) ?? null
+      : null;
+    if (!provider) {
+      throw new Error('card.image 未绑定 ImageProvider，无法自动生成缺失资产');
+    }
+    if (!model) {
+      throw new Error('card.image 未指定模型，无法自动生成缺失资产');
+    }
+
+    params.writeAppLog(
+      'info',
+      'asset-library',
+      '开始自动生成 Motion Card 缺失资产',
+      `request=${request.id}, query=${request.query}, provider=${provider.id}, model=${model}`,
+    );
+    const generationStartedAt = Date.now();
+    params.telemetry?.emit('asset.generate.start', {
+      requestId: request.id,
+      role: request.role,
+      provider: provider.id,
+      model,
+    });
+    const adapter = getImageProvider(provider.type);
+    try {
+      const result = await adapter.generate(
+      {
+        prompt: request.prompt,
+        model,
+        aspectRatio: request.role === 'background' || request.role === 'texture' ? '16:9' : '1:1',
+        n: 1,
+      },
+      { baseUrl: provider.baseUrl, apiKey: provider.apiKey, extras: provider.extras },
+      {
+        taskId: `asset-image-${request.id}`,
+        signal: context.signal ?? new AbortController().signal,
+        onProgress: () => {
+          // 资产生成目前随卡片分析运行，细粒度进度先写入 manifest 状态。
+        },
+      },
+    );
+      const img = result.images[0];
+      if (!img) throw new Error('image provider 未返回图片');
+      const buf = await imageToBuffer(img);
+      const dir = path.join(params.projectDir, 'assets', 'generated');
+      await fs.mkdir(dir, { recursive: true });
+      const filePath = path.join(dir, `${request.id}${imageExt(img.mimeType)}`);
+      await fs.writeFile(filePath, buf);
+      const durationMs = Date.now() - generationStartedAt;
+      params.telemetry?.emit('asset.generate.end', {
+        requestId: request.id,
+        provider: provider.id,
+        model,
+        durationMs,
+        ok: true,
+      });
+      params.writeAppLog(
+        'info',
+        'asset-library',
+        'Motion Card 缺失资产生成完成',
+        `request=${request.id}, provider=${provider.id}, model=${model}, durationMs=${durationMs}`,
+      );
+      return { filePath };
+    } catch (error) {
+      params.telemetry?.emit('asset.generate.end', {
+        requestId: request.id,
+        provider: provider.id,
+        model,
+        durationMs: Date.now() - generationStartedAt,
+        ok: false,
+        cancelled: context.signal?.aborted === true,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  };
+}
+
+function makeAssetResolver(params: {
+  projectDir?: string;
+  settings: AISettings;
+  projectBindings: PromptBindingMap | null;
+  writeAppLog: AiGenerationIpcContext['writeAppLog'];
+  telemetry?: TelemetryHook;
+}): ResolveCardAssetsFn | undefined {
+  const { projectDir } = params;
+  if (!projectDir) return undefined;
+  return ({ requests, sourceCardId, signal }) =>
+    resolveAssetRequestsForProject({
+      projectDir,
+      requests,
+      sourceCardId,
+      signal,
+      generateMissing: makeAssetImageGenerator({
+        projectDir,
+        settings: params.settings,
+        projectBindings: params.projectBindings,
+        writeAppLog: params.writeAppLog,
+        telemetry: params.telemetry,
+      }),
+    });
 }
 
 // AI 卡片媒体生成共享的 AbortController 注册表（image / video / cancel 复用）
@@ -143,6 +302,10 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         : parseSrt(args.srtContent ?? '');
       try {
         const userDataPath = app.getPath('userData');
+        const directorTemplate = await loadEffectivePromptTemplate('production.director', {
+          userDataPath,
+          projectDir: args.projectDir,
+        });
         const planningTemplate = await loadEffectivePromptTemplate('planning.segment', {
           userDataPath,
           projectDir: args.projectDir,
@@ -152,6 +315,10 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           projectDir: args.projectDir,
         });
         const coverTemplate = await loadEffectivePromptTemplate('cover.regeneration', {
+          userDataPath,
+          projectDir: args.projectDir,
+        });
+        const motionBibleTemplate = await loadEffectivePromptTemplate('motion.bible', {
           userDataPath,
           projectDir: args.projectDir,
         });
@@ -225,25 +392,108 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             }
           : undefined;
         const telemetry = makeMainTelemetry(args.telemetryRunId);
-        const result = await analyzeSrt(entries, args.settings, {
+        const resolveCardAssets = makeAssetResolver({
+          projectDir: args.projectDir,
+          settings: args.settings,
+          projectBindings: args.projectBindings ?? null,
+          writeAppLog,
+          telemetry,
+        });
+        const generateMotionCard = makeMotionCardProvider(
+          args.projectDir,
+          args.settings,
+          args.projectBindings ?? null,
+          undefined,
+          args.feedId,
+        );
+        const commonCardOptions = {
+          stylePresetId: resolveStylePresetId({
+            project: projectStylePresetId,
+            global: args.settings.defaultStylePresetId,
+          }),
+          cardTemplate,
+          imageTemplate,
+          animationTemplate,
+          projectBindings: args.projectBindings ?? null,
+          resolveCardAssets,
+          generateMotionCard,
+          validateMotionSource: assertCardRenders,
+          telemetry,
+        };
+        let result: AIAnalysisResult;
+        if (args.projectDir) {
+          const taskId = args.feedId ?? `analyze-srt-${Date.now()}`;
+          const project = await loadProjectFile(args.projectDir);
+          const production = project.production ?? createEmptyProductionState();
+          const revision = production.draftPlan?.revision
+            ?? (production.approvedPlan?.revision ?? 0) + 1;
+          await mutateProjectProduction(args.projectDir, {
+            kind: 'set-workflow', stage: 'director-planning', mode: 'auto', taskId,
+          });
+          const draft = await createDirectorPlan(entries, args.settings, {
+            revision,
+            globalPrompt: args.globalPrompt,
+            stylePresetId: projectStylePresetId,
+            planningTemplate,
+            directorTemplate,
+            motionBibleTemplate,
+            projectBindings: args.projectBindings ?? null,
+            telemetry,
+            onProgress: (phase, percent) => {
+              getMainWindow()?.webContents.send('analyze-progress', {
+                phase,
+                percent: phase === 'planning' ? Math.round(percent * 0.6) : 60 + Math.round(percent * 0.2),
+              });
+            },
+          });
+          await mutateProjectProduction(args.projectDir, { kind: 'replace-draft', plan: draft });
+          const approved = await mutateProjectProduction(args.projectDir, {
+            kind: 'approve-draft', expectedRevision: revision, taskId,
+          });
+          const approvedPlan = approved.approvedPlan!;
+          await generateWorkTitle?.({
+            segments: approvedPlan.segments,
+            coverPrompts: approvedPlan.coverDirection.prompt ? [approvedPlan.coverDirection.prompt] : [],
+            summary: approvedPlan.summary,
+            keywords: approvedPlan.keywords,
+            globalPrompt: approvedPlan.globalPrompt,
+          });
+          result = await generateCardsFromDirectorPlan(entries, approvedPlan, args.settings, {
+            existingCards: project.aiAnalysis.analysisResult?.cards ?? [],
+            generateCardImage,
+            cardOptions: commonCardOptions,
+            onProgress: (progress) => getMainWindow()?.webContents.send('analyze-progress', progress),
+            onCardGenerated: (card, index) => {
+              getMainWindow()?.webContents.send('analyze-card-completed', { card, index });
+            },
+          });
+          await mutateProjectProduction(args.projectDir, {
+            kind: 'set-output', output: 'cards',
+            state: {
+              status: result.cardErrors?.length ? 'failed' : 'current',
+              directorRevision: revision,
+              updatedAt: Date.now(),
+              error: result.cardErrors?.length ? `${result.cardErrors.length} 个镜头生成失败` : undefined,
+            },
+            expectedDirectorRevision: revision,
+            expectedTaskId: taskId,
+          });
+        } else result = await analyzeSrt(entries, args.settings, {
           globalPrompt: args.globalPrompt,
           // 项目级默认风格：从 project.json 读取，缺省时为 undefined（下游回退全局/内置默认）。
           projectStylePresetId,
           defaultStylePresetId: args.settings.defaultStylePresetId,
           planningTemplate,
+          directorTemplate,
           cardTemplate,
           imageTemplate,
           animationTemplate,
           coverTemplate,
+          motionBibleTemplate,
           projectBindings: args.projectBindings ?? null,
           generateCardImage,
-          generateMotionCard: makeMotionCardProvider(
-            args.projectDir,
-            args.settings,
-            args.projectBindings ?? null,
-            undefined,
-            args.feedId,
-          ),
+          resolveCardAssets,
+          generateMotionCard,
           validateMotionSource: assertCardRenders,
           generateWorkTitle,
           onProgress: (progress) => {
@@ -308,13 +558,16 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         settings: AISettings;
         globalPrompt?: string;
         cardPrompt?: string;
-        programSummary?: string;
-        keywords?: string[];
-        projectDir?: string;
-        projectBindings?: PromptBindingMap | null;
-        feedId?: string;
+          programSummary?: string;
+          keywords?: string[];
+          motionBible?: import('../src/types/motion').MotionBible;
+          projectDir?: string;
+          projectBindings?: PromptBindingMap | null;
+          feedId?: string;
+          refineExistingMotion?: boolean;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -337,10 +590,18 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           cardPrompt: args.cardPrompt,
           programSummary: args.programSummary,
           keywords: args.keywords,
+          motionBible: args.motionBible,
           cardTemplate,
           imageTemplate,
           animationTemplate,
+          refineExistingMotion: args.refineExistingMotion === true,
           projectBindings: args.projectBindings ?? null,
+          resolveCardAssets: makeAssetResolver({
+            projectDir: args.projectDir,
+            settings: args.settings,
+            projectBindings: args.projectBindings ?? null,
+            writeAppLog,
+          }),
           generateMotionCard: makeMotionCardProvider(
             args.projectDir,
             args.settings,
@@ -369,10 +630,12 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         programSummary?: string;
         keywords?: string[];
         cardPrompt?: string;
+        motionBible?: import('../src/types/motion').MotionBible;
         projectDir?: string;
         projectBindings?: PromptBindingMap | null;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -398,6 +661,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           {
             cardPrompt: args.cardPrompt,
             animationTemplate,
+            motionBible: args.motionBible,
             projectBindings: args.projectBindings ?? null,
           },
         );
@@ -420,6 +684,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         cardPrompt?: string;
         programSummary?: string;
         keywords?: string[];
+        motionBible?: import('../src/types/motion').MotionBible;
         projectDir?: string;
         projectBindings?: PromptBindingMap | null;
         segmentIndex?: number;
@@ -427,9 +692,11 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         prevSegment?: AISegment;
         nextSegment?: AISegment;
         visualType?: AISegmentVisualType;
+        qualityMode?: 'auto' | 'director';
         feedId?: string;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -466,6 +733,12 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             imageTemplate,
             animationTemplate,
             projectBindings: args.projectBindings ?? null,
+            resolveCardAssets: makeAssetResolver({
+              projectDir: args.projectDir,
+              settings: args.settings,
+              projectBindings: args.projectBindings ?? null,
+              writeAppLog,
+            }),
             generateMotionCard: makeMotionCardProvider(
               args.projectDir,
               args.settings,
@@ -479,6 +752,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             prevSegment: args.prevSegment,
             nextSegment: args.nextSegment,
             visualType: args.visualType ?? 'motion',
+            qualityMode: args.qualityMode ?? 'auto',
           },
         );
 
@@ -527,11 +801,13 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         globalPrompt?: string;
         programSummary?: string;
         keywords?: string[];
+        motionBible?: import('../src/types/motion').MotionBible;
         projectDir?: string;
         projectBindings?: PromptBindingMap | null;
         feedId?: string;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -553,10 +829,17 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           defaultStylePresetId: args.settings.defaultStylePresetId,
           programSummary: args.programSummary,
           keywords: args.keywords,
+          motionBible: args.motionBible,
           cardTemplate,
           imageTemplate,
           animationTemplate,
           projectBindings: args.projectBindings ?? null,
+          resolveCardAssets: makeAssetResolver({
+            projectDir: args.projectDir,
+            settings: args.settings,
+            projectBindings: args.projectBindings ?? null,
+            writeAppLog,
+          }),
           generateMotionCard: makeMotionCardProvider(
             args.projectDir,
             args.settings,
@@ -586,6 +869,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         projectBindings?: PromptBindingMap | null;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -633,6 +917,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         n?: number;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       const telemetry = makeMainTelemetry(args.telemetryRunId);
       const coverStart = Date.now();
       telemetry.emit('stage.start', { stage: 'cover', prompts: args.prompts.length });
@@ -801,6 +1086,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         projectBindings?: PromptBindingMap | null;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       const prev = cardMediaAbortMap.get(args.cardId);
       prev?.abort();
       const ac = new AbortController();
@@ -837,6 +1123,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         projectBindings?: PromptBindingMap | null;
       },
     ) => {
+      await requireApprovedDirector(args.projectDir);
       const prev = cardMediaAbortMap.get(args.cardId);
       prev?.abort();
       const ac = new AbortController();

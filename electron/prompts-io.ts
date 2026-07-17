@@ -42,15 +42,22 @@ function parseUsableOverride(raw: string, kind: PromptKind, scopeLabel: string):
     return null;
   }
   const builtinVersion = getBuiltinPromptTemplate(kind).version;
+  const compatibleCoverV8 = kind === 'cover.regeneration'
+    && template.version === 8
+    && builtinVersion === 9;
   if (
     typeof template.version === 'number' &&
     typeof builtinVersion === 'number' &&
-    template.version < builtinVersion
+    template.version < builtinVersion &&
+    !compatibleCoverV8
   ) {
     console.warn(
       `[prompts] ${scopeLabel} ${kind} 覆盖版本过旧（v${template.version} < 内置 v${builtinVersion}），跳过该覆盖；如需继续自定义，请在设置页基于新版重新保存`,
     );
     return null;
+  }
+  if (compatibleCoverV8) {
+    template = { ...template, version: builtinVersion };
   }
   return template;
 }

@@ -73,6 +73,7 @@ export async function reviewScript(
 export interface ScriptReviewStreamOptions {
   onChunk?: (chunk: string) => void;
   onReasoningChunk?: (chunk: string) => void;
+  signal?: AbortSignal;
 }
 
 export async function reviewScriptStream(
@@ -91,7 +92,7 @@ export async function reviewScriptStream(
     systemPrompt,
     userMessage,
     options.onChunk ?? (() => {}),
-    { onReasoningChunk: options.onReasoningChunk },
+    { onReasoningChunk: options.onReasoningChunk, signal: options.signal },
   );
 
   const payload = parseLLMJsonResponse(fullText);

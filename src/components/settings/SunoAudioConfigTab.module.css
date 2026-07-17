@@ -1,0 +1,30 @@
+.timingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.connectionStatus {
+  padding: var(--space-3);
+  border-left: 2px solid var(--color-success);
+  background: var(--color-control-bg);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.connectionStatus strong {
+  color: var(--color-text-primary);
+}
+
+@media (max-width: 760px) {
+  .timingGrid {
+    grid-template-columns: 1fr;
+  }
+}

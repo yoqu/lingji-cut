@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Checkbox, Select } from '../../ui';
+import { Button, Checkbox, Select } from '../../ui';
 import type { SelectOption } from '../../ui';
 import type {
   ImageProvider,
@@ -282,10 +282,10 @@ export function PromptBindingBar({
           onChange={(checked) => handleLlmInheritToggle(checked)}
         />
         <div className={styles.selectCell}>
-          <span className={styles.selectCellLabel}>Provider</span>
+          <span className={styles.selectCellLabel}>生成服务</span>
           {isLlmInheriting ? (
             <span className={styles.inheritedValue}>
-              {llmProvider?.name ?? '（未配置默认 Provider）'}
+              {llmProvider?.name ?? '（未配置默认生成服务）'}
             </span>
           ) : (
             <Select
@@ -293,7 +293,7 @@ export function PromptBindingBar({
               value={displayLlmProviderId ?? ''}
               options={llmProviderOptions}
               onChange={(e) => handleLlmProviderChange(e.target.value)}
-              placeholder="选择 Provider"
+              placeholder="选择生成服务"
             />
           )}
         </div>
@@ -314,13 +314,15 @@ export function PromptBindingBar({
           )}
         </div>
         {!isLlmInheriting && (
-          <button
+          <Button
             type="button"
+            variant="link"
+            size="xs"
             className={styles.resetLink}
             onClick={() => handleLlmInheritToggle(true)}
           >
             重置为继承
-          </button>
+          </Button>
         )}
       </div>
 
@@ -338,10 +340,10 @@ export function PromptBindingBar({
               onChange={(checked) => handleImgInheritToggle(checked)}
             />
             <div className={styles.selectCell}>
-              <span className={styles.selectCellLabel}>Provider</span>
+              <span className={styles.selectCellLabel}>生成服务</span>
               {isImgInheriting ? (
                 <span className={styles.inheritedValue}>
-                  {imgProvider?.name ?? '（未配置默认 ImageProvider）'}
+                  {imgProvider?.name ?? '（未配置默认图片生成服务）'}
                 </span>
               ) : (
                 <Select
@@ -349,7 +351,7 @@ export function PromptBindingBar({
                   value={displayImgProviderId ?? ''}
                   options={imgProviderOptions}
                   onChange={(e) => handleImgProviderChange(e.target.value)}
-                  placeholder="选择 ImageProvider"
+                  placeholder="选择图片生成服务"
                 />
               )}
             </div>
@@ -370,13 +372,15 @@ export function PromptBindingBar({
               )}
             </div>
             {!isImgInheriting && (
-              <button
+              <Button
                 type="button"
+                variant="link"
+                size="xs"
                 className={styles.resetLink}
                 onClick={() => handleImgInheritToggle(true)}
               >
                 重置为继承
-              </button>
+              </Button>
             )}
           </div>
           <div className={styles.imageNote}>
@@ -399,10 +403,10 @@ export function PromptBindingBar({
               onChange={(checked) => handleVideoInheritToggle(checked)}
             />
             <div className={styles.selectCell}>
-              <span className={styles.selectCellLabel}>Provider</span>
+              <span className={styles.selectCellLabel}>生成服务</span>
               {isVideoInheriting ? (
                 <span className={styles.inheritedValue}>
-                  {videoProvider?.name ?? '（未配置默认 VideoProvider）'}
+                  {videoProvider?.name ?? '（未配置默认视频生成服务）'}
                 </span>
               ) : (
                 <Select
@@ -410,7 +414,7 @@ export function PromptBindingBar({
                   value={displayVideoProviderId ?? ''}
                   options={videoProviderOptions}
                   onChange={(e) => handleVideoProviderChange(e.target.value)}
-                  placeholder="选择 VideoProvider"
+                  placeholder="选择视频生成服务"
                 />
               )}
             </div>
@@ -431,13 +435,15 @@ export function PromptBindingBar({
               )}
             </div>
             {!isVideoInheriting && (
-              <button
+              <Button
                 type="button"
+                variant="link"
+                size="xs"
                 className={styles.resetLink}
                 onClick={() => handleVideoInheritToggle(true)}
               >
                 重置为继承
-              </button>
+              </Button>
             )}
           </div>
           <div className={styles.imageNote}>

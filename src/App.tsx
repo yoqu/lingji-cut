@@ -1,6 +1,6 @@
 import { AnimatePresence, LayoutGroup, m, useIsPresent } from 'framer-motion';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { useToast } from './ui';
+import { ConfirmDialog, useToast } from './ui';
 import { AgentSidebar } from './components/agent/AgentSidebar';
 import { AppStatusBar } from './components/AppStatusBar';
 import { AgentOpOverlay } from './components/agent/AgentOpOverlay';
@@ -19,6 +19,8 @@ import {
 import { resolveProjectLandingPage } from './lib/project-navigation';
 import { createBlankScriptProjectState } from './lib/script-project';
 import { Editor } from './pages/Editor';
+import { AssetCenter } from './pages/AssetCenter';
+import { DirectorWorkbench } from './pages/DirectorWorkbench';
 import { ScriptWorkbench } from './pages/ScriptWorkbench';
 import { Settings, type SettingsTab } from './pages/Settings';
 import { Setup } from './pages/Setup';
@@ -32,7 +34,7 @@ import { WorkspaceTabs } from './components/WorkspaceTabs';
 import { PublishWorkbench } from './components/publish/PublishWorkbench';
 import { getFileNameFromPath, readAudioDurationMs } from './lib/utils';
 import { createDefaultTimeline } from './types';
-import type { AICard, AIAnalysisResult } from './types/ai';
+import type { AICard } from './types/ai';
 import { buildAICardTimelineDraft } from './types/ai';
 import { getCurrentAISaveStatus, loadAISettings, subscribeToAISaveStatus, useAIStore, type AutoWorkflowParams } from './store/ai';
 import type { ProjectData } from './lib/project-persistence';
@@ -41,10 +43,12 @@ import { useAiEditStore } from './store/ai-edit';
 import { useScriptStore } from './store/script';
 import { useTaskProgressStore } from './store/task-progress';
 import { useAgentFeedStore } from './store/agent-feed';
+import { useProjectTreeSync } from './hooks/use-project-tree-sync';
 import {
   createPipelineProgressBridge,
   type PipelineTaskSnapshot,
 } from './lib/pipeline-progress-bridge';
+import { requestDirectorPlan } from './lib/director-plan-client';
 import { attachTaskNotificationBridge } from './lib/task-notification-bridge';
 import { registerMcpReadonlyHandlers } from './lib/mcp-readonly-handlers';
 import { userPromptBindingKey } from './lib/prompts';
@@ -100,6 +104,7 @@ export default function App() {
   const [previousPage, setPreviousPage] = useState<AppPage>('welcome');
   const [pageTransitionReason, setPageTransitionReason] = useState<PageTransitionReason>('default');
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
+  const [assetCenterFocusId, setAssetCenterFocusId] = useState<string | null>(null);
 
   const setPage = useCallback(
     (next: AppPage, reason: PageTransitionReason = 'default') => {
@@ -124,6 +129,9 @@ export default function App() {
   const [aiSaveStatus, setAISaveStatus] = useState(() => getCurrentAISaveStatus());
   const aggregatedSaveStatus = mergeSaveStatus(saveStatus, aiSaveStatus);
   const [exportRequestToken, setExportRequestToken] = useState(0);
+  const [pendingSubtitleReanalysis, setPendingSubtitleReanalysis] = useState<
+    ReturnType<typeof useTimelineStore.getState>['srtEntries'] | null
+  >(null);
   const {
     addAsset,
     canRedo,
@@ -160,28 +168,56 @@ export default function App() {
       const settings = await loadAISettings();
       const settingsIssue = getAISettingsIssue(settings);
 
-      clearAIAnalysis();
-
       if (settingsIssue || !settings) {
-        window.alert(settingsIssue ?? '请先完成 AI 配置后再重新分析');
+        showToast(settingsIssue ?? '请先完成 AI 配置后再重新分析', {
+          title: '无法重新分析字幕',
+          type: 'error',
+          duration: 5000,
+        });
         return;
       }
 
+      if (!currentProjectDir) return;
+      const taskId = `director-replan-subtitles-${Date.now()}`;
+      useTaskProgressStore.getState().startTask({
+        id: taskId,
+        category: 'ai-analyze',
+        label: '根据新字幕重拟导演方案',
+        mode: 'determinate',
+        progress: 0,
+        phase: '保留当前成片并分析影响',
+        level: 2,
+        canCancel: false,
+      });
+
       try {
-        const result = (await window.electronAPI.analyzeSrt({
+        await requestDirectorPlan({
           entries,
           settings,
-          projectDir: currentProjectDir ?? undefined,
-          projectBindings: useAIStore.getState().projectBindings,
-        })) as AIAnalysisResult;
-        setAIAnalysisResult(result);
-        setCoverCandidates([]);
+          projectDir: currentProjectDir,
+          taskId,
+          onProgress: (progress, phase) => {
+            useTaskProgressStore.getState().updateTask(taskId, { progress, phase });
+          },
+        });
+        useTaskProgressStore.getState().completeTask(taskId);
+        showToast('新导演方案已生成，原有成片会保留到新版本批准并生成成功。', {
+          title: '请在导演台确认影响',
+          type: 'success',
+        });
+        setPage('director-workbench');
       } catch (error) {
-        console.error('重新分析字幕失败:', error);
-        window.alert(error instanceof Error ? error.message : '重新分析字幕失败，请稍后重试。');
+        console.error('重新制定导演方案失败:', error);
+        const message = error instanceof Error ? error.message : '重新制定导演方案失败，请稍后重试。';
+        useTaskProgressStore.getState().failTask(taskId, message);
+        showToast(message, {
+          title: '重新分析字幕失败',
+          type: 'error',
+          duration: 5000,
+        });
       }
     },
-    [clearAIAnalysis, currentProjectDir, setAIAnalysisResult, setCoverCandidates],
+    [currentProjectDir, setPage, showToast],
   );
 
   const resolveAudioDuration = useCallback(
@@ -203,17 +239,9 @@ export default function App() {
       setSrtEntries(entries);
       setPodcast(timeline.podcast.audioPath, srtPath, durationMs);
 
-      const shouldReanalyze = window.confirm(
-        '替换字幕后，AI 卡片将失效。是否立即重新分析？',
-      );
-
-      if (!shouldReanalyze) {
-        return;
-      }
-
-      await rerunAiAnalysisForEntries(entries);
+      setPendingSubtitleReanalysis(entries);
     },
-    [rerunAiAnalysisForEntries, setPodcast, setSrtEntries, timeline.podcast.audioPath],
+    [setPodcast, setSrtEntries, timeline.podcast.audioPath],
   );
 
   const syncWorkspaceState = useCallback(async () => {
@@ -362,7 +390,7 @@ export default function App() {
             );
             const drafts = projectData.aiAnalysis.analysisResult.cards
               .filter((card) => placedSourceIds.has(card.id))
-              .map(buildAICardTimelineDraft);
+              .map((card) => buildAICardTimelineDraft(card, projectData.aiAnalysis?.analysisResult?.motionBible));
             if (drafts.length > 0) timelineStore.addAICardsToTimeline(drafts);
           } else {
             clearAIAnalysis();
@@ -400,7 +428,7 @@ export default function App() {
       updateTask: (id, patch) => useTaskProgressStore.getState().updateTask(id, patch),
       completeTask: (id) => useTaskProgressStore.getState().completeTask(id),
       failTask: (id, error) => useTaskProgressStore.getState().failTask(id, error),
-      removeTask: (id) => useTaskProgressStore.getState().removeTask(id),
+      cancelTask: (id, reason) => useTaskProgressStore.getState().cancelTask(id, reason),
       hasTask: (id) => useTaskProgressStore.getState().tasks.has(id),
       cancel: (taskId) => {
         void window.electronAPI!.cancelPipelineTask?.(taskId);
@@ -421,6 +449,10 @@ export default function App() {
   useEffect(() => {
     useAgentFeedStore.getState().clearAll();
   }, [currentProjectDir]);
+
+  // 项目目录树共享数据层：统一加载 fileEntries + 监听 file-tree-changed 刷新。
+  // 各 tab（写稿 / 编辑器 / 资产 / 发布）只读 useProjectTreeStore，不再各自加载。
+  useProjectTreeSync();
 
   // AI file-first：订阅外部文件变更（file-changed）与会话锁态（ai-edit-lock-changed）。
   // - project.json 变更 → 重载并替换 timeline
@@ -918,14 +950,19 @@ export default function App() {
   }, [currentProjectDir]);
 
   const handleWorkspaceTabSwitch = useCallback(
-    (tab: 'script-workbench' | 'editor' | 'publish') => {
+    (tab: 'script-workbench' | 'director-workbench' | 'editor' | 'asset-center' | 'publish') => {
       if (tab === page) return;
       setPage(tab);
     },
     [page, setPage],
   );
 
-  const showWorkspaceTabs = page === 'editor' || page === 'script-workbench' || page === 'publish';
+  const showWorkspaceTabs =
+    page === 'editor' ||
+    page === 'director-workbench' ||
+    page === 'script-workbench' ||
+    page === 'asset-center' ||
+    page === 'publish';
   const reducedMotion = prefersReducedMotion();
   const pageTransition = resolvePageTransition({
     fromPage: previousPage,
@@ -1016,9 +1053,10 @@ export default function App() {
       />
       {showWorkspaceTabs && (
         <WorkspaceTabs
-          active={page as 'script-workbench' | 'editor' | 'publish'}
+          active={page as 'script-workbench' | 'director-workbench' | 'editor' | 'asset-center' | 'publish'}
           onSwitch={handleWorkspaceTabSwitch}
           scriptProgress={scriptProgress}
+          projectDir={currentProjectDir}
         />
       )}
       <div style={{ minHeight: 0, display: 'flex', overflow: 'hidden' }}>
@@ -1053,9 +1091,12 @@ export default function App() {
                   <div style={{ display: page === 'script-workbench' ? 'contents' : 'none' }}>
                     <ScriptWorkbench
                       onBack={() => setPage('welcome')}
-                      onNavigateToEditor={() => setPage('editor')}
+                      onNavigateToEditor={() => setPage('director-workbench')}
                       setPage={setPage}
                     />
+                  </div>
+                  <div style={{ display: page === 'director-workbench' ? 'contents' : 'none' }}>
+                    <DirectorWorkbench projectDir={currentProjectDir ?? ''} setPage={setPage} />
                   </div>
                   <div style={{ display: page === 'editor' ? 'contents' : 'none' }}>
                     <Editor
@@ -1067,7 +1108,14 @@ export default function App() {
                       projectDir={currentProjectDir}
                       isActive={page === 'editor'}
                       setPage={setPage}
+                      onOpenAssetCenter={(assetId) => {
+                        setAssetCenterFocusId(assetId ?? null);
+                        setPage('asset-center');
+                      }}
                     />
+                  </div>
+                  <div style={{ display: page === 'asset-center' ? 'contents' : 'none' }}>
+                    <AssetCenter projectDir={currentProjectDir} focusAssetId={assetCenterFocusId} />
                   </div>
                   <div style={{ display: page === 'publish' ? 'contents' : 'none' }}>
                     <PublishWorkbench projectDir={currentProjectDir} />
@@ -1094,6 +1142,20 @@ export default function App() {
         open={importProjectDialogOpen}
         onOpenChange={setImportProjectDialogOpen}
         onImported={handleImportProjectComplete}
+      />
+      <ConfirmDialog
+        open={Boolean(pendingSubtitleReanalysis)}
+        onOpenChange={(open) => {
+          if (!open) setPendingSubtitleReanalysis(null);
+        }}
+        title="重新分析字幕？"
+        description="字幕已经替换，现有内容卡片可能与新时间点不一致。重新分析会生成新的分段与内容卡片。"
+        confirmText="重新分析"
+        cancelText="暂不分析"
+        onConfirm={async () => {
+          const entries = pendingSubtitleReanalysis;
+          if (entries) await rerunAiAnalysisForEntries(entries);
+        }}
       />
     </div>
   );

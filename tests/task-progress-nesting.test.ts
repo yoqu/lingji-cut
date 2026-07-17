@@ -60,6 +60,27 @@ describe('task-progress 父子模型', () => {
     expect(tasks.get('parent::card::1')!.status).toBe('error');
   });
 
+  it('父任务 cancelTask 中性取消活动子任务、保留已成功子任务', () => {
+    const s = useTaskProgressStore.getState();
+    s.startTask({ ...base, id: 'parent' });
+    s.startChildTask('parent', { ...base, id: 'parent::card::0' });
+    s.startChildTask('parent', { ...base, id: 'parent::card::1' });
+    s.completeTask('parent::card::0');
+    s.cancelTask('parent', '用户停止');
+
+    const state = useTaskProgressStore.getState();
+    expect(state.tasks.get('parent')).toMatchObject({
+      status: 'cancelled',
+      cancelReason: '用户停止',
+    });
+    expect(state.tasks.get('parent::card::0')!.status).toBe('completed');
+    expect(state.tasks.get('parent::card::1')).toMatchObject({
+      status: 'cancelled',
+      cancelReason: '用户停止',
+    });
+    expect(state.activeCount).toBe(0);
+  });
+
   it('removeTask 父任务连带移除子任务', () => {
     const s = useTaskProgressStore.getState();
     s.startTask({ ...base, id: 'parent' });

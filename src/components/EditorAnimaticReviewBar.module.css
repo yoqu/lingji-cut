@@ -1,0 +1,85 @@
+.bar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-separator);
+  background: color-mix(in srgb, var(--color-selection-blue) 10%, var(--color-window-bg));
+  color: var(--color-text-primary);
+}
+
+.icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-selection-blue) 18%, transparent);
+  color: var(--color-selection-blue);
+}
+
+.message {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.message strong,
+.message span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message strong {
+  font-size: var(--font-size-sm);
+}
+
+.message span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.spinner {
+  animation: animatic-spin 800ms linear infinite;
+}
+
+@keyframes animatic-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 820px) {
+  .bar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding-block: var(--space-2);
+  }
+
+  .actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-left: 34px;
+  }
+}
+
+@media (max-width: 560px) {
+  .actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 34px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}

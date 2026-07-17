@@ -7,6 +7,7 @@ import { toFileSrc } from '../lib/utils';
 import { useIsRendering } from './use-is-rendering';
 import { makeCardAssetResolver } from './card-asset';
 import { createMotionKit, type MotionKitRemotion } from './motion-kit';
+import type { TimingPlan } from '../types/motion';
 
 type CardAssetResolver = (rel: string) => string;
 
@@ -66,14 +67,20 @@ export function CardHost({
   overlayId,
   compiledJs,
   cues,
+  timingPlan,
   projectDir,
+  transparentStage = false,
 }: {
   overlayId: string;
   compiledJs: string;
   /** 逐句字幕节拍（相对卡片 frame 0 的起始帧）；作为 cues prop 注入卡片组件。 */
   cues?: number[];
+  /** SRT/分镜推导出的专业节奏计划；作为 timingPlan prop 注入卡片组件。 */
+  timingPlan?: TimingPlan;
   /** 项目目录（预览时用于把卡片相对图片解析为 file://；导出时忽略，走 staticFile）。 */
   projectDir?: string;
+  /** 外部背景/纹理资产位于卡片下层时，让 motion-kit 的舞台背景透出。 */
+  transparentStage?: boolean;
 }) {
   const isRendering = useIsRendering();
   const cardAsset = useMemo(
@@ -98,8 +105,19 @@ export function CardHost({
   }
 
   return (
-    <CardErrorBoundary>
-      <Comp cues={cues ?? []} />
-    </CardErrorBoundary>
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 1,
+        ...(transparentStage
+          ? ({ '--lingji-card-stage-bg': 'transparent' } as React.CSSProperties)
+          : {}),
+      }}
+    >
+      <CardErrorBoundary>
+        <Comp cues={cues ?? []} timingPlan={timingPlan} />
+      </CardErrorBoundary>
+    </div>
   );
 }

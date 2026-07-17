@@ -134,6 +134,12 @@
   cursor: wait;
 }
 
+.operationStatus {
+  color: var(--color-selection-blue);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
 .generateButton,
 .footerButton {
   display: inline-flex;

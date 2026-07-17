@@ -4,16 +4,18 @@ import { createDefaultTimeline } from '../src/types';
 import { useTimelineStore } from '../src/store/timeline';
 import { PreviewPanel } from '../src/components/PreviewPanel';
 
-vi.mock('../src/components/HyperframesPreviewPlayer', async () => {
+vi.mock('../src/components/RemotionPreviewPlayer', async () => {
   const React = await import('react');
 
   return {
-    HyperframesPreviewPlayer: React.forwardRef(
+    RemotionPreviewPlayer: React.forwardRef(
       (
         {
           timeline,
+          podcastRevision,
         }: {
           timeline: { width: number; height: number };
+          podcastRevision: number;
         },
         ref,
       ) => {
@@ -29,10 +31,11 @@ vi.mock('../src/components/HyperframesPreviewPlayer', async () => {
         return React.createElement(
           'div',
           {
-            'data-player': 'hyperframes',
+            'data-player': 'remotion',
             'data-size': `${timeline.width}x${timeline.height}`,
+            'data-podcast-revision': podcastRevision,
           },
-          'Mock HyperFrames Player',
+          'Mock Remotion Player',
         );
       },
     ),
@@ -107,7 +110,7 @@ describe('PreviewPanel', () => {
     expect(html).toContain('播放');
     expect(html).toContain('00:15');
     expect(html).toContain('01:30');
-    // Remotion player 已挂载（取代旧 hyperframes-player 的 data-size 属性）
-    expect(html).toContain('__remotion-player');
+    expect(html).toContain('data-player="remotion"');
   });
+
 });

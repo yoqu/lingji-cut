@@ -1,5 +1,11 @@
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { it, expect, vi } from 'vitest';
-import { uploadKuaishouVideo } from '../../electron/publish/platforms/kuaishou';
+import {
+  buildKuaishouCaptionPlan,
+  uploadKuaishouVideo,
+} from '../../electron/publish/platforms/kuaishou';
 import { LoginExpiredError } from '../../electron/publish/errors';
 
 /**
@@ -22,11 +28,13 @@ function makeMockPage() {
 
   const sharedLocator: any = {
     click: vi.fn().mockResolvedValue(undefined),
+    fill: vi.fn().mockResolvedValue(undefined),
     waitFor: vi.fn().mockResolvedValue(undefined),
     setInputFiles: vi.fn().mockResolvedValue(undefined),
     count: vi.fn().mockResolvedValue(0),
     isVisible: vi.fn().mockResolvedValue(false),
     getAttribute: vi.fn().mockResolvedValue(''),
+    textContent: vi.fn().mockResolvedValue(''),
     getByText: vi.fn(),
     getByRole: vi.fn(),
     locator: vi.fn(),
@@ -47,6 +55,7 @@ function makeMockPage() {
     getByText: vi.fn().mockReturnValue(sharedLocator),
     getByRole: vi.fn().mockReturnValue(sharedLocator),
     waitForURL: vi.fn().mockResolvedValue(undefined),
+    waitForResponse: vi.fn().mockRejectedValue(new Error('no submit response')),
     waitForTimeout: vi.fn().mockResolvedValue(undefined),
     waitForSelector: vi.fn().mockResolvedValue(undefined),
     // waitForEvent('filechooser') → resolves with mockFileChooser
@@ -56,7 +65,7 @@ function makeMockPage() {
       press: vi.fn().mockResolvedValue(undefined),
       type: vi.fn().mockResolvedValue(undefined),
     },
-    url: vi.fn().mockReturnValue('https://cp.kuaishou.com/article/manage/video'),
+    url: vi.fn().mockReturnValue('https://cp.kuaishou.com/article/publish/video'),
     frames: vi.fn().mockReturnValue([]),
     // Expose mockFileChooser so the assertion can reach it
     _mockFileChooser: mockFileChooser,
@@ -95,6 +104,102 @@ const UPLOAD_OPTS = {
   headless: true,
 } as const;
 
+function makeSubmitResponse(body: Record<string, unknown>, status = 200) {
+  return {
+    url: () => 'https://cp.kuaishou.com/rest/cp/works/v2/video/pc/submit',
+    status: () => status,
+    statusText: () => (status === 200 ? 'OK' : 'Bad Request'),
+    ok: () => status >= 200 && status < 300,
+    json: vi.fn().mockResolvedValue(body),
+    request: () => ({ method: () => 'POST' }),
+  };
+}
+
+it('快手文案中的已有话题与独立标签统一去重，并将总数限制为 3', () => {
+  expect(
+    buildKuaishouCaptionPlan('正文 #比亚迪 #储能 #隐形冠军', [
+      '比亚迪',
+      '储能',
+      '充电桩',
+    ]),
+  ).toEqual({
+    description: '正文 #比亚迪 #储能 #隐形冠军',
+    tagsToAppend: [],
+  });
+  expect(buildKuaishouCaptionPlan('正文 #甲 #乙 #丙 #丁', [])).toEqual({
+    description: '正文 #甲 #乙 #丙',
+    tagsToAppend: [],
+  });
+});
+
+// existsSync 门槛要求封面文件真实存在
+const REAL_COVER = join(tmpdir(), 'ks-test-cover-3x4.png');
+writeFileSync(REAL_COVER, 'png');
+
+it(
+  '提供 covers 3:4 时优先用它设置封面（setInputFiles 收到竖图路径）',
+  async () => {
+    const page = makeMockPage();
+    const sharedLocator = page.locator('x');
+
+    await uploadKuaishouVideo(page as any, {
+      ...UPLOAD_OPTS,
+      thumbnail: '/tmp/fallback-16x9.jpg',
+      covers: { '3:4': REAL_COVER },
+    } as any);
+
+    expect(sharedLocator.setInputFiles).toHaveBeenCalledWith(REAL_COVER);
+  },
+  15_000,
+);
+
+it(
+  '封面文件不存在 → 不碰封面弹窗（避免残留弹窗卡死页面），经 onProgress 外发原因',
+  async () => {
+    const page = makeMockPage();
+    const sharedLocator = page.locator('x');
+    const onProgress = vi.fn();
+
+    await uploadKuaishouVideo(page as any, {
+      ...UPLOAD_OPTS,
+      thumbnail: '/tmp/definitely-not-exists-cover.png',
+      onProgress,
+    } as any);
+
+    expect(sharedLocator.setInputFiles).not.toHaveBeenCalled();
+    expect(onProgress).toHaveBeenCalledWith(
+      80,
+      expect.stringMatching(/快手封面文件不存在/),
+    );
+  },
+  15_000,
+);
+
+it(
+  '封面设置两轮均失败 → 硬摘残留弹窗 + 经 onProgress 外发原因并继续发布（不静默吞掉、不中断）',
+  async () => {
+    const page = makeMockPage();
+    const sharedLocator = page.locator('x');
+    sharedLocator.setInputFiles.mockRejectedValue(new Error('cover input not found'));
+    const onProgress = vi.fn();
+
+    await uploadKuaishouVideo(page as any, {
+      ...UPLOAD_OPTS,
+      thumbnail: REAL_COVER,
+      onProgress,
+    } as any);
+
+    expect(onProgress).toHaveBeenCalledWith(
+      80,
+      expect.stringMatching(/快手封面设置失败.*cover input not found/),
+    );
+    // 失败路径必须执行过弹窗摘除（page.evaluate 被调用以移除 ant-modal-wrap）
+    const evaluateCalls = page.evaluate.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(evaluateCalls.some((code: string) => code.includes('ant-modal-wrap'))).toBe(true);
+  },
+  15_000,
+);
+
 it('上传按钮超时且页面呈未登录态（机构服务标记存在）→ 抛 LoginExpiredError', async () => {
   const page = makeMockPage();
   // 上传按钮 waitFor 超时（快手未登录时 URL 不变，渲染成介绍页，按钮永不出现）
@@ -125,6 +230,112 @@ it('新版描述编辑器 #work-description-edit 存在时优先点击它填写�
 
   expect(descLocator.click).toHaveBeenCalled();
 }, 10_000);
+
+it('作者声明为空时选择“个人观点，仅供参考”后再发布', async () => {
+  const page = makeMockPage();
+  const sharedLocator = page.locator('x');
+  const selectedItem = {
+    ...sharedLocator,
+    count: vi.fn().mockResolvedValue(0),
+  };
+  const declarationSelect: any = {
+    ...sharedLocator,
+    count: vi.fn().mockResolvedValue(1),
+    click: vi.fn().mockResolvedValue(undefined),
+    locator: vi.fn((sel: string) =>
+      sel === '.ant-select-selection-item' ? selectedItem : sharedLocator,
+    ),
+  };
+  declarationSelect.first = () => declarationSelect;
+  const declarationRow: any = {
+    ...sharedLocator,
+    locator: vi.fn((sel: string) => (sel === '.ant-select' ? declarationSelect : sharedLocator)),
+  };
+  const declarationLabel: any = {
+    ...sharedLocator,
+    count: vi.fn().mockResolvedValue(1),
+    locator: vi.fn((sel: string) => (sel === 'xpath=..' ? declarationRow : sharedLocator)),
+  };
+  declarationLabel.first = () => declarationLabel;
+  const declarationOption: any = {
+    ...sharedLocator,
+    count: vi.fn().mockResolvedValue(1),
+    click: vi.fn().mockResolvedValue(undefined),
+  };
+  declarationOption.first = () => declarationOption;
+  page.getByText = vi.fn((text: string) => {
+    if (text === '作者声明') return declarationLabel;
+    if (text === '个人观点，仅供参考') return declarationOption;
+    return sharedLocator;
+  });
+
+  await uploadKuaishouVideo(page as any, UPLOAD_OPTS as any);
+
+  expect(declarationSelect.click).toHaveBeenCalled();
+  expect(declarationOption.click).toHaveBeenCalled();
+}, 10_000);
+
+it('发布成功按作品管理路径判断，不依赖查询参数及顺序', async () => {
+  const page = makeMockPage();
+  page.waitForURL = vi
+    .fn()
+    .mockResolvedValueOnce(undefined)
+    .mockImplementationOnce(async (matcher: unknown) => {
+      expect(matcher).toBeTypeOf('function');
+      const matches = matcher as (url: URL) => boolean;
+      expect(matches(new URL('https://cp.kuaishou.com/article/manage/video'))).toBe(true);
+      expect(
+        matches(new URL('https://cp.kuaishou.com/article/manage/video?from=publish&status=2')),
+      ).toBe(true);
+      expect(matches(new URL('https://evil.example/article/manage/video'))).toBe(false);
+      expect(matches(new URL('https://cp.kuaishou.com/article/publish/video'))).toBe(false);
+    });
+
+  await uploadKuaishouVideo(page as any, UPLOAD_OPTS as any);
+});
+
+it('提交接口明确拒绝时立即返回快手原始错误和安全诊断信息', async () => {
+  vi.useFakeTimers();
+  try {
+    const page = makeMockPage();
+    page.waitForURL = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error('nav timeout'));
+    page.waitForResponse.mockResolvedValue(
+      makeSubmitResponse({ result: 0, originResult: 24601, message: '作品描述暂不支持发布' }),
+    );
+
+    const promise = uploadKuaishouVideo(page as any, UPLOAD_OPTS as any);
+    const assertion = expect(promise).rejects.toThrow(
+      /快手发布失败：作品描述暂不支持发布.*http=200.*result=0.*originResult=24601/,
+    );
+    await vi.runAllTimersAsync();
+    await assertion;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('提交接口已确认成功但前端未跳转时仍按发布成功处理，避免重复提交', async () => {
+  vi.useFakeTimers();
+  try {
+    const page = makeMockPage();
+    page.waitForURL = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error('nav timeout'));
+    page.waitForResponse.mockResolvedValue(
+      makeSubmitResponse({ result: 1, message: '发布成功' }),
+    );
+
+    const promise = uploadKuaishouVideo(page as any, UPLOAD_OPTS as any);
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 it('发布点击后始终未跳转到管理页 → 有界超时抛错而非无限挂起', async () => {
   vi.useFakeTimers();

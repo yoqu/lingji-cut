@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   createDefaultProjectData,
+  migrateProjectData,
   mergeProjectSection,
   type ProjectData,
   type ProjectSection,
@@ -12,13 +13,21 @@ import {
 } from '../src/lib/motion-card-externalize';
 import type { TimelineData } from '../src/types';
 import { markSelfWrite } from './ai-edit/self-write-guard';
+import type { ProjectProductionState } from '../src/types/director';
+import { createEmptyProductionState } from '../src/lib/director-workflow';
+import {
+  applyProductionMutation,
+  assertProductionMutationGuard,
+  type ProductionMutation,
+  type ProductionMutationGuard,
+} from '../src/lib/production-mutations';
 
 const PROJECT_FILE = 'project.json';
 
 // per-projectDir 写锁：Promise 链序列化
-const writeLocks = new Map<string, Promise<void>>();
+const writeLocks = new Map<string, Promise<unknown>>();
 
-function withWriteLock(projectDir: string, fn: () => Promise<void>): Promise<void> {
+function withWriteLock<T>(projectDir: string, fn: () => Promise<T>): Promise<T> {
   const prev = writeLocks.get(projectDir) ?? Promise.resolve();
   const next = prev.then(fn, fn);
   writeLocks.set(projectDir, next);
@@ -79,6 +88,25 @@ async function backupCorruptProjectFile(projectDir: string, raw: string | null):
   } catch {
     return null;
   }
+}
+
+async function backupLegacyProjectFile(projectDir: string, raw: string): Promise<string> {
+  let version = 'legacy';
+  try {
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    if (typeof parsed.version === 'number') version = `v${parsed.version}`;
+  } catch {
+    // 原文已由调用方成功解析；这里只为备份名兜底。
+  }
+  const backupPath = path.join(projectDir, `project.${version}.backup.json`);
+  try {
+    await fs.access(backupPath);
+  } catch {
+    await fs.writeFile(backupPath, raw, { encoding: 'utf-8', flag: 'wx' }).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    });
+  }
+  return backupPath;
 }
 
 class ProjectFileCorruptError extends Error {
@@ -160,7 +188,16 @@ function normalizeProjectData(data: ProjectData): ProjectData {
  */
 async function loadProjectFileRaw(projectDir: string): Promise<ProjectData> {
   const read = await readProjectJsonClassified(projectDir);
-  if (read.status === 'ok') return normalizeProjectData(read.data);
+  if (read.status === 'ok') {
+    const migrated = migrateProjectData(read.data);
+    const normalized = normalizeProjectData(migrated.data);
+    if (migrated.migrated) {
+      const raw = await fs.readFile(path.join(projectDir, PROJECT_FILE), 'utf-8');
+      await backupLegacyProjectFile(projectDir, raw);
+      await writeProjectJson(projectDir, normalized);
+    }
+    return normalized;
+  }
   if (read.status === 'corrupt') {
     // 文件存在但损坏：备份原文并抛错，绝不用默认工程覆盖（否则丢失全部数据）。
     const backupPath = await backupCorruptProjectFile(projectDir, read.raw);
@@ -184,6 +221,27 @@ export async function loadProjectFile(projectDir: string): Promise<ProjectData> 
   return data;
 }
 
+/** 在同一项目写锁内读取最新 production、应用判别式 mutation 并原子回写。 */
+export async function mutateProjectProduction(
+  projectDir: string,
+  mutation: ProductionMutation,
+): Promise<ProjectProductionState> {
+  return withWriteLock(projectDir, async () => {
+    const read = await readProjectJsonClassified(projectDir);
+    if (read.status === 'corrupt') {
+      const backupPath = await backupCorruptProjectFile(projectDir, read.raw);
+      throw new ProjectFileCorruptError(projectDir, backupPath, read.error);
+    }
+    const current = read.status === 'ok'
+      ? migrateProjectData(read.data).data
+      : createDefaultProjectData();
+    const base = current.production ?? createEmptyProductionState();
+    const production = applyProductionMutation(base, mutation);
+    await writeProjectJson(projectDir, mergeProjectSection(current, 'production', production));
+    return production;
+  });
+}
+
 /**
  * 保存项目某一段数据，通过写锁保证并发安全。
  * Web Card 路径已下线，所有卡片走 Motion Card（JSX → Babel 编译 → 运行时沙箱），
@@ -193,8 +251,16 @@ export async function saveProjectSection(
   projectDir: string,
   section: ProjectSection,
   value: unknown,
+  productionGuard?: ProductionMutationGuard,
 ): Promise<void> {
   let nextValue = value;
+  if (section === 'production') {
+    const production = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!production || (production as { version?: unknown }).version !== 3) {
+      throw new Error('production_schema_invalid：production 只能写入 V3 ProjectProductionState');
+    }
+    nextValue = production;
+  }
   if (section === 'timeline' && value) {
     const timeline = typeof value === 'string' ? JSON.parse(value) : value;
     if (timeline) {
@@ -214,7 +280,19 @@ export async function saveProjectSection(
       throw new ProjectFileCorruptError(projectDir, backupPath, read.error);
     }
     // 仅当文件确实不存在时才用默认工程作为基底。
-    const current = read.status === 'ok' ? read.data : createDefaultProjectData();
+    let current = read.status === 'ok' ? read.data : createDefaultProjectData();
+    const migrated = migrateProjectData(current);
+    if (read.status === 'ok' && migrated.migrated) {
+      const raw = await fs.readFile(path.join(projectDir, PROJECT_FILE), 'utf-8');
+      await backupLegacyProjectFile(projectDir, raw);
+    }
+    current = migrated.data;
+    if (productionGuard) {
+      assertProductionMutationGuard(
+        current.production ?? createEmptyProductionState(),
+        productionGuard,
+      );
+    }
     const merged = mergeProjectSection(
       current,
       section,

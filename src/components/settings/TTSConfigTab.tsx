@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadAISettings, saveAISettings } from '../../store/ai';
-import { Divider, Field, SaveButton, Select, SettingsPageHeader, Switch } from '../../ui';
+import { Divider, Field, SaveButton, Select, SettingsPageHeader, Switch, useToast } from '../../ui';
 import type { SelectOption } from '../../ui';
 import type { AISettings, TTSProvider, TTSVoicePreset } from '../../types/ai';
 import { normalizeTTSSettings } from '../../lib/tts-settings';
@@ -12,6 +12,7 @@ import styles from './SettingsCommon.module.css';
 
 interface TTSConfigTabProps {
   onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
+  confirmLeave?: (title: string) => Promise<boolean>;
 }
 
 function createSnapshot(input: {
@@ -50,7 +51,8 @@ function buildFallbackSettings(): AISettings {
   };
 }
 
-export function TTSConfigTab({ onRegisterLeaveGuard }: TTSConfigTabProps) {
+export function TTSConfigTab({ onRegisterLeaveGuard, confirmLeave }: TTSConfigTabProps) {
+  const { showToast } = useToast();
   const [providers, setProviders] = useState<TTSProvider[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [voices, setVoices] = useState<TTSVoicePreset[]>([]);
@@ -231,27 +233,32 @@ export function TTSConfigTab({ onRegisterLeaveGuard }: TTSConfigTabProps) {
       saveFeedbackTimerRef.current = setTimeout(() => setSaved(false), 2000);
       return true;
     } catch (error) {
-      window.alert(error instanceof Error ? `保存 TTS 配置失败：${error.message}` : '保存 TTS 配置失败，请稍后重试。');
+      showToast(error instanceof Error ? error.message : '请稍后重试。', {
+        title: '保存语音配置失败',
+        type: 'error',
+        duration: 5000,
+      });
       return false;
     }
-  }, [defaultProviderId, defaultVoiceId, providers, voices]);
+  }, [defaultProviderId, defaultVoiceId, providers, showToast, ttsMimoAutoAnnotate, voices]);
 
   useSettingsTabGuard({
-    title: 'TTS 配置',
+    title: '口播配置',
     hasUnsavedChanges,
     onSave: handleSave,
     onRegisterLeaveGuard,
+    confirmLeave,
   });
 
   return (
     <>
       <SettingsPageHeader
-        title="TTS 语音合成配置"
-        description="配置多个 TTS Provider，并保存系统音色或本地参考音频克隆音色"
+        title="口播合成配置"
+        description="配置多个口播生成服务，并保存系统音色或本地参考音频克隆音色"
       />
 
       <div className={styles.formStack}>
-        <Field label="TTS Providers">
+        <Field label="口播生成服务">
           <TTSProviderListSection
             providers={providers}
             defaultProviderId={defaultProviderId}
@@ -259,7 +266,7 @@ export function TTSConfigTab({ onRegisterLeaveGuard }: TTSConfigTabProps) {
           />
         </Field>
 
-        <Field label="默认 TTS Provider">
+        <Field label="默认口播生成服务">
           <Select
             value={defaultProviderId ?? ''}
             options={defaultProviderOptions}
@@ -306,7 +313,7 @@ export function TTSConfigTab({ onRegisterLeaveGuard }: TTSConfigTabProps) {
         }}
         saved={saved}
         disabled={!hasLoaded || !hasUnsavedChanges}
-        defaultLabel="保存 TTS 配置"
+        defaultLabel="保存口播配置"
         className={styles.saveButton}
       />
     </>

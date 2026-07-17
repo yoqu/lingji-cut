@@ -29,7 +29,7 @@ function uniqueStrings(values: unknown[], fallback: string[]): string[] {
 export function buildLegacyMinimaxTTSProvider(settings: Partial<AISettings>): TTSProvider {
   return {
     id: DEFAULT_MINIMAX_TTS_PROVIDER_ID,
-    name: 'MiniMax 默认 TTS',
+    name: 'MiniMax 默认口播',
     type: 'minimax',
     baseUrl: DEFAULT_MINIMAX_TTS_BASE_URL,
     apiKey: settings.minimaxApiKey ?? '',
@@ -63,9 +63,13 @@ function normalizeProvider(provider: TTSProvider): TTSProvider | null {
   const baseUrl = provider.baseUrl.trim();
   const apiKey = provider.apiKey.trim();
   if (!provider.id || !name || !provider.type) return null;
+  const displayName =
+    provider.id === DEFAULT_MINIMAX_TTS_PROVIDER_ID && name === 'MiniMax 默认 TTS'
+      ? 'MiniMax 默认口播'
+      : name;
   return {
     ...provider,
-    name,
+    name: displayName,
     baseUrl,
     apiKey,
     models: uniqueStrings(provider.models ?? [], []),

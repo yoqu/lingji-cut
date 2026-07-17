@@ -16,6 +16,24 @@ describe('lintMotionCardTsx', () => {
     expect(r.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
   });
 
+  it('自动模式强制 SafeLayout/MotionSlot、禁止 absolute 与多个主原语', () => {
+    expect(lintMotionCardTsx(GOOD, { requireSafeLayout: true }).issues.map((issue) => issue.code))
+      .toContain('safe-layout-required');
+    const safe = `import { CardStage, SafeLayout, MotionSlot, useBeats, Kicker, StatHero } from '@lingji/motion-kit';
+const TOKENS = { palette: { bg: '#111', ink: '#fff', muted: '#999', accent: '#08f' } };
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 1]);
+  return <CardStage tokens={TOKENS}><SafeLayout variant="title-hero">
+    <MotionSlot name="header"><Kicker text="标题" beat={beats[0]} /></MotionSlot>
+    <MotionSlot name="main"><StatHero value={42} beat={beats[1]} /></MotionSlot>
+  </SafeLayout></CardStage>;
+}`;
+    expect(lintMotionCardTsx(safe, { requireSafeLayout: true }).ok).toBe(true);
+    const crowded = safe.replace('</MotionSlot>\n  </SafeLayout>', '<StatHero value={21} beat={beats[1]} /></MotionSlot>\n  </SafeLayout>');
+    expect(lintMotionCardTsx(crowded, { requireSafeLayout: true }).issues.map((issue) => issue.code))
+      .toContain('too-many-main-primitives');
+  });
+
   it('空源码 / 缺 export default 报错', () => {
     expect(lintMotionCardTsx('').ok).toBe(false);
     const r = lintMotionCardTsx('function Card() { return null; }');

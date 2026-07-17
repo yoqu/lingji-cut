@@ -77,6 +77,21 @@
   height: 14px;
 }
 
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-system-blue);
+}
+
+.statusDot[data-state='waiting'] { background: var(--color-warning); }
+.statusDot[data-state='error'] { background: var(--color-error, var(--color-system-red)); }
+.statusDot[data-state='done'] { background: var(--color-success); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab, .tabBg, .tabUnderline { transition: none; }
+}
+
 .separator {
   width: 1px;
   height: 14px;

@@ -43,6 +43,9 @@ describe('runAnalyzeHeadless', () => {
       const saved = JSON.parse(readFileSync(path.join(dir, 'project.json'), 'utf-8'));
       expect(saved.aiAnalysis.analysisResult.cards[0].id).toBe('c1');
       expect(saved.aiAnalysis.analysisResult.segments[0].id).toBe('s1');
+      expect(saved.production.approvedPlan.revision).toBe(1);
+      expect(saved.production.workflow.stage).toBe('production-running');
+      expect(saved.production.outputs.cards.status).toBe('current');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(ud, { recursive: true, force: true });

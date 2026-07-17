@@ -49,7 +49,10 @@ import {
 } from './telemetry/auto-run-logger';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
 import { startControlServer, stopControlServer, getSonarInboxStore, getSonarBridgeInfo } from './control/server';
-import { loadProjectFile, saveProjectSection } from './project-file';
+import { loadProjectFile, mutateProjectProduction, saveProjectSection } from './project-file';
+import type { ProductionMutation } from '../src/lib/production-mutations';
+import { registerDirectorWorkflowIpc } from './director-workflow-ipc';
+import { emitProjectUpdated } from './pipeline/headless-generation';
 import type { ProjectSection } from '../src/lib/project-persistence';
 import { materializePreviewMotionCardDataUris } from './remotion/motion-card-assets';
 import {
@@ -80,7 +83,10 @@ import { registerAiGenerationIpc } from './ai-generation-ipc';
 import { registerTtsIpc } from './tts-ipc';
 import { registerPromptsIpc } from './prompts-ipc';
 import { registerFileDialogsIpc } from './file-dialogs-ipc';
+import { registerAssetLibraryIpc } from './asset-library';
+import { registerAudioGenerationIpc } from './audio-generation-ipc';
 import { registerRecentProjectsIpc } from './recent-projects-ipc';
+import { registerProjectTreeIpc } from './project-tree-ipc';
 import { getVideoImportService } from './video-import/import-service';
 import { resolveDouyinVideoSource } from './video-import/douyin-downloader';
 import type { VideoImportRequest } from '../src/lib/video-import-types';
@@ -516,6 +522,15 @@ ipcMain.handle(
   },
 );
 
+ipcMain.handle(
+  'mutate-project-production',
+  async (_event, projectDir: string, mutation: ProductionMutation) => {
+    const production = await mutateProjectProduction(projectDir, mutation);
+    emitProjectUpdated(() => mainWindow, projectDir, ['production']);
+    return production;
+  },
+);
+
 ipcMain.handle('get-file-mtime', async (_event, filePath: string) => {
   if (!filePath) return null;
   try {
@@ -565,6 +580,10 @@ registerAiGenerationIpc({
   getMainWindow: () => mainWindow,
   writeAppLog,
 });
+registerDirectorWorkflowIpc({
+  getMainWindow: () => mainWindow,
+  writeAppLog,
+});
 
 ipcMain.handle('load-project', async (_event, projectDir: string) => {
   const data = await loadProjectFile(projectDir);
@@ -574,12 +593,19 @@ ipcMain.handle('load-project', async (_event, projectDir: string) => {
 
 ipcMain.handle(
   'save-project-section',
-  async (_event, projectDir: string, section: string, data: string) => {
+  async (
+    _event,
+    projectDir: string,
+    section: string,
+    data: string,
+    productionGuard?: import('../src/lib/production-mutations').ProductionMutationGuard,
+  ) => {
     const parsed = JSON.parse(data);
     await saveProjectSection(
       projectDir,
       section as ProjectSection,
       parsed,
+      productionGuard,
     );
   },
 );
@@ -796,6 +822,21 @@ registerFileDialogsIpc({
   getMainWindow: () => mainWindow,
   writeAppLog,
   resolveRuntimeBinaries,
+});
+
+registerAssetLibraryIpc({
+  getMainWindow: () => mainWindow,
+  writeAppLog,
+  resolveRuntimeBinaries,
+});
+
+registerAudioGenerationIpc({
+  writeAppLog,
+  resolveRuntimeBinaries,
+});
+
+registerProjectTreeIpc({
+  getMainWindow: () => mainWindow,
 });
 
 ipcMain.handle(

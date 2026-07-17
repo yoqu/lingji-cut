@@ -35,7 +35,7 @@ describe('createProject', () => {
     expect(existsSync(path.join(target, 'configs/prompts'))).toBe(true);
     expect(existsSync(path.join(target, 'script.md'))).toBe(false);
     const data = JSON.parse(readFileSync(path.join(target, 'project.json'), 'utf-8'));
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(3);
     expect(data.timeline).toBeNull();
   });
 

@@ -78,6 +78,25 @@ describe('runPublishJob（回调解耦版）', () => {
     expect(results.kuaishou_missing.state).toBe('skipped');
   });
 
+  it('取消导致的 in-flight 失败标记为「已取消」', async () => {
+    let cancelled = false;
+    const uploadVideo = vi.fn(async () => {
+      cancelled = true;
+      throw new Error('Target closed');
+    });
+    mockedGetPlatform.mockReturnValue({ uploadVideo } as never);
+
+    const results = await runPublishJob(
+      makeJob(['douyin_a']),
+      makeStore(['douyin_a']),
+      () => {},
+      () => cancelled,
+      true,
+    );
+
+    expect(results.douyin_a).toEqual({ state: 'failed', message: '已取消' });
+  });
+
   it('isCancelled 为 true 时跳过剩余 target', async () => {
     const uploadVideo = vi.fn(async () => {});
     mockedGetPlatform.mockReturnValue({ uploadVideo } as never);

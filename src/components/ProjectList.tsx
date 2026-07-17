@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { LayoutGrid, List, X } from 'lucide-react';
 import { getFileNameFromPath, toFileSrc } from '../lib/utils';
-import type { RecentProjectEntry } from '../lib/electron-api';
+import { PLATFORM_LABEL } from '../lib/publish/platform-labels';
+import type { RecentProjectEntry, RecentProjectStage } from '../lib/electron-api';
 import { Button, ConfirmDialog } from '../ui';
 import styles from './ProjectList.module.css';
 
@@ -30,6 +31,38 @@ function formatDate(dateStr: string | number | undefined): string {
     return date.toLocaleDateString('zh-CN', { weekday: 'short' });
   }
   return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
+
+const STAGE_BADGE: Record<RecentProjectStage, { label: string; color: string }> = {
+  published: { label: '已发布', color: 'var(--color-success, #22c55e)' },
+  editing: { label: '剪辑中', color: 'var(--color-system-blue, #0071e3)' },
+  script: { label: '口播稿', color: 'var(--color-warning, #f59e0b)' },
+  original: { label: '原稿', color: 'var(--color-warning, #f59e0b)' },
+  new: { label: '未开始', color: 'var(--color-text-tertiary, #888)' },
+};
+
+function StageBadge({ project }: { project: RecentProjectEntry }) {
+  if (!project.stage) return null;
+  const config = STAGE_BADGE[project.stage];
+  const platforms = (project.publishedPlatforms ?? [])
+    .map((p) => PLATFORM_LABEL[p] ?? p)
+    .join('、');
+  return (
+    <span
+      title={project.stage === 'published' && platforms ? `已发布：${platforms}` : undefined}
+      style={{
+        flexShrink: 0,
+        fontSize: 10,
+        fontWeight: 500,
+        padding: '1px 6px',
+        borderRadius: 999,
+        background: `color-mix(in srgb, ${config.color} 15%, transparent)`,
+        color: config.color,
+      }}
+    >
+      {config.label}
+    </span>
+  );
 }
 
 function PodcastCoverSVG({ className }: { className?: string }) {
@@ -115,8 +148,11 @@ function ProjectCard({
         )}
       </div>
       <div className={styles.infoArea}>
-        <div className={styles.projectName} title={project.name}>
-          {project.name}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <div className={styles.projectName} title={project.name} style={{ flex: 1, minWidth: 0 }}>
+            {project.name}
+          </div>
+          <StageBadge project={project} />
         </div>
         <div className={styles.projectMeta}>
           <span className={styles.metaItem}>
@@ -163,6 +199,7 @@ function ProjectListItem({
           )}
         </span>
         {project.name}
+        <StageBadge project={project} />
       </span>
       <span className={styles.colDate}>
         {formatDate(project.updatedAt ?? project.lastOpenedAt)}

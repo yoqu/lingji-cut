@@ -53,7 +53,7 @@ function pickModel(settings: AISettings, binding?: ResolvedBinding) {
     settings.llmProviders?.[0];
   const model = settings.defaultModel ?? provider?.defaultModel ?? provider?.models[0];
   if (!provider || !model) {
-    throw new Error('请先在「设置 → AI」中配置 LLM Provider 与模型');
+    throw new Error('请先在「设置 → AI」中配置文本生成服务与模型');
   }
   return createChatModelFromProvider(provider, model);
 }
@@ -351,10 +351,12 @@ export async function generateText(
   systemPrompt: string,
   userMessage: string,
   binding?: ResolvedBinding,
+  signal?: AbortSignal,
 ): Promise<string> {
   try {
     const response = await pickModel(settings, binding).invoke(
       buildPromptMessages(systemPrompt, userMessage),
+      signal ? { signal } : undefined,
     );
     return assertNonEmptyContent(extractTextContent(response.content), 'LLM 返回空内容');
   } catch (error) {
@@ -406,14 +408,17 @@ export async function streamTextWithProvider(
   systemPrompt: string,
   userMessage: string,
   onChunk: (chunk: string) => void,
-  options?: { enableThinking?: boolean } & StreamCallbacks,
+  options?: { enableThinking?: boolean; signal?: AbortSignal } & StreamCallbacks,
 ): Promise<string> {
   try {
     // 默认沿用 provider.enableThinking；调用方显式传入 options.enableThinking 时优先生效
     const chatModel = createChatModelFromProvider(provider, model, {
       enableThinking: options?.enableThinking,
     });
-    const stream = await chatModel.stream(buildPromptMessages(systemPrompt, userMessage));
+    const stream = await chatModel.stream(
+      buildPromptMessages(systemPrompt, userMessage),
+      options?.signal ? { signal: options.signal } : undefined,
+    );
     let fullText = '';
 
     for await (const chunk of stream) {

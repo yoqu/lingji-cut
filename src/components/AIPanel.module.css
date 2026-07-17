@@ -269,6 +269,129 @@
   flex-shrink: 0;
 }
 
+.structurePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-separator);
+  border-radius: var(--radius-lg);
+  background: var(--color-panel-elevated);
+}
+
+.structureHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.structureTitleGroup,
+.structureActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.structureActions {
+  flex-shrink: 0;
+}
+
+.structureBadge {
+  flex-shrink: 0;
+}
+
+.structureTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.structureSummary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.structureKeywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.structureKeyword {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-selection-blue) 12%, transparent);
+  color: color-mix(in srgb, var(--color-selection-blue) 74%, white);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.structureEditor,
+.structureField,
+.structureSegmentEditorList,
+.structureSegmentEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.structureField {
+  gap: 5px;
+}
+
+.structureFieldLabel {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.structureInput,
+.structureTextarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.structureTextarea {
+  min-height: 44px;
+}
+
+.structureSegmentEditor {
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-separator) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-panel-bg) 72%, transparent);
+}
+
+.structureSegmentEditorHeader {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .emptyState {
   display: flex;
   flex-direction: column;
@@ -302,6 +425,88 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   line-height: 1.5;
+}
+
+.activeOperationText,
+.analysisStatusText,
+.analysisBannerText {
+  color: var(--color-selection-blue);
+}
+
+.plannedStructurePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-separator) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-panel-bg) 72%, transparent);
+}
+
+.plannedStructureHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plannedStructureTitle {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.plannedStructureCount {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.plannedSegmentList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.plannedSegmentItem {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plannedSegmentIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-selection-blue) 14%, transparent);
+  color: color-mix(in srgb, var(--color-selection-blue) 78%, white);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.plannedSegmentTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plannedSegmentMore {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 .primaryButton,
@@ -483,11 +688,6 @@
 
 .workspaceContent {
   min-width: 0;
-  transition: opacity var(--motion-fast);
-}
-
-.workspaceContentDimmed {
-  opacity: 0.52;
 }
 
 .analysisBanner {

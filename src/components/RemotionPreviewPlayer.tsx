@@ -23,6 +23,7 @@ interface RemotionPreviewPlayerProps {
   srtEntries: SrtEntry[];
   /** 用于把媒体卡（image / video）相对 projectDir 的 assetPath 解析为绝对路径供预览加载。 */
   projectDir?: string | null;
+  podcastRevision: number;
   currentTimeMs: number;
   isPlaying: boolean;
   onTimeUpdate: (timeMs: number) => void;
@@ -33,7 +34,18 @@ interface RemotionPreviewPlayerProps {
 
 const RemotionPreviewPlayerInner = forwardRef<RemotionPreviewHandle, RemotionPreviewPlayerProps>(
   function RemotionPreviewPlayer(
-    { timeline, srtEntries, projectDir, currentTimeMs, isPlaying, onTimeUpdate, onPlay, onPause, onEnded },
+    {
+      timeline,
+      srtEntries,
+      projectDir,
+      podcastRevision,
+      currentTimeMs,
+      isPlaying,
+      onTimeUpdate,
+      onPlay,
+      onPause,
+      onEnded,
+    },
     ref,
   ) {
     const player = useRef<PlayerRef>(null);
@@ -52,11 +64,20 @@ const RemotionPreviewPlayerInner = forwardRef<RemotionPreviewHandle, RemotionPre
 
     // 预览前把 motion 卡片 TSX 编译为可执行 JS（主进程 esbuild），供 CardHost 求值。
     const [compiledCards, setCompiledCards] = useState<Record<string, string>>({});
-    const previewAudioSources = useMemo(() => getPreviewAudioSources(plan.audio), [plan.audio]);
+    const previewAudioSources = useMemo(
+      () => getPreviewAudioSources(plan.audio, podcastRevision),
+      [plan.audio, podcastRevision],
+    );
     const previewAudioSourcesKey = previewAudioSources.join('\0');
     const inputProps = useMemo(
-      () => ({ timeline: renderTimeline, srtEntries, compiledCards, cardProjectDir: projectDir ?? undefined }),
-      [renderTimeline, srtEntries, compiledCards, projectDir],
+      () => ({
+        timeline: renderTimeline,
+        srtEntries,
+        compiledCards,
+        cardProjectDir: projectDir ?? undefined,
+        podcastRevision,
+      }),
+      [renderTimeline, srtEntries, compiledCards, projectDir, podcastRevision],
     );
     const playerStyle = useMemo(
       () => ({ width: '100%', height: '100%', background: 'var(--color-preview-bg)' }),
@@ -170,6 +191,7 @@ function areRemotionPreviewPlayerPropsEqual(
     previous.timeline !== next.timeline ||
     previous.srtEntries !== next.srtEntries ||
     previous.projectDir !== next.projectDir ||
+    previous.podcastRevision !== next.podcastRevision ||
     previous.onTimeUpdate !== next.onTimeUpdate ||
     previous.onPlay !== next.onPlay ||
     previous.onPause !== next.onPause ||

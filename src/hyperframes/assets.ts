@@ -61,13 +61,23 @@ export function hydrateAICardAssetPaths(
   let mutated = false;
   const overlays = timeline.overlays.map((overlay) => {
     const card = overlay.aiCardData;
-    if (!card?.content || typeof card.content !== 'object' || !('mediaType' in card.content)) {
-      return overlay;
-    }
-    const media = card.content as MediaCardContent;
-    const nextAssetPath = resolve(media.assetPath) ?? media.assetPath;
-    const nextPosterPath = resolve(media.posterPath) ?? media.posterPath;
-    if (nextAssetPath === media.assetPath && nextPosterPath === media.posterPath) {
+    if (!card) return overlay;
+
+    const hasMedia = card.content && typeof card.content === 'object' && 'mediaType' in card.content;
+    const media = hasMedia ? card.content as MediaCardContent : null;
+    const nextAssetPath = media ? resolve(media.assetPath) ?? media.assetPath : null;
+    const nextPosterPath = media ? resolve(media.posterPath) ?? media.posterPath : null;
+    const nextBindings = card.assetBindings?.map((binding) => ({
+      ...binding,
+      filePath: resolve(binding.filePath) ?? binding.filePath,
+    }));
+    const mediaChanged = Boolean(
+      media && (nextAssetPath !== media.assetPath || nextPosterPath !== media.posterPath),
+    );
+    const bindingsChanged = Boolean(
+      nextBindings?.some((binding, index) => binding.filePath !== card.assetBindings?.[index]?.filePath),
+    );
+    if (!mediaChanged && !bindingsChanged) {
       return overlay;
     }
     mutated = true;
@@ -75,11 +85,16 @@ export function hydrateAICardAssetPaths(
       ...overlay,
       aiCardData: {
         ...card,
-        content: {
-          ...media,
-          assetPath: nextAssetPath ?? null,
-          posterPath: nextPosterPath ?? media.posterPath,
-        } as MediaCardContent,
+        ...(media
+          ? {
+              content: {
+                ...media,
+                assetPath: nextAssetPath ?? null,
+                posterPath: nextPosterPath ?? media.posterPath,
+              } as MediaCardContent,
+            }
+          : {}),
+        ...(nextBindings ? { assetBindings: nextBindings } : {}),
       },
     };
   });
@@ -117,9 +132,19 @@ export function prepareTimelineForHyperframes(
       },
       overlays: hydrated.overlays.map((overlay) => {
         const aiCardData = overlay.aiCardData;
+        const stagedBindings = aiCardData?.assetBindings?.map((binding) => ({
+          ...binding,
+          filePath: registerAsset(
+            binding.filePath,
+            `${overlay.id}-asset-${binding.slot}-${binding.assetId}`,
+          ),
+        }));
         const nextOverlay = {
           ...overlay,
           assetPath: registerAsset(overlay.assetPath, overlay.id),
+          ...(aiCardData && stagedBindings
+            ? { aiCardData: { ...aiCardData, assetBindings: stagedBindings } }
+            : {}),
         };
         if (
           aiCardData?.content &&
@@ -130,7 +155,7 @@ export function prepareTimelineForHyperframes(
           return {
             ...nextOverlay,
             aiCardData: {
-              ...aiCardData,
+              ...(nextOverlay.aiCardData ?? aiCardData),
               content: {
                 ...media,
                 assetPath: media.assetPath

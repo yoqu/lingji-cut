@@ -197,6 +197,78 @@ describe('AssistantMessage block 分发', () => {
     expect(html).not.toContain('工具调用');
   });
 
+  it('updates the visible added-line count while a write tool input is streaming', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const renderWrite = (content: string) => {
+      root.render(
+        <AssistantMessage
+          isLastAssistant
+          isStreaming
+          turn={makeTurn({
+            blocks: [{
+              type: 'tool_call',
+              toolCallId: 'write-live',
+              title: 'write',
+              kind: 'edit',
+              status: 'pending',
+              rawInput: JSON.stringify({ path: 'notes.md', content }),
+            }],
+          })}
+        />,
+      );
+    };
+
+    act(() => renderWrite('first'));
+    expect(container.querySelector('[aria-label="+1"]')).toBeTruthy();
+
+    act(() => renderWrite('first\n\nthird'));
+    expect(container.querySelector('[aria-label="+3"]')).toBeTruthy();
+    expect(container.textContent).toContain('新增了 1 个文件');
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it('updates the visible removed-line count while an edit tool input is streaming', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const renderEdit = (newText: string) => {
+      root.render(
+        <AssistantMessage
+          isLastAssistant
+          isStreaming
+          turn={makeTurn({
+            blocks: [{
+              type: 'tool_call',
+              toolCallId: 'edit-live',
+              title: 'edit',
+              kind: 'edit',
+              status: 'pending',
+              rawInput: JSON.stringify({
+                path: 'notes.md',
+                edits: [{ oldText: 'first\nsecond', newText }],
+              }),
+            }],
+          })}
+        />,
+      );
+    };
+
+    act(() => renderEdit('first\nsecond\nthird'));
+    expect(
+      Array.from(container.querySelectorAll('[aria-label]')).map((node) => node.getAttribute('aria-label')),
+    ).toContain('+1');
+
+    act(() => renderEdit(''));
+    expect(container.querySelector('[aria-label="-2"]')).toBeTruthy();
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
   it('groups consecutive command tool calls even when their titles differ', () => {
     const html = renderToStaticMarkup(
       <AssistantMessage

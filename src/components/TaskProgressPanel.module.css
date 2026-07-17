@@ -22,8 +22,8 @@
 .taskRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
   font-size: var(--font-size-sm);
 }
 
@@ -33,9 +33,21 @@
 
 .taskIcon {
   flex-shrink: 0;
-  width: 16px;
-  text-align: center;
-  font-size: var(--font-size-md);
+  width: 14px;
+  height: 14px;
+  color: var(--color-system-blue);
+}
+
+.taskIcon[data-status='completed'] {
+  color: var(--color-success);
+}
+
+.taskIcon[data-status='error'] {
+  color: var(--color-danger);
+}
+
+.taskIcon[data-status='cancelled'] {
+  color: var(--color-text-tertiary);
 }
 
 .taskLabel {
@@ -60,6 +72,10 @@
   flex-shrink: 0;
 }
 
+.taskBarCancelled :global([role='progressbar'] > *) {
+  background: var(--color-text-quaternary) !important;
+}
+
 .taskPct {
   font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums;
@@ -71,37 +87,52 @@
 
 .cancelBtn {
   flex-shrink: 0;
-  background: none;
-  border: none;
-  color: var(--color-danger);
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-secondary);
   cursor: pointer;
-  padding: 1px 4px;
+  padding: 0;
   border-radius: var(--radius-sm);
-  opacity: 0.7;
-  transition: opacity 0.15s;
+  transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
 }
 
 .cancelBtn:hover {
-  opacity: 1;
-  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+  color: var(--color-text-primary);
+  border-color: var(--color-separator);
+  background: var(--color-bg-hover);
 }
 
 .actionBtn {
   flex-shrink: 0;
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  background: transparent;
   border: 1px solid var(--color-separator);
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   cursor: pointer;
-  padding: 2px 8px;
+  padding: 0 var(--space-4);
   border-radius: var(--radius-sm);
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
 }
 
 .actionBtn:hover {
   background: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
   color: var(--color-text-primary);
+}
+
+.actionBtn:focus-visible,
+.cancelBtn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .errorText {
@@ -113,16 +144,26 @@
   max-width: 160px;
 }
 
+.cancelledText {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .childRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 0 2px 24px;
-  font-size: 12px;
-  color: var(--color-text-secondary, #8e8e93);
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-6) var(--space-1) 34px;
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
 }
-.childDot { width: 14px; text-align: center; }
-.childDotActive { color: var(--color-system-blue, #0A84FF); }
-.childDotDone { color: var(--color-success, #32D74B); }
-.childDotError { color: var(--color-danger, #FF453A); }
+.childDot { width: 12px; height: 12px; flex-shrink: 0; }
+.childDotActive { color: var(--color-system-blue); }
+.childDotDone { color: var(--color-success); }
+.childDotError { color: var(--color-danger); }
+.childDotCancelled { color: var(--color-text-tertiary); }
 .childLabel { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

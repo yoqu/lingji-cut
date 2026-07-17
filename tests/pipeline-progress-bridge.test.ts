@@ -15,7 +15,7 @@ function makeDeps(overrides: Partial<PipelineProgressBridgeDeps> = {}) {
     update: [] as any[],
     complete: [] as string[],
     fail: [] as Array<{ id: string; error: string }>,
-    remove: [] as string[],
+    cancelled: [] as Array<{ id: string; reason?: string }>,
     cancel: [] as string[],
   };
   const deps: PipelineProgressBridgeDeps = {
@@ -32,10 +32,7 @@ function makeDeps(overrides: Partial<PipelineProgressBridgeDeps> = {}) {
     updateTask: (id, patch) => calls.update.push({ id, patch }),
     completeTask: (id) => calls.complete.push(id),
     failTask: (id, error) => calls.fail.push({ id, error }),
-    removeTask: (id) => {
-      tasks.delete(id);
-      calls.remove.push(id);
-    },
+    cancelTask: (id, reason) => calls.cancelled.push({ id, reason }),
     hasTask: (id) => tasks.has(id),
     cancel: (taskId) => calls.cancel.push(taskId),
     ...overrides,
@@ -116,12 +113,12 @@ describe('createPipelineProgressBridge', () => {
     expect(calls.fail).toEqual([{ id: 'pipeline:t1', error: '渲染崩了' }]);
   });
 
-  it('removes the task on canceled', () => {
+  it('marks the task as cancelled on canceled', () => {
     const { deps, calls, emit } = makeDeps();
     createPipelineProgressBridge(deps);
     emit(snap({ status: 'running' }));
     emit(snap({ status: 'canceled' }));
-    expect(calls.remove).toEqual(['pipeline:t1']);
+    expect(calls.cancelled).toEqual([{ id: 'pipeline:t1', reason: '任务已取消' }]);
   });
 
   it('wires onCancel to deps.cancel with the raw taskId', () => {

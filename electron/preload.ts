@@ -8,10 +8,14 @@ import type {
   ProjectMetadata,
   WorkbenchTabContextMenuRequest,
   WorkbenchTabMenuEvent,
+  DirectoryTreeContextMenuRequest,
+  DirectoryTreeMenuEvent,
+  ProjectTreeCrudResult,
 } from '../src/lib/electron-api';
 import type { ExportConfig } from '../src/lib/export-settings';
 import type { SrtEntry } from '../src/types';
 import type { AICard, AISegment, AISettings, PromptBindingMap } from '../src/types/ai';
+import type { MotionBible } from '../src/types/motion';
 import type { ConversationAPI } from '../src/types/conversation';
 import type { VideoImportRequest } from '../src/lib/video-import-types';
 import type { VideoImportTaskSnapshot } from './video-import/types';
@@ -25,6 +29,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showSystemNotification: (payload: { title: string; body: string }) =>
     ipcRenderer.send('system-notification:show', payload),
   getAudioDuration: (filePath: string) => ipcRenderer.invoke('get-audio-duration', filePath),
+  createSunoMusic: (request: import('../src/lib/audio-gen/types').MusicGenerationRequest) =>
+    ipcRenderer.invoke('audio-generation:create-music', request),
+  createSunoSound: (request: import('../src/lib/audio-gen/types').SoundGenerationRequest) =>
+    ipcRenderer.invoke('audio-generation:create-sound', request),
+  getSunoAudioTask: (taskId: string) =>
+    ipcRenderer.invoke('audio-generation:get-task', taskId),
+  getSunoCredits: () => ipcRenderer.invoke('audio-generation:get-credits'),
+  testSunoAudioGeneration: () => ipcRenderer.invoke('audio-generation:smoke-test'),
+  materializeSunoAudio: (args: {
+    taskId: string;
+    projectDir?: string | null;
+    role: 'bgm' | 'stinger' | 'sfx' | 'ambience' | 'transition-sound';
+    query: string;
+    reuseKey: string;
+    audio?: Pick<NonNullable<import('../src/types/assets').AssetMetadata['audio']>, 'energy' | 'transientType'>;
+  }) => ipcRenderer.invoke('audio-generation:materialize', args),
   analyzeSrt: (args: {
     entries?: SrtEntry[];
     srtContent?: string;
@@ -85,9 +105,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     cardPrompt?: string;
     programSummary?: string;
     keywords?: string[];
+    motionBible?: MotionBible;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
     feedId?: string;
+    refineExistingMotion?: boolean;
   }) => ipcRenderer.invoke('regenerate-ai-card', args),
   generateAnimationDirection: (args: {
     entries: SrtEntry[];
@@ -97,6 +119,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     programSummary?: string;
     keywords?: string[];
     cardPrompt?: string;
+    motionBible?: MotionBible;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
   }) => ipcRenderer.invoke('generate-animation-direction', args),
@@ -109,6 +132,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     globalPrompt?: string;
     programSummary?: string;
     keywords?: string[];
+    motionBible?: MotionBible;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
     feedId?: string;
@@ -181,8 +205,42 @@ contextBridge.exposeInMainWorld('electronAPI', {
     >,
   loadProject: (projectDir: string) =>
     ipcRenderer.invoke('load-project', projectDir),
-  saveProjectSection: (projectDir: string, section: string, data: string) =>
-    ipcRenderer.invoke('save-project-section', projectDir, section, data),
+  saveProjectSection: (
+    projectDir: string,
+    section: string,
+    data: string,
+    productionGuard?: import('../src/lib/production-mutations').ProductionMutationGuard,
+  ) => ipcRenderer.invoke('save-project-section', projectDir, section, data, productionGuard),
+  mutateProjectProduction: (
+    projectDir: string,
+    mutation: import('../src/lib/production-mutations').ProductionMutation,
+  ) => ipcRenderer.invoke('mutate-project-production', projectDir, mutation) as Promise<
+    import('../src/types/director').ProjectProductionState
+  >,
+  startDirectorPlan: (args: import('./director-workflow-ipc').StartDirectorPlanArgs) =>
+    ipcRenderer.invoke('director:start-plan', args) as Promise<import('../src/types/director').ProjectProductionState>,
+  approveDirectorPlanAndStartProduction: (projectDir: string, expectedRevision: number, taskId?: string) =>
+    ipcRenderer.invoke('director:approve-and-start', projectDir, expectedRevision, taskId) as Promise<
+      import('../src/types/director').ProjectProductionState
+    >,
+  resumeProduction: (projectDir: string, taskId?: string, mode?: 'auto' | 'director') =>
+    ipcRenderer.invoke('director:resume-production', projectDir, taskId, mode) as Promise<
+      import('../src/types/director').ProjectProductionState
+    >,
+  cancelProduction: (projectDir: string, taskId?: string, directorRevision?: number) =>
+    ipcRenderer.invoke('director:cancel-production', projectDir, taskId, directorRevision) as Promise<
+      import('../src/types/director').ProjectProductionState
+    >,
+  onDirectorPlanProgress: (callback: (progress: {
+    taskId: string;
+    directorRevision: number;
+    phase: 'planning' | 'motion-bible';
+    percent: number;
+  }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof callback>[0]) => callback(progress);
+    ipcRenderer.on('director-plan-progress', handler);
+    return () => ipcRenderer.removeListener('director-plan-progress', handler);
+  },
   scanProjectDirectory: (projectDir: string) =>
     ipcRenderer.invoke('scan-project-directory', projectDir),
   importProject: (args: { projectDir: string; acceptMissingAssets: boolean }) =>
@@ -226,6 +284,71 @@ contextBridge.exposeInMainWorld('electronAPI', {
   scanProjectAssets: (projectDir: string) =>
     ipcRenderer.invoke('scan-project-assets', projectDir) as Promise<
       { path: string; type: 'video' | 'image' | 'audio' | 'srt'; durationMs: number }[]
+    >,
+  getAssetLibraryState: (projectDir?: string | null) =>
+    ipcRenderer.invoke('asset-library:get-state', projectDir) as Promise<
+      import('../src/types/assets').AssetLibraryState
+    >,
+  searchReusableMediaAssets: (args: {
+    projectDir: string;
+    request: import('../src/types/production').MediaAssetRequest;
+  }) => ipcRenderer.invoke('asset-library:search-reusable', args) as Promise<
+    import('../src/lib/media-asset-resolution').MediaAssetCandidate[]
+  >,
+  importAssetLibraryFiles: (request?: import('../src/types/assets').AssetImportRequest) =>
+    ipcRenderer.invoke('asset-library:import-files', request) as Promise<
+      import('../src/types/assets').AssetImportResult
+    >,
+  updateAssetLibraryAsset: (
+    assetId: string,
+    patch: import('../src/types/assets').AssetUpdatePatch,
+  ) =>
+    ipcRenderer.invoke('asset-library:update-asset', assetId, patch) as Promise<
+      import('../src/types/assets').AssetLibraryFile
+    >,
+  chromaKeyAssetLibraryAsset: (request: import('../src/types/assets').AssetChromaKeyRequest) =>
+    ipcRenderer.invoke('asset-library:chroma-key-asset', request) as Promise<
+      import('../src/types/assets').AssetChromaKeyResult
+    >,
+  deleteAssetLibraryAsset: (request: import('../src/types/assets').AssetDeleteRequest) =>
+    ipcRenderer.invoke('asset-library:delete-asset', request) as Promise<
+      import('../src/types/assets').AssetDeleteResult
+    >,
+  replaceAssetOriginalWithProcessed: (assetId: string, projectDir?: string | null) =>
+    ipcRenderer.invoke('asset-library:replace-original-with-processed', assetId, projectDir) as Promise<
+      import('../src/types/assets').AssetReplaceOriginalResult
+    >,
+  sampleAssetLibraryColor: (request: import('../src/types/assets').AssetSampleColorRequest) =>
+    ipcRenderer.invoke('asset-library:sample-color', request) as Promise<
+      import('../src/types/assets').AssetSampleColorResult
+    >,
+  addAssetToProjectLibrary: (projectDir: string, assetId: string) =>
+    ipcRenderer.invoke('asset-library:add-to-project', projectDir, assetId) as Promise<
+      import('../src/types/assets').ProjectAssetManifest | null
+    >,
+  resolveAssetLibraryRequests: (args: {
+    projectDir: string;
+    requests: import('../src/types/assets').StoryboardAssetRequest[];
+    sourceCardId?: string;
+  }) =>
+    ipcRenderer.invoke('asset-library:resolve-requests', args) as Promise<
+      import('../src/types/assets').AssetResolutionState
+    >,
+  acceptGeneratedAssetFile: (args: {
+    projectDir: string;
+    requestId: string;
+    filePath: string;
+  }) =>
+    ipcRenderer.invoke('asset-library:accept-generated-file', args) as Promise<
+      import('../src/types/assets').AssetAcceptGeneratedResult
+    >,
+  updateAssetGenerationRequest: (args: {
+    projectDir: string;
+    requestId: string;
+    patch: Partial<import('../src/types/assets').AssetGenerationRequest>;
+  }) =>
+    ipcRenderer.invoke('asset-library:update-generation-request', args) as Promise<
+      import('../src/types/assets').ProjectAssetManifest | null
     >,
   renderVideo: (args: {
     timeline: string;
@@ -470,6 +593,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: unknown, payload: WorkbenchTabMenuEvent) => callback(payload);
     ipcRenderer.on('workbench-tab-menu-action', handler);
     return () => ipcRenderer.removeListener('workbench-tab-menu-action', handler);
+  },
+  // 目录树共享组件：CRUD + 右键菜单
+  createDirectory: (args: { projectDir: string; relativePath: string }) =>
+    ipcRenderer.invoke('project-tree:create-directory', args) as Promise<ProjectTreeCrudResult>,
+  createFile: (args: { projectDir: string; relativePath: string; content?: string }) =>
+    ipcRenderer.invoke('project-tree:create-file', args) as Promise<ProjectTreeCrudResult>,
+  renamePath: (args: { projectDir: string; oldRelative: string; newRelative: string }) =>
+    ipcRenderer.invoke('project-tree:rename', args) as Promise<ProjectTreeCrudResult>,
+  deletePath: (args: { projectDir: string; relativePath: string; recursive?: boolean }) =>
+    ipcRenderer.invoke('project-tree:delete', args) as Promise<ProjectTreeCrudResult>,
+  showDirectoryTreeContextMenu: (request: DirectoryTreeContextMenuRequest) =>
+    ipcRenderer.invoke('project-tree:show-context-menu', request),
+  onDirectoryTreeMenuAction: (callback: (event: DirectoryTreeMenuEvent) => void) => {
+    const handler = (_event: unknown, payload: DirectoryTreeMenuEvent) => callback(payload);
+    ipcRenderer.on('directory-tree-menu-action', handler);
+    return () => ipcRenderer.removeListener('directory-tree-menu-action', handler);
   },
   // ── 一键成稿 / AI 流水线观测日志 ──
   appendAutoRunEvent: (event: import('../src/lib/telemetry/auto-run').AutoRunEvent) =>

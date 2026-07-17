@@ -154,16 +154,19 @@ function TreeNode({
   if (node.isDir) {
     return (
       <li className="list-none">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
+          fullWidth
           onClick={() => setOpen((v) => !v)}
           style={pad}
-          className="flex w-full items-center gap-1 rounded-[5px] py-1 pr-1 text-left text-[12px] text-foreground hover:bg-mac-control/60"
+          className="h-auto justify-start gap-1 rounded-[5px] py-1 pr-1 text-left text-[12px] text-foreground"
         >
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           {open ? <FolderOpen size={13} /> : <FolderClosed size={13} />}
           <span className="truncate">{node.name}</span>
-        </button>
+        </Button>
         {open ? (
           <ul className="list-none m-0 p-0">
             {(node.children ?? []).map((c) => (
@@ -184,18 +187,19 @@ function TreeNode({
   const active = selected === node.relPath;
   return (
     <li className="list-none">
-      <button
+      <Button
         type="button"
+        variant={active ? 'accent' : 'ghost'}
+        size="xs"
+        fullWidth
         onClick={() => onSelect(node.relPath)}
         style={pad}
-        className={`flex w-full items-center gap-1 rounded-[5px] py-1 pr-1 text-left text-[12px] ${
-          active ? 'bg-mac-blue/20 text-mac-blue' : 'text-foreground hover:bg-mac-control/60'
-        }`}
+        className="h-auto justify-start gap-1 rounded-[5px] py-1 pr-1 text-left text-[12px]"
       >
         <span className="w-3 shrink-0" />
         <File size={13} />
         <span className="truncate">{node.name}</span>
-      </button>
+      </Button>
     </li>
   );
 }

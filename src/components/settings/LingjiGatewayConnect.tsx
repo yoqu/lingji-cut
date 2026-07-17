@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { LogIn, LogOut } from 'lucide-react';
 import type { LingjiAccount } from '../../lib/electron-api';
 import type { LLMProvider } from '../../types/ai';
 import {
@@ -63,8 +64,8 @@ export function LingjiGatewayConnect({
         <span style={{ fontSize: 12, color: 'var(--color-text-secondary, #86868b)' }}>
           已登录：{account.email} · {account.balance} 积分
         </span>
-        <Button type="button" variant="secondary" onClick={logout} disabled={loading}>
-          {loading ? '处理中…' : '退出登录'}
+        <Button type="button" variant="secondary" onClick={logout} loading={loading} loadingText="处理中" leftIcon={<LogOut size={14} />}>
+          退出登录
         </Button>
         {error && (
           <span style={{ color: 'var(--color-system-red, #ff3b30)', fontSize: 12 }}>{error}</span>
@@ -75,8 +76,8 @@ export function LingjiGatewayConnect({
 
   return (
     <>
-      <Button type="button" variant="secondary" onClick={login} disabled={loading}>
-        {loading ? '授权中…' : '一键登录灵机剪影'}
+      <Button type="button" variant="secondary" onClick={login} loading={loading} loadingText="授权中" leftIcon={<LogIn size={14} />}>
+        一键登录灵机剪影
       </Button>
       {error && (
         <span style={{ color: 'var(--color-system-red, #ff3b30)', fontSize: 12 }}>{error}</span>

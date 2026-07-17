@@ -2,10 +2,10 @@
  * 审稿动画控制器
  *
  * 两阶段设计：
- * 1. breathing — 编辑器整体呼吸光效（等待 LLM 响应期间）
- * 2. annotating — 虚拟指针逐个跳到批注位置，揭示问题
+ * 1. breathing — 编辑器等待标记（等待 LLM 响应期间）
+ * 2. annotating — 虚拟光标逐个定位到批注位置，揭示问题
  *
- * breathing 阶段由外层 CSS 类名控制（不涉及 CM6 操作），
+ * breathing 是兼容既有 store 的状态名，由外层 CSS 显示克制边缘提示（不涉及 CM6 操作），
  * annotating 阶段使用 CM6 虚拟光标 + 行高亮。
  */
 import type { EditorView } from '@codemirror/view';
@@ -80,7 +80,7 @@ export class ReviewCursorAnimator {
     }
   }
 
-  // ── 阶段 1：呼吸等待（仅通知外层，不操作 CM6）────────
+  // ── 阶段 1：等待响应（仅通知外层，不操作 CM6）────────
 
   startBreathing(): void {
     if (this.stopped) return;

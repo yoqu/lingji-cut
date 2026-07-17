@@ -71,7 +71,7 @@ describe('generate with optional binding', () => {
   it('不传 binding 且没有可用 provider：抛出配置引导错误', async () => {
     const empty: AISettings = { ...settings, llmProviders: [], defaultProviderId: null, defaultModel: null };
     await expect(generateStructuredData(empty, 'sys', 'usr')).rejects.toThrow(
-      '请先在「设置 → AI」中配置 LLM Provider 与模型',
+      '请先在「设置 → AI」中配置文本生成服务与模型',
     );
   });
 

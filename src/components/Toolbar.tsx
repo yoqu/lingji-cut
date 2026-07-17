@@ -26,19 +26,23 @@ const saveStatusLabelMap: Record<SaveStatus, string> = {
 const pageTitleMap: Record<Exclude<AppPage, 'editor'>, string> = {
   welcome: '欢迎页',
   setup: '欢迎页',
-  'script-workbench': 'AI 写稿工作台',
+  'script-workbench': '写稿工作台',
+  'director-workbench': '导演台',
+  'asset-center': '资产中心',
   publish: '发布',
   settings: '系统设置',
-  'auto-run': '一键成稿',
+  'auto-run': '自动剪辑',
 };
 
 const pageStatusMap: Record<Exclude<AppPage, 'editor'>, string> = {
   welcome: '未打开工程',
   setup: '未打开工程',
   'script-workbench': '脚本创作流程',
+  'director-workbench': '全片导演与制作控制',
+  'asset-center': '跨项目素材复用',
   publish: '多平台发布',
   settings: '全局配置',
-  'auto-run': '一键成稿运行中',
+  'auto-run': '自动剪辑运行中',
 };
 
 export function Toolbar({

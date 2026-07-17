@@ -34,8 +34,9 @@ import {
   Alert,
   Badge,
   Button,
+  ConfirmDialog,
+  Input,
   Spinner,
-  StepIndicator,
   Tabs,
   TabsContent,
   TabsList,
@@ -50,9 +51,11 @@ import {
 } from '../ui/components/dropdown-menu';
 import { createAutoRunTelemetry } from '../lib/telemetry/auto-run';
 import styles from './AIPanel.module.css';
+import { ProductionPanel } from './production/ProductionPanel';
 
 interface AIPanelProps {
   compact: boolean;
+  projectDir?: string;
   railHeight?: number;
   inspectedCardId?: string | null;
   onClearInspector?: () => void;
@@ -60,18 +63,32 @@ interface AIPanelProps {
   onOpenSettings?: () => void;
 }
 
-type AITabKey = 'cards' | 'cover';
+type AITabKey = 'cards' | 'cover' | 'production';
 
 const TAB_META: Record<AITabKey, { label: string; shortLabel: string }> = {
   cards: { label: '内容卡片', shortLabel: '卡片' },
   cover: { label: '封面', shortLabel: '封面' },
+  production: { label: '制作', shortLabel: '制作' },
 };
-const SUB_TABS: AITabKey[] = ['cards', 'cover'];
+const SUB_TABS: AITabKey[] = ['cards', 'cover', 'production'];
 // 稳定空引用：非增量阶段传给 AICardList 的 skeletons，避免每次渲染新建数组。
 const NO_SKELETONS: AICardSkeleton[] = [];
 
+interface StructureSegmentDraft {
+  id: string;
+  title: string;
+  summary: string;
+}
+
+interface StructureDraft {
+  summary: string;
+  keywords: string;
+  segments: StructureSegmentDraft[];
+}
+
 export function AIPanel({
   compact,
+  projectDir = '',
   railHeight: _railHeight,
   inspectedCardId = null,
   onClearInspector,
@@ -94,6 +111,7 @@ export function AIPanel({
   incrementalAnalysis,
   activeTab: storeActiveTab,
   setAnalysisResult,
+  setPlannedAnalysisResult,
   setAnalyzing,
   setAnalysisError,
   setCoverCandidates,
@@ -126,11 +144,26 @@ export function AIPanel({
   );
 
   const [isRegeneratingCoverPrompt, setIsRegeneratingCoverPrompt] = useState(false);
+  const [clearStructureConfirmOpen, setClearStructureConfirmOpen] = useState(false);
+  const [activeAnalysisTaskId, setActiveAnalysisTaskId] = useState<string | null>(null);
+  const [coverGenerationTaskId, setCoverGenerationTaskId] = useState<string | null>(null);
+  const [coverPromptTaskId, setCoverPromptTaskId] = useState<string | null>(null);
   const [retryingSegmentIds, setRetryingSegmentIds] = useState<Set<string>>(() => new Set());
   const [isRetryingAllFailedCards, setIsRetryingAllFailedCards] = useState(false);
   const [globalPromptDraft, setGlobalPromptDraft] = useState('');
+  const [isEditingStructure, setIsEditingStructure] = useState(false);
+  const [structureDraft, setStructureDraft] = useState<StructureDraft | null>(null);
   const [aiSettingsIssue, setAISettingsIssue] = useState<string | null>(() =>
     getAISettingsIssue(null),
+  );
+  const activeAnalysisTask = useTaskProgressStore((state) =>
+    activeAnalysisTaskId ? state.tasks.get(activeAnalysisTaskId) ?? null : null,
+  );
+  const coverGenerationTask = useTaskProgressStore((state) =>
+    coverGenerationTaskId ? state.tasks.get(coverGenerationTaskId) ?? null : null,
+  );
+  const coverPromptTask = useTaskProgressStore((state) =>
+    coverPromptTaskId ? state.tasks.get(coverPromptTaskId) ?? null : null,
   );
 
   useEffect(() => {
@@ -350,6 +383,8 @@ export function AIPanel({
   // 底部进度条出现多个「内容卡片分析」。设为 ref 而非依赖 isAnalyzing 状态，避免 setAnalyzing
   // 异步生效前的竞态窗口。
   const analyzeInFlightRef = useRef(false);
+  const coverGenerationInFlightRef = useRef(false);
+  const coverPromptInFlightRef = useRef(false);
 
   const handleAnalyze = useCallback(async () => {
     const settings = await loadAISettings();
@@ -378,6 +413,124 @@ export function AIPanel({
     if (analyzeInFlightRef.current) return;
     analyzeInFlightRef.current = true;
 
+    if (analysisResult && analysisResult.segments.length > 0 && analysisResult.cards.length === 0) {
+      const taskId = `ai-generate-cards-from-plan-${Date.now()}`;
+      const baseResult: AIAnalysisResult = { ...analysisResult, cards: [], cardErrors: undefined };
+      const projectDir = getProjectDir();
+      let cursor = 0;
+      const errors: AIAnalysisCardError[] = [];
+      const concurrency = Math.min(
+        Math.max(1, Math.floor(settings.cardGenerationConcurrency ?? 4)),
+        baseResult.segments.length,
+      );
+
+      setAnalysisError(null);
+      setAnalyzing(true);
+      setAnalysisResult(baseResult);
+      useAIStore.getState().beginIncrementalAnalysis(
+        baseResult.segments.map((segment) => ({
+          segmentId: segment.id,
+          title: segment.title,
+        })),
+      );
+      useTaskProgressStore.getState().startTask({
+        id: taskId,
+        category: 'ai-analyze',
+        label: '沿用结构生成内容卡片',
+        mode: 'determinate',
+        progress: 0,
+        phase: '准备生成卡片',
+        level: 2,
+        canCancel: false,
+      });
+      setActiveAnalysisTaskId(taskId);
+
+      const runOne = async (): Promise<void> => {
+        while (true) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= baseResult.segments.length) return;
+          const segment = baseResult.segments[index];
+          try {
+            useTaskProgressStore.getState().updateTask(taskId, {
+              progress: Math.round((index / baseResult.segments.length) * 100),
+              phase: `生成第 ${index + 1}/${baseResult.segments.length} 段`,
+            });
+            const card = await window.electronAPI.generateAICardForSegment({
+              projectDir: projectDir ?? undefined,
+              entries: srtEntries,
+              segment,
+              settings,
+              globalPrompt: baseResult.globalPrompt,
+              programSummary: baseResult.summary,
+              keywords: baseResult.keywords,
+              motionBible: baseResult.motionBible,
+              projectBindings: useAIStore.getState().projectBindings,
+              segmentIndex: index,
+              totalSegments: baseResult.segments.length,
+              prevSegment: index > 0 ? baseResult.segments[index - 1] : undefined,
+              nextSegment:
+                index + 1 < baseResult.segments.length
+                  ? baseResult.segments[index + 1]
+                  : undefined,
+              visualType: (() => {
+                const value = (segment as { visualType?: unknown }).visualType;
+                return value === 'image' || value === 'motion' ? value : undefined;
+              })(),
+              feedId: taskId,
+            });
+            useAIStore.getState().upsertAnalyzedCard(card);
+            if (card.enabled) {
+              useTimelineStore
+                .getState()
+                .appendAICardToTimeline(buildAICardTimelineDraft(card, baseResult.motionBible), {
+                  coalesceHistory: true,
+                });
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : '卡片生成失败';
+            errors.push({
+              segmentId: segment.id,
+              segmentTitle: segment.title,
+              segmentIndex: index,
+              totalSegments: baseResult.segments.length,
+              message,
+            });
+            useAIStore.getState().markAnalyzedCardFailed(segment.id);
+          }
+        }
+      };
+
+      try {
+        await Promise.all(Array.from({ length: concurrency }, () => runOne()));
+        const latestResult = useAIStore.getState().analysisResult ?? baseResult;
+        const orderedCards = baseResult.segments
+          .map((segment) => latestResult.cards.find((card) => card.segmentId === segment.id))
+          .filter((card): card is AICard => Boolean(card));
+        const nextResult: AIAnalysisResult = {
+          ...latestResult,
+          cards: orderedCards,
+          cardErrors: errors.length > 0 ? errors : undefined,
+        };
+        const persistedState = await persistAIState(nextResult, coverCandidates);
+        setAnalysisResult(persistedState.analysisResult ?? nextResult);
+        setCoverCandidates(persistedState.coverCandidates);
+        if (errors.length > 0) {
+          setAnalysisError(`已有结构已保留，${errors.length} 个分段卡片生成失败，可在失败段列表中重试。`);
+        }
+        useTaskProgressStore.getState().completeTask(taskId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '沿用结构生成卡片失败';
+        setAnalysisError(message);
+        useTaskProgressStore.getState().failTask(taskId, message);
+      } finally {
+        useAIStore.getState().endIncrementalAnalysis();
+        setAnalyzing(false);
+        analyzeInFlightRef.current = false;
+      }
+      return;
+    }
+
     setAnalysisError(null);
     setAnalyzing(true);
 
@@ -385,7 +538,7 @@ export function AIPanel({
     useTaskProgressStore.getState().startTask({
       id: analyzeTaskId,
       category: 'ai-analyze',
-      label: analysisResult ? '内容卡片重新分析' : '内容卡片分析',
+      label: analysisResult ? '重新生成内容卡片' : '生成内容卡片',
       // planning 阶段先用 streaming（脉冲）表明在跑；进入卡片阶段后桥会切换为 determinate。
       mode: 'streaming',
       progress: 0,
@@ -393,6 +546,7 @@ export function AIPanel({
       level: 2,
       canCancel: false,
     });
+    setActiveAnalysisTaskId(analyzeTaskId);
 
     // 订阅 analyze-progress，实时把 planning 心跳 / 卡片 0..N 进度喂给统一进度条。
     // 复用与一键流水线相同的进度映射逻辑（src/lib/analyze-progress-bridge）。
@@ -423,6 +577,13 @@ export function AIPanel({
               .removeAICardOverlaysBySourceIds(oldCardSourceIds);
           }
         }
+        setPlannedAnalysisResult({
+          segments: planning.segments,
+          coverPrompts: planning.coverPrompts,
+          summary: planning.summary,
+          keywords: planning.keywords,
+          globalPrompt: planning.globalPrompt,
+        });
         useAIStore.getState().beginIncrementalAnalysis(
           planning.segments.map((segment) => ({
             segmentId: segment.id,
@@ -437,9 +598,10 @@ export function AIPanel({
         // 默认「生成好一条就进入轨道一条」：enabled 卡片即时落轨；
         // coalesceHistory 把整轮增量落轨合并为一次可撤销操作。
         if (card.enabled) {
+          const motionBible = useAIStore.getState().analysisResult?.motionBible;
           useTimelineStore
             .getState()
-            .appendAICardToTimeline(buildAICardTimelineDraft(card), {
+            .appendAICardToTimeline(buildAICardTimelineDraft(card, motionBible), {
               coalesceHistory: true,
             });
         }
@@ -519,12 +681,14 @@ export function AIPanel({
     }
   }, [
     analysisResult,
+    coverCandidates,
     globalPromptDraft,
     persistAIState,
     setAnalysisError,
     setAnalysisResult,
     setAnalyzing,
     setCoverCandidates,
+    setPlannedAnalysisResult,
     srtEntries,
     timeline.podcast.srtPath,
   ]);
@@ -564,7 +728,7 @@ export function AIPanel({
       );
       const segment = segmentIndex >= 0 ? currentResult.segments[segmentIndex] : null;
       if (!segment) {
-        setAnalysisError(`找不到失败段「${error.segmentTitle ?? error.segmentId}」，请重新分析内容。`);
+        setAnalysisError(`找不到失败段「${error.segmentTitle ?? error.segmentId}」，请重新生成内容卡片。`);
         return null;
       }
 
@@ -754,86 +918,125 @@ export function AIPanel({
     addAICardsToTimeline(
       analysisResult.cards
         .filter((card) => card.enabled)
-        .map(buildAICardTimelineDraft),
+        .map((card) => buildAICardTimelineDraft(card, analysisResult.motionBible)),
     );
   }, [addAICardsToTimeline, analysisResult]);
 
   const handleGenerateCovers = useCallback(
     async (prompts: string[]) => {
-      const settings = await loadAISettings();
-      const hasImageProvider =
-        !!settings &&
-        settings.imageProviders.length > 0 &&
-        !!settings.defaultImageProviderId;
-      if (!hasImageProvider) {
-        setAnalysisError('请先在 AI 配置中添加至少一个图像生成 Provider');
-        onOpenSettings?.();
-        return;
-      }
-
-      const projectDir = getProjectDir();
-      if (!projectDir) {
-        return;
-      }
-
+      if (coverGenerationInFlightRef.current || coverPromptInFlightRef.current) return;
+      coverGenerationInFlightRef.current = true;
       setGeneratingCovers(true);
+      setAnalysisError(null);
+      let taskId: string | null = null;
+
       try {
+        const settings = await loadAISettings();
+        const hasImageProvider =
+          !!settings &&
+          settings.imageProviders.length > 0 &&
+          !!settings.defaultImageProviderId;
+        if (!settings || !hasImageProvider) {
+          setAnalysisError('请先在 AI 配置中添加图片生成服务');
+          onOpenSettings?.();
+          return;
+        }
+
+        const projectDir = getProjectDir();
+        if (!projectDir) {
+          setAnalysisError('请先打开项目，再生成封面图');
+          return;
+        }
+
+        taskId = `cover-images-${Date.now()}`;
+        setCoverGenerationTaskId(taskId);
+        useTaskProgressStore.getState().startTask({
+          id: taskId,
+          category: 'cover',
+          label: coverCandidates.some((candidate) => coverAspectRatio(candidate) === '16:9')
+            ? '重新生成封面图'
+            : '生成封面图',
+          mode: 'indeterminate',
+          progress: 0,
+          phase: '保存封面提示词',
+          level: 2,
+          canCancel: false,
+        });
+
         const nextResult = await handleSaveCoverPrompt(prompts);
+        useTaskProgressStore.getState().updateTask(taskId, { phase: '生成封面图' });
         const candidates = await window.electronAPI.generateCoverImages({
           prompts,
           settings,
           projectDir,
           projectBindings: useAIStore.getState().projectBindings,
         });
+        useTaskProgressStore.getState().updateTask(taskId, { phase: '保存封面图' });
         await handlePersistedCovers(candidates, nextResult);
+        useTaskProgressStore.getState().updateTask(taskId, {
+          phase: `已生成 ${candidates.length} 张封面图`,
+        });
+        useTaskProgressStore.getState().completeTask(taskId);
       } catch (error) {
-        console.error('封面生成失败:', error);
-        if (error instanceof Error) {
-          setAnalysisError(error.message);
-        }
+        const message = error instanceof Error ? error.message : '封面图生成失败';
+        setAnalysisError(message);
+        if (taskId) useTaskProgressStore.getState().failTask(taskId, message);
       } finally {
+        coverGenerationInFlightRef.current = false;
         setGeneratingCovers(false);
       }
     },
     [
+      coverCandidates,
       handlePersistedCovers,
       handleSaveCoverPrompt,
+      onOpenSettings,
       setGeneratingCovers,
       setAnalysisError,
     ],
   );
 
   const handleRegenerateCoverPrompt = useCallback(async () => {
-    if (!analysisResult) {
-      return;
-    }
-
-    const settings = await loadAISettings();
-    const settingsIssue = getAISettingsIssue(settings);
-    if (settingsIssue) {
-      setAISettingsIssue(settingsIssue);
-      setAnalysisError(settingsIssue);
-      onOpenSettings?.();
-      return;
-    }
-    if (!settings) {
-      setAISettingsIssue(getAISettingsIssue(null));
-      setAnalysisError('请先完成 AI 配置');
-      onOpenSettings?.();
-      return;
-    }
-
-    setAISettingsIssue(null);
-
-    if (srtEntries.length === 0) {
-      setAnalysisError('当前没有可用于生成封面提示词的字幕内容');
-      return;
-    }
-
+    if (
+      !analysisResult ||
+      coverPromptInFlightRef.current ||
+      coverGenerationInFlightRef.current
+    ) return;
+    coverPromptInFlightRef.current = true;
     setIsRegeneratingCoverPrompt(true);
     setAnalysisError(null);
+    let taskId: string | null = null;
 
     try {
+      const settings = await loadAISettings();
+      const settingsIssue = getAISettingsIssue(settings);
+      if (settingsIssue || !settings) {
+        const message = settingsIssue ?? '请先完成 AI 配置';
+        setAISettingsIssue(message);
+        setAnalysisError(message);
+        onOpenSettings?.();
+        return;
+      }
+
+      setAISettingsIssue(null);
+      if (srtEntries.length === 0) {
+        setAnalysisError('当前没有可用于重写封面提示词的字幕内容');
+        return;
+      }
+
+      taskId = `cover-prompt-${Date.now()}`;
+      setCoverPromptTaskId(taskId);
+      useTaskProgressStore.getState().startTask({
+        id: taskId,
+        category: 'cover',
+        label: '重写封面提示词',
+        mode: 'indeterminate',
+        progress: 0,
+        phase: '分析字幕并重写提示词',
+        level: 2,
+        canCancel: false,
+      });
+
       const projectDir = getProjectDir();
       const prompts = await window.electronAPI.regenerateCoverPrompt({
         entries: srtEntries,
@@ -843,6 +1046,7 @@ export function AIPanel({
         projectDir: projectDir ?? undefined,
         projectBindings: useAIStore.getState().projectBindings,
       });
+      useTaskProgressStore.getState().updateTask(taskId, { phase: '保存重写结果' });
       const nextResult = {
         ...analysisResult,
         coverPrompts: prompts,
@@ -851,14 +1055,21 @@ export function AIPanel({
       const persistedState = await persistAIState(nextResult, []);
       setAnalysisResult(persistedState.analysisResult ?? nextResult);
       setCoverCandidates([]);
+      useTaskProgressStore.getState().updateTask(taskId, { phase: '封面提示词已重写' });
+      useTaskProgressStore.getState().completeTask(taskId);
     } catch (error) {
-      setAnalysisError(error instanceof Error ? error.message : '封面提示词重生成失败');
+      const message = error instanceof Error ? error.message : '封面提示词重写失败';
+      setAnalysisError(message);
+      if (taskId) useTaskProgressStore.getState().failTask(taskId, message);
     } finally {
+      coverPromptInFlightRef.current = false;
       setIsRegeneratingCoverPrompt(false);
     }
   }, [
     analysisResult,
+    onOpenSettings,
     persistAIState,
+    setAISettingsIssue,
     setAnalysisError,
     setAnalysisResult,
     setCoverCandidates,
@@ -904,6 +1115,115 @@ export function AIPanel({
       setCoverCandidates(persistedState.coverCandidates);
     });
   }, [analysisResult, coverCandidates, persistAIState, setAnalysisResult, setCoverCandidates]);
+
+  const openStructureEditor = useCallback(() => {
+    if (!analysisResult) {
+      return;
+    }
+    setStructureDraft({
+      summary: analysisResult.summary,
+      keywords: analysisResult.keywords.join('，'),
+      segments: analysisResult.segments.map((segment) => ({
+        id: segment.id,
+        title: segment.title,
+        summary: segment.summary,
+      })),
+    });
+    setIsEditingStructure(true);
+  }, [analysisResult]);
+
+  const closeStructureEditor = useCallback(() => {
+    setIsEditingStructure(false);
+    setStructureDraft(null);
+  }, []);
+
+  const updateStructureSegmentDraft = useCallback(
+    (segmentId: string, updates: Partial<StructureSegmentDraft>) => {
+      setStructureDraft((draft) => {
+        if (!draft) return draft;
+        return {
+          ...draft,
+          segments: draft.segments.map((segment) =>
+            segment.id === segmentId ? { ...segment, ...updates } : segment,
+          ),
+        };
+      });
+    },
+    [],
+  );
+
+  const handleSaveStructure = useCallback(async () => {
+    if (!analysisResult || !structureDraft) {
+      return;
+    }
+
+    const draftById = new Map(structureDraft.segments.map((segment) => [segment.id, segment]));
+    const nextSegments = analysisResult.segments.map((segment, index) => {
+      const draft = draftById.get(segment.id);
+      const title = draft?.title.trim() || segment.title || `话题 ${index + 1}`;
+      return {
+        ...segment,
+        title,
+        summary: draft?.summary.trim() ?? segment.summary,
+      };
+    });
+    const nextKeywords = structureDraft.keywords
+      .split(/[,，、\n]/)
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
+    const titleById = new Map(nextSegments.map((segment) => [segment.id, segment.title]));
+    const nextResult: AIAnalysisResult = {
+      ...analysisResult,
+      segments: nextSegments,
+      summary: structureDraft.summary.trim(),
+      keywords: nextKeywords,
+      cardErrors: analysisResult.cardErrors?.map((error) => ({
+        ...error,
+        segmentTitle: titleById.get(error.segmentId) ?? error.segmentTitle,
+      })),
+    };
+
+    setAnalysisResult(nextResult);
+    const persistedState = await persistAIState(nextResult, coverCandidates);
+    setAnalysisResult(persistedState.analysisResult ?? nextResult);
+    setCoverCandidates(persistedState.coverCandidates);
+    closeStructureEditor();
+  }, [
+    analysisResult,
+    closeStructureEditor,
+    coverCandidates,
+    persistAIState,
+    setAnalysisResult,
+    setCoverCandidates,
+    structureDraft,
+  ]);
+
+  const handleClearStructure = useCallback(() => {
+    if (!analysisResult) {
+      return;
+    }
+
+    const cardIds = analysisResult.cards.map((card) => card.id);
+    if (cardIds.length > 0) {
+      removeAICardOverlaysBySourceIds(cardIds);
+    }
+    if (inspectedCardId && cardIds.includes(inspectedCardId)) {
+      onClearInspector?.();
+    }
+    useAIStore.getState().clearAnalysis();
+    closeStructureEditor();
+    void persistAIState(null, []).then((persistedState) => {
+      setCoverCandidates(persistedState.coverCandidates);
+    });
+  }, [
+    analysisResult,
+    closeStructureEditor,
+    inspectedCardId,
+    onClearInspector,
+    persistAIState,
+    removeAICardOverlaysBySourceIds,
+    setCoverCandidates,
+  ]);
 
   const handleDeleteCards = useCallback(
     (cardIds: string[]) => {
@@ -956,6 +1276,8 @@ export function AIPanel({
   const hasSrtEntries = srtEntries.length > 0;
   const analyzeButtonDisabled = !hasSrtEntries || isAnalyzing;
   const hasGeneratedCards = (analysisResult?.cards.length ?? 0) > 0;
+  const plannedSegments = analysisResult?.segments ?? [];
+  const hasPlannedStructure = plannedSegments.length > 0;
   const isCardListEmpty = Boolean(analysisResult && !hasGeneratedCards);
   // 增量呈现进行中：内容区改用 incrementalAnalysis（骨架 + 已填充真实卡），
   // 替代「等整轮结束才一次性出现」。结束后回落到 analysisResult.cards。
@@ -969,40 +1291,39 @@ export function AIPanel({
   const showCardGenerationState =
     (!analysisResult || !hasGeneratedCards) && !showingIncremental;
   const allCardsSelected = hasGeneratedCards && enabledCount === (analysisResult?.cards.length ?? 0);
-  const analysisHeadline = analysisResult ? '正在重新分析内容卡片' : '正在拆解字幕与生成卡片';
-  const analysisDescription = analysisResult
-    ? '正在根据最新字幕和提示词重新组织结构，完成后会自动刷新当前卡片列表。'
-    : '正在解析字幕、提炼重点并生成可编辑卡片，这通常需要几十秒。';
-  const analysisOverlayTitle = analysisResult
-    ? 'AI 正在重新生成当前内容卡片'
-    : 'AI 正在生成首批内容卡片';
-  const analysisOverlayText = analysisResult
-    ? '当前卡片区会暂时锁定，分析完成后将自动替换成新的卡片结果。'
-    : '请稍候，AI 会先解析字幕，再提炼重点并生成可编辑卡片。';
+  const analysisHeadline =
+    activeAnalysisTask?.label ??
+    (analysisResult ? '重新生成内容卡片' : '生成内容卡片');
+  const analysisPhaseText =
+    activeAnalysisTask?.phase ??
+    (analysisResult ? '准备重新生成内容卡片' : '准备分析字幕内容');
   const generationStateBadgeLabel = isAnalyzing
-    ? 'AI 正在工作'
+    ? activeAnalysisTask?.label ?? '生成内容卡片'
     : isCardListEmpty
       ? '卡片已清空'
       : '准备生成内容卡片';
   const generationStateText = isAnalyzing
-    ? `已载入 ${srtEntries.length} 条字幕，正在为你拆解结构与重点`
+    ? analysisPhaseText
     : srtEntries.length === 0
       ? '请先导入 SRT 字幕文件'
       : isCardListEmpty
-        ? `内容卡片已全部删除，当前仍有 ${srtEntries.length} 条字幕可重新分析生成`
-        : `已加载 ${srtEntries.length} 条字幕，点击分析`;
-  const analysisSteps = [
-    { label: '解析字幕', status: 'active' as const },
-    { label: '提炼重点', status: 'active' as const },
-    { label: '生成卡片', status: 'active' as const },
-  ];
+        ? hasPlannedStructure
+          ? `内容卡片已全部删除，已保存 ${plannedSegments.length} 个话题结构可补生成`
+          : `内容卡片已全部删除，当前仍有 ${srtEntries.length} 条字幕可重新生成`
+        : `已加载 ${srtEntries.length} 条字幕，可以生成内容卡片`;
+  const plannedSegmentPreview = plannedSegments.slice(0, 6);
+  const hiddenPlannedSegmentCount = Math.max(0, plannedSegments.length - plannedSegmentPreview.length);
   const analyzeButtonLabel = isAnalyzing
-    ? '分析中...'
+    ? '生成中...'
     : aiSettingsIssue
       ? '前往系统设置'
       : isCardListEmpty
-        ? '重新生成卡片'
-        : '分析内容';
+        ? hasPlannedStructure
+          ? '沿用结构生成卡片'
+          : '重新生成内容卡片'
+        : analysisResult
+          ? '重新生成内容卡片'
+          : '生成内容卡片';
 
   return (
     <aside
@@ -1017,7 +1338,7 @@ export function AIPanel({
           <span className={styles.headerIcon}>
             <AppIcon name="brain" size={14} />
           </span>
-          <span className={styles.headerTitle}>AI 分析</span>
+          <span className={styles.headerTitle}>内容生成</span>
           {hasGeneratedCards ? (
             <Badge color="#0A84FF" size="xs" className={styles.headerBadge}>
               已选 {enabledCount}/{analysisResult?.cards.length ?? 0}
@@ -1031,8 +1352,8 @@ export function AIPanel({
             data-ai-analyze-trigger="header"
             onClick={() => void handleAnalyze()}
             disabled={analyzeButtonDisabled}
-            aria-label={analysisResult ? '重新分析' : '分析内容'}
-            title={analysisResult ? '重新分析' : '分析内容'}
+            aria-label={analysisResult ? '重新生成内容卡片' : '生成内容卡片'}
+            title={analysisResult ? '重新生成内容卡片' : '生成内容卡片'}
           >
             {isAnalyzing ? <Spinner size={12} color="#EBEBF599" /> : <AppIcon name="refresh-cw" size={14} />}
           </Button.Icon>
@@ -1069,6 +1390,13 @@ export function AIPanel({
         </TabsList>
 
         <div className={styles.body}>
+          <TabsContent value="production" className={styles.tabContent}>
+            <ProductionPanel
+              projectDir={projectDir}
+              compact={compact}
+              onOpenCardInspector={onOpenCardInspector}
+            />
+          </TabsContent>
           <TabsContent value="cards" className={styles.tabContent}>
             <section className={styles.promptSection}>
               <label className={styles.promptLabel}>整体创作提示词</label>
@@ -1159,12 +1487,175 @@ export function AIPanel({
               </section>
             ) : null}
 
+            {hasPlannedStructure ? (
+              <section className={styles.structurePanel} data-ai-structure-panel="true">
+                <div className={styles.structureHeader}>
+                  <div className={styles.structureTitleGroup}>
+                    <Badge variant="secondary" size="xs" className={styles.structureBadge}>
+                      结构 {plannedSegments.length}
+                    </Badge>
+                    <div className={styles.structureTitle}>第一阶段结构</div>
+                  </div>
+                  <div className={styles.structureActions}>
+                    {isEditingStructure ? (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="xs"
+                          onClick={closeStructureEditor}
+                          disabled={isAnalyzing}
+                        >
+                          取消
+                        </Button>
+                        <Button
+                          variant="accent"
+                          size="xs"
+                          onClick={() => void handleSaveStructure()}
+                          disabled={isAnalyzing || !structureDraft}
+                        >
+                          保存
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="xs"
+                          onClick={openStructureEditor}
+                          disabled={isAnalyzing}
+                        >
+                          <AppIcon name="pencil-line" size={12} />
+                          编辑
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="xs"
+                          onClick={() => setClearStructureConfirmOpen(true)}
+                          disabled={isAnalyzing}
+                        >
+                          清空重做
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {isEditingStructure && structureDraft ? (
+                  <div className={styles.structureEditor}>
+                    <label className={styles.structureField}>
+                      <span className={styles.structureFieldLabel}>整体摘要</span>
+                      <Textarea
+                        value={structureDraft.summary}
+                        onChange={(event) =>
+                          setStructureDraft((draft) =>
+                            draft ? { ...draft, summary: event.target.value } : draft,
+                          )
+                        }
+                        rows={3}
+                        size="sm"
+                        resize="vertical"
+                        className={styles.structureTextarea}
+                      />
+                    </label>
+                    <label className={styles.structureField}>
+                      <span className={styles.structureFieldLabel}>关键词</span>
+                      <Input
+                        value={structureDraft.keywords}
+                        onChange={(event) =>
+                          setStructureDraft((draft) =>
+                            draft ? { ...draft, keywords: event.target.value } : draft,
+                          )
+                        }
+                        size="sm"
+                        className={styles.structureInput}
+                      />
+                    </label>
+                    <div className={styles.structureSegmentEditorList}>
+                      {structureDraft.segments.map((segment, index) => (
+                        <div key={segment.id} className={styles.structureSegmentEditor}>
+                          <div className={styles.structureSegmentEditorHeader}>
+                            <span className={styles.plannedSegmentIndex}>{index + 1}</span>
+                            <Input
+                              value={segment.title}
+                              onChange={(event) =>
+                                updateStructureSegmentDraft(segment.id, {
+                                  title: event.target.value,
+                                })
+                              }
+                              size="sm"
+                              className={styles.structureInput}
+                            />
+                          </div>
+                          <Textarea
+                            value={segment.summary}
+                            onChange={(event) =>
+                              updateStructureSegmentDraft(segment.id, {
+                                summary: event.target.value,
+                              })
+                            }
+                            rows={2}
+                            size="sm"
+                            resize="vertical"
+                            className={styles.structureTextarea}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className={styles.plannedStructurePanel}>
+                    <div className={styles.plannedStructureHeader}>
+                      <span className={styles.plannedStructureTitle}>已保存话题</span>
+                      <span className={styles.plannedStructureCount}>
+                        {plannedSegments.length} 个
+                      </span>
+                    </div>
+                    {analysisResult?.summary ? (
+                      <div className={styles.structureSummary}>{analysisResult.summary}</div>
+                    ) : null}
+                    {analysisResult?.keywords.length ? (
+                      <div className={styles.structureKeywords}>
+                        {analysisResult.keywords.slice(0, 8).map((keyword) => (
+                          <span key={keyword} className={styles.structureKeyword}>
+                            {keyword}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className={styles.plannedSegmentList}>
+                      {plannedSegmentPreview.map((segment, index) => (
+                        <div key={segment.id} className={styles.plannedSegmentItem}>
+                          <span className={styles.plannedSegmentIndex}>{index + 1}</span>
+                          <span className={styles.plannedSegmentTitle}>
+                            {segment.title || segment.summary || `话题 ${index + 1}`}
+                          </span>
+                        </div>
+                      ))}
+                      {hiddenPlannedSegmentCount > 0 ? (
+                        <div className={styles.plannedSegmentMore}>
+                          还有 {hiddenPlannedSegmentCount} 个话题
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+              </section>
+            ) : null}
+
             {showCardGenerationState ? (
               <section className={styles.emptyState} aria-busy={isAnalyzing}>
                 <Badge variant="glass" size="xs" className={styles.stateBadge}>
                   {generationStateBadgeLabel}
                 </Badge>
-                <div className={styles.emptyStateText}>{generationStateText}</div>
+                <div
+                  className={joinClassNames(
+                    styles.emptyStateText,
+                    isAnalyzing ? styles.activeOperationText : undefined,
+                  )}
+                  aria-live={isAnalyzing ? 'polite' : undefined}
+                >
+                  {generationStateText}
+                </div>
                 {aiSettingsIssue ? <div className={styles.hintText}>{aiSettingsIssue}</div> : null}
                 <div className={styles.emptyStateActions}>
                   <Button
@@ -1211,8 +1702,9 @@ export function AIPanel({
                 {isAnalyzing ? (
                   <div className={styles.analysisStatus}>
                     <div className={styles.analysisStatusTitle}>{analysisHeadline}</div>
-                    <div className={styles.analysisStatusText}>{analysisDescription}</div>
-                    <StepIndicator steps={analysisSteps} />
+                    <div className={styles.analysisStatusText} aria-live="polite">
+                      {analysisPhaseText}
+                    </div>
                   </div>
                 ) : null}
               </section>
@@ -1286,14 +1778,16 @@ export function AIPanel({
                   {analysisResult && hasGeneratedCards && isAnalyzing ? (
                     <div className={styles.analysisBanner}>
                       <Badge variant="secondary" size="xs" className={styles.analysisBannerBadge}>
-                        重新分析中
+                        重新生成中
                       </Badge>
-                      <div className={styles.analysisBannerTitle}>{analysisOverlayTitle}</div>
-                      <div className={styles.analysisBannerText}>{analysisOverlayText}</div>
+                      <div className={styles.analysisBannerTitle}>{analysisHeadline}</div>
+                      <div className={styles.analysisBannerText} aria-live="polite">
+                        {analysisPhaseText}
+                      </div>
                     </div>
                   ) : null}
 
-                  <div className={joinClassNames(styles.workspaceContent, isAnalyzing ? styles.workspaceContentDimmed : '')}>
+                  <div className={styles.workspaceContent}>
                     <AICardList
                       cards={displayCards}
                       skeletons={displaySkeletons}
@@ -1316,6 +1810,8 @@ export function AIPanel({
               candidates={coverCandidates.filter((c) => coverAspectRatio(c) === '16:9')}
               isGenerating={isGeneratingCovers}
               isRegeneratingPrompt={isRegeneratingCoverPrompt}
+              generationPhase={coverGenerationTask?.phase}
+              promptPhase={coverPromptTask?.phase}
               selectedCandidateId={selectedCoverCandidate?.id}
               onGenerateCovers={handleGenerateCovers}
               onSavePrompt={handleSaveCoverPrompt}
@@ -1374,6 +1870,15 @@ export function AIPanel({
             onOpenCardInspector?.(cardId);
           }
         }}
+      />
+      <ConfirmDialog
+        open={clearStructureConfirmOpen}
+        onOpenChange={setClearStructureConfirmOpen}
+        title="清空分析结果？"
+        description="将清空分段结构、内容卡片和已经放到时间线上的 AI 卡片。此操作无法撤销。"
+        confirmText="清空重做"
+        confirmVariant="destructive"
+        onConfirm={handleClearStructure}
       />
     </aside>
   );

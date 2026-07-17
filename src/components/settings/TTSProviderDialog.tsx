@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import type { TTSProvider, TTSProviderType } from '../../types/ai';
 import {
   Badge,
@@ -93,7 +94,7 @@ type ProviderErrors = Partial<Record<'name' | 'baseUrl' | 'apiKey' | 'models', s
 function validateProvider(provider: TTSProvider): ProviderErrors {
   const normalized = normalizeProvider(provider);
   const errors: ProviderErrors = {};
-  if (!normalized.name) errors.name = '请输入 Provider 名称';
+  if (!normalized.name) errors.name = '请输入生成服务名称';
   if (!normalized.baseUrl) errors.baseUrl = '请输入 Base URL';
   if (!normalized.apiKey) errors.apiKey = '请输入 API Key';
   if (normalized.models.length === 0) errors.models = '请至少添加一个模型';
@@ -156,7 +157,7 @@ export function TTSProviderDialog({
     <Dialog open onOpenChange={(open) => (!open ? onCancel() : undefined)}>
       <DialogContent size="lg" className={styles.dialogContent}>
         <DialogHeader>
-          <DialogTitle>{initial.name ? '编辑 TTS Provider' : '添加 TTS Provider'}</DialogTitle>
+          <DialogTitle>{initial.name ? '编辑口播生成服务' : '添加口播生成服务'}</DialogTitle>
         </DialogHeader>
         <DialogBody className={styles.dialogBody}>
           <Field label="名称" required error={errors.name}>
@@ -176,17 +177,17 @@ export function TTSProviderDialog({
               {form.models.map((model, index) => (
                 <div key={`${model}-${index}`} className={styles.modelItem}>
                   <Badge variant="secondary" size="xs">{model}</Badge>
-                  <Button type="button" variant="ghost" size="sm" className={styles.removeModelButton} onClick={() => set('models', form.models.filter((_, itemIndex) => itemIndex !== index))}>移除</Button>
+                  <Button type="button" variant="ghost" size="sm" leftIcon={<Trash2 size={12} />} className={styles.removeModelButton} onClick={() => set('models', form.models.filter((_, itemIndex) => itemIndex !== index))}>移除</Button>
                 </div>
               ))}
             </div>
             <div className={styles.modelInputRow}>
               <Input value={newModel} onChange={(event) => setNewModel(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addModel(); } }} placeholder="输入模型名后按 Enter 或点击添加" size="sm" wrapperClassName={styles.modelInput} />
-              <Button type="button" variant="secondary" size="sm" onClick={addModel}>添加</Button>
+              <Button type="button" variant="secondary" size="sm" leftIcon={<Plus size={12} />} onClick={addModel}>添加</Button>
             </div>
           </Field>
-          <Checkbox label="设为默认 TTS Provider" checked={setAsDefault} onChange={setSetAsDefault} size="sm" className={styles.defaultCheckbox} />
-          <ModalFooter onCancel={onCancel} onConfirm={handleConfirm} confirmLabel="保存" extra={Object.keys(errors).length > 0 ? <span className={styles.footerError}>请先补全 Provider 的必填项</span> : null} />
+          <Checkbox label="设为默认口播生成服务" checked={setAsDefault} onChange={setSetAsDefault} size="sm" className={styles.defaultCheckbox} />
+          <ModalFooter onCancel={onCancel} onConfirm={handleConfirm} confirmLabel="保存" extra={Object.keys(errors).length > 0 ? <span className={styles.footerError}>请先补全生成服务的必填项</span> : null} />
         </DialogBody>
       </DialogContent>
     </Dialog>

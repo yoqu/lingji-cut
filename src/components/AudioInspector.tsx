@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { getFileNameFromPath, formatTime } from '../lib/utils';
 import { useTimelineStore } from '../store/timeline';
-import { Button, NumberField, Switch } from '../ui';
+import { Button, NumberField, Select, Switch } from '../ui';
 import type { AudioOverlayData } from '../types';
 import { createDefaultAudioOverlayData } from '../types';
 import styles from './OverlayInspector.module.css';
@@ -114,6 +114,65 @@ export function AudioInspector({ overlayId, onDelete }: AudioInspectorProps) {
         </div>
         <div className={styles.helper}>
           音量以线性值应用，100% 为原始响度；超过 100% 会放大但可能引入失真。
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionTitle}>声音角色</div>
+        <div className={styles.fieldGrid}>
+          <label className={styles.field}>
+            <span className={styles.label}>用途</span>
+            <Select
+              value={audioData.role ?? 'sfx'}
+              options={[
+                { value: 'bgm', label: 'BGM' },
+                { value: 'ambience', label: '环境声' },
+                { value: 'stinger', label: '章节 Stinger' },
+                { value: 'sfx', label: '短音效' },
+                { value: 'transition-sound', label: '转场声音' },
+              ]}
+              onChange={(event) => updateAudio({ role: event.target.value as AudioOverlayData['role'] })}
+            />
+          </label>
+          <div className={styles.field}>
+            <span className={styles.label}>循环</span>
+            <Switch
+              checked={audioData.loop ?? false}
+              onChange={(checked) => updateAudio({ loop: checked })}
+              label={audioData.loop ? '循环播放' : '单次播放'}
+            />
+          </div>
+          <div className={styles.field}>
+            <span className={styles.label}>口播 Ducking</span>
+            <Switch
+              checked={audioData.ducking?.enabled ?? false}
+              onChange={(enabled) => updateAudio({
+                ducking: {
+                  enabled,
+                  reductionDb: audioData.ducking?.reductionDb ?? 6,
+                  attackMs: audioData.ducking?.attackMs ?? 80,
+                  releaseMs: audioData.ducking?.releaseMs ?? 350,
+                  holdMs: audioData.ducking?.holdMs ?? 600,
+                },
+              })}
+              label={audioData.ducking?.enabled ? '自动压低' : '不处理'}
+            />
+          </div>
+          {audioData.ducking?.enabled ? (
+            <label className={styles.field}>
+              <span className={styles.label}>压低（dB）</span>
+              <NumberField
+                className={styles.numberField}
+                min={1}
+                max={18}
+                step={1}
+                value={audioData.ducking.reductionDb}
+                onChange={(reductionDb) => updateAudio({
+                  ducking: { ...audioData.ducking!, reductionDb },
+                })}
+              />
+            </label>
+          ) : null}
         </div>
       </section>
 

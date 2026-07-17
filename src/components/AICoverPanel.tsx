@@ -10,6 +10,8 @@ interface AICoverPanelProps {
   candidates: CoverCandidate[];
   isGenerating: boolean;
   isRegeneratingPrompt: boolean;
+  generationPhase?: string | null;
+  promptPhase?: string | null;
   selectedCandidateId?: string;
   onGenerateCovers: (prompts: string[]) => void | Promise<unknown>;
   onSavePrompt: (prompts: string[]) => void | Promise<unknown>;
@@ -24,6 +26,8 @@ export function AICoverPanel({
   candidates,
   isGenerating,
   isRegeneratingPrompt,
+  generationPhase,
+  promptPhase,
   selectedCandidateId,
   onGenerateCovers,
   onSavePrompt,
@@ -50,7 +54,7 @@ export function AICoverPanel({
     return (
       <div className={styles.emptyState} data-ai-cover-root="true">
         <div className={styles.emptyTitle}>还没有封面提示词</div>
-        <div className={styles.emptyText}>先在「内容卡片」tab 中分析 SRT，AI 会自动生成封面提示词。</div>
+        <div className={styles.emptyText}>先在「内容卡片」中分析字幕，系统会自动生成封面提示词。</div>
       </div>
     );
   }
@@ -150,13 +154,18 @@ export function AICoverPanel({
                   className={styles.inlineAction}
                   onClick={onRegeneratePrompt}
                   disabled={isRegeneratingPrompt || isGenerating || isSavingPrompt}
-                  aria-label="AI 重新生成提示词"
-                  title="AI 重新生成提示词"
+                  aria-label="重写封面提示词"
+                  title="重写封面提示词"
                 >
                   <AppIcon name="sparkles" size={12} />
-                  {isRegeneratingPrompt ? '生成中...' : 'AI 重写提示词'}
+                  {isRegeneratingPrompt ? '重写中...' : '重写提示词'}
                 </Button>
               </div>
+              {isRegeneratingPrompt ? (
+                <div className={styles.operationStatus} aria-live="polite">
+                  {promptPhase ?? '准备重写提示词'}
+                </div>
+              ) : null}
             </>
           )}
         </div>
@@ -170,8 +179,19 @@ export function AICoverPanel({
         disabled={isBusy || prompts.length === 0}
       >
         <AppIcon name="image" size={14} />
-        <span>{isGenerating ? '生成中...' : '生成封面图'}</span>
+        <span>
+          {isGenerating
+            ? '生成中...'
+            : candidates.length > 0
+              ? '重新生成封面图'
+              : '生成封面图'}
+        </span>
       </Button>
+      {isGenerating ? (
+        <div className={styles.operationStatus} aria-live="polite">
+          {generationPhase ?? '准备生成封面图'}
+        </div>
+      ) : null}
 
       {candidates.length > 0 ? (
         <>

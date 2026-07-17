@@ -26,13 +26,18 @@ function fileActionLabel(file: FileChangedBlockData): string {
   return '编辑';
 }
 
+function splitTextLines(text: string): string[] {
+  if (!text) return [];
+  const withoutTerminalNewline = text.endsWith('\n') ? text.slice(0, -1) : text;
+  return withoutTerminalNewline.split('\n');
+}
+
 export function changedLineCount(file: FileChangedBlockData): { added: number; removed: number } {
   const fromDiff = file.diff ? diffLineCount(file.diff) : null;
   if (fromDiff) return fromDiff;
 
   if (file.before === null) {
-    const lines = file.after.split('\n');
-    return { added: lines.filter((line) => line.length > 0).length || lines.length, removed: 0 };
+    return { added: splitTextLines(file.after).length, removed: 0 };
   }
 
   // 走真正的行级 LCS，避免按下标对位时"开头加一行 → 后续全部错位标 -+"。
@@ -73,7 +78,7 @@ function simpleDiff(file: FileChangedBlockData): DiffLine[] {
   // before/after 直接拿到时也走 structuredPatch：和 tool-call-descriptor 那条路径一致，
   // 避免"开头插一行后续全错位"的视觉灾难。
   if (file.before === null) {
-    return file.after.split('\n').map((text, index) => ({
+    return splitTextLines(file.after).map((text, index) => ({
       kind: 'add' as const,
       oldLine: null,
       newLine: index + 1,

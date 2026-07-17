@@ -84,6 +84,6 @@ describe('binding-resolver: card.image / card.video', () => {
 
   it('card.video 无任何视频 provider 时抛 VIDEO_PROVIDER_MISSING', () => {
     const settings = makeSettings();
-    expect(() => resolvePromptBinding('card.video', settings, null)).toThrow(/VIDEO_PROVIDER_MISSING|未绑定 VideoProvider/);
+    expect(() => resolvePromptBinding('card.video', settings, null)).toThrow(/未绑定视频生成服务/);
   });
 });

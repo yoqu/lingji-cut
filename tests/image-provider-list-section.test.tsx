@@ -12,7 +12,7 @@ describe('ImageProviderListSection', () => {
         onChange={() => {}}
       />,
     );
-    expect(html).toMatch(/图像 Provider/);
+    expect(html).toMatch(/图片生成服务/);
     expect(html).toMatch(/添加/);
   });
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, Cpu } from 'lucide-react';
 import {
   Button,
   DropdownMenu,
@@ -68,10 +69,10 @@ export function ModelSelector() {
   const currentModel = resolved?.model ?? null;
 
   const label = useMemo(() => {
-    if (!currentProvider || !currentModel) return '🤖 未配置模型';
+    if (!currentProvider || !currentModel) return '未配置模型';
     const modelShort = currentModel;
     const prefix = hasExplicitBinding ? '项目' : '全局';
-    return `🤖 ${prefix} · ${currentProvider.name} / ${modelShort}`;
+    return `${prefix} · ${currentProvider.name} / ${modelShort}`;
   }, [currentProvider, currentModel, hasExplicitBinding]);
 
   const handleSelect = async (providerId: string, model: string) => {
@@ -105,12 +106,11 @@ export function ModelSelector() {
           variant="ghost"
           size="sm"
           className={triggerClassName}
+          leftIcon={<Cpu size={12} />}
           title={hasExplicitBinding ? '当前模板在本项目有独立绑定，点击切换' : '使用全局默认 LLM，点击绑定到当前模板'}
         >
           <span className={styles.triggerLabel}>{label}</span>
-          <span className={styles.triggerArrow} aria-hidden="true">
-            ▾
-          </span>
+          <ChevronDown className={styles.triggerArrow} size={12} aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
 
@@ -123,8 +123,8 @@ export function ModelSelector() {
         {providers.length === 0 ? (
           <div className={styles.emptyWrap}>
             <EmptyState
-              title="尚未配置 Provider"
-              description="请前往系统设置添加 Provider 后再绑定模型。"
+              title="尚未配置生成服务"
+              description="请前往系统设置添加生成服务后再绑定模型。"
             />
           </div>
         ) : (
@@ -149,7 +149,7 @@ export function ModelSelector() {
                   );
                 })
               ) : (
-                <div className={styles.emptyModelRow}>该 Provider 暂无模型</div>
+                <div className={styles.emptyModelRow}>该生成服务暂无模型</div>
               )}
 
               {index < providers.length - 1 ? <DropdownMenuSeparator /> : null}

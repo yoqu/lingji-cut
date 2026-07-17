@@ -30,6 +30,12 @@ interface RollingNumberProps {
   prefix?: string;
 }
 
+interface RollingMotion {
+  from: number;
+  to: number;
+  animate: boolean;
+}
+
 function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
   try {
@@ -50,17 +56,28 @@ export function RollingNumber({
   className,
   prefix,
 }: RollingNumberProps) {
-  // 初始 displayValue = value，保证首帧就显示目标值（不滚、覆盖历史回显）。
-  // 后续 props value 变化时再 setDisplayValue 触发过渡。
-  const [displayValue, setDisplayValue] = useState<number>(() => floor(value));
-  const prevValueRef = useRef<number>(floor(value));
+  const initialValue = floor(value);
+  const previousTargetRef = useRef(initialValue);
+  const [motion, setMotion] = useState<RollingMotion>(() => ({
+    from: initialValue,
+    to: initialValue,
+    animate: false,
+  }));
 
   useEffect(() => {
     const target = floor(value);
-    if (target === prevValueRef.current) return; // 值没变，不滚。
-    setDisplayValue(target);
-    prevValueRef.current = target;
-  }, [value]);
+    const previous = previousTargetRef.current;
+    if (target === previous) return;
+    previousTargetRef.current = target;
+    setMotion({ from: previous, to: target, animate: true });
+
+    const timer = window.setTimeout(() => {
+      setMotion((current) => current.to === target
+        ? { from: target, to: target, animate: false }
+        : current);
+    }, durationMs);
+    return () => window.clearTimeout(timer);
+  }, [durationMs, value]);
 
   const target = floor(value);
   const ariaLabel = `${prefix ?? ''}${target}`;
@@ -69,8 +86,8 @@ export function RollingNumber({
 
   // strip 范围：从 min(prev, display) 到 max(prev, display)。
   // 没有变化（首次 / 历史回显）时 strip 只含一个元素，等同于静态展示。
-  const lower = Math.min(prevValueRef.current, displayValue);
-  const upper = Math.max(prevValueRef.current, displayValue);
+  const lower = Math.min(motion.from, motion.to);
+  const upper = Math.max(motion.from, motion.to);
   const stripSpan = upper - lower + 1;
 
   // 退化路径：用户禁用动画、或 strip 范围太大 → 静态数字，避免 DOM 爆炸。
@@ -84,7 +101,7 @@ export function RollingNumber({
 
   // strip 内偏移：从 lower 开始数，displayValue 对应的 cell 在 displayValue - lower 位置。
   // transform 把 strip 上移到这个位置。
-  const displayOffset = displayValue - lower;
+  const displayOffset = motion.to - lower;
   const items: number[] = [];
   for (let i = lower; i <= upper; i += 1) items.push(i);
 
@@ -94,7 +111,7 @@ export function RollingNumber({
         className={styles.rollingNumberStrip}
         style={{
           transform: `translateY(${-displayOffset * 100}%)`,
-          transitionDuration: `${durationMs}ms`,
+          transitionDuration: motion.animate ? `${durationMs}ms` : '0ms',
         }}
       >
         {items.map((n) => (

@@ -5,6 +5,7 @@
 // 的范式做结构断言。
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import { ImageCardForm } from '../src/components/media-card/ImageCardForm';
 import type { AICard, MediaCardContent } from '../src/types/ai';
 
@@ -34,7 +35,7 @@ function makeCard(status: MediaCardContent['generationStatus'] = 'idle'): AICard
 }
 
 describe('ImageCardForm', () => {
-  it('idle 渲染主按钮文案为 生成', () => {
+  it('idle 渲染主按钮文案为生成图片', () => {
     const html = renderToStaticMarkup(
       <ImageCardForm
         card={makeCard('idle')}
@@ -46,11 +47,13 @@ describe('ImageCardForm', () => {
         onSave={() => {}}
       />,
     );
-    expect(html).toMatch(/生成/);
-    expect(html).not.toMatch(/重新生成/);
+    expect(html).toContain('生成图片');
+    expect(html).not.toContain('重新生成图片');
+    expect(html).toContain('保存设置');
+    expect(html).toContain('关闭');
   });
 
-  it('ready 渲染主按钮文案为 重新生成', () => {
+  it('ready 渲染主按钮文案为重新生成图片', () => {
     const html = renderToStaticMarkup(
       <ImageCardForm
         card={makeCard('ready')}
@@ -62,10 +65,10 @@ describe('ImageCardForm', () => {
         onSave={() => {}}
       />,
     );
-    expect(html).toMatch(/重新生成/);
+    expect(html).toContain('重新生成图片');
   });
 
-  it('generating 主按钮变成 取消', () => {
+  it('generating 主按钮变成停止，进度留在预览区', () => {
     const html = renderToStaticMarkup(
       <ImageCardForm
         card={makeCard('generating')}
@@ -78,11 +81,11 @@ describe('ImageCardForm', () => {
         onSave={() => {}}
       />,
     );
-    expect(html).toMatch(/取消/);
-    expect(html).toMatch(/50%/);
+    expect(html).toContain('停止');
+    expect(html).toContain('正在生成图片 50%');
   });
 
-  it('content.prompt 显示在 textarea 中', () => {
+  it('使用统一生成语言，并渐进披露服务与模型', () => {
     const html = renderToStaticMarkup(
       <ImageCardForm
         card={makeCard('idle')}
@@ -95,5 +98,26 @@ describe('ImageCardForm', () => {
       />,
     );
     expect(html).toMatch(/a cat/);
+    expect(html).toMatch(/移除绿幕背景/);
+    expect(html).toContain('生成描述');
+    expect(html).toContain('<details');
+    expect(html).toContain('高级生成设置');
+    expect(html).toContain('生成服务');
+    expect(html).toContain('模型');
+    expect(html).not.toContain('Provider');
+    expect(html).not.toContain('Model');
+  });
+
+  it('生成动作提交当前表单构造的完整设置', () => {
+    const source = readFileSync(
+      new URL('../src/components/media-card/ImageCardForm.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain('const handleGenerate = () => onGenerate(buildUpdates())');
+    expect(source).toContain('negativePrompt: negativePrompt.trim()');
+    expect(source).toContain('backgroundRemoval,');
+    expect(source).toContain('providerId,');
+    expect(source).toContain('model,');
   });
 });

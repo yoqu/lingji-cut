@@ -20,6 +20,7 @@ import {
   heartbeatAiEditLock,
   getAiEditLockStatus,
 } from '../../ai-edit/session-lock';
+import { getDirectorProductionState } from '../director-gate';
 
 function jsonResult(data: unknown) {
   return {
@@ -129,6 +130,23 @@ export function registerPipelineMcpTools(
   );
 
   server.registerTool(
+    'lingji_director_status',
+    {
+      title: '查询导演工作流状态',
+      description:
+        '返回 V3 production 单一真源，包括导演草案/已批准版本、制作阶段、影响范围与各轨道产物状态。',
+      inputSchema: { projectPath: z.string().describe('项目目录路径') },
+    },
+    async ({ projectPath }) => {
+      try {
+        return jsonResult(await getDirectorProductionState(projectPath));
+      } catch (err) {
+        return errorResult(pipelineErrorMessage(err), pipelineErrorCode(err));
+      }
+    },
+  );
+
+  server.registerTool(
     'lingji_get_settings',
     {
       title: '查询应用默认设置',
@@ -184,8 +202,8 @@ export function registerPipelineMcpTools(
   server.registerTool(
     'lingji_cancel_task',
     {
-      title: '取消任务',
-      description: '尝试取消运行中的 PipelineTask；不可取消时返回 not_cancelable 错误码。',
+      title: '停止任务',
+      description: '尝试停止运行中的 PipelineTask；不可停止时返回 not_cancelable 错误码。',
       inputSchema: { taskId: z.string().describe('任务 ID') },
     },
     async ({ taskId }) => {

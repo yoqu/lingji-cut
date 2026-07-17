@@ -83,4 +83,53 @@ describe('prepareTimelineForHyperframes', () => {
       'assets/ov1-media.png',
     );
   });
+
+  it('stages motion card asset bindings and rewrites them to public paths', () => {
+    const timeline = createDefaultTimeline();
+    timeline.overlays = [
+      {
+        id: 'motion-1',
+        type: 'image',
+        overlayType: 'ai-card',
+        assetPath: '',
+        trackId: DEFAULT_VISUAL_TRACK_ID,
+        startMs: 0,
+        durationMs: 5_000,
+        position: { x: 0, y: 0, width: 1920, height: 1080 },
+        aiCardData: {
+          sourceCardId: 'card-1',
+          cardType: 'motion',
+          title: 'Motion',
+          content: '',
+          template: 'motion-default',
+          displayMode: 'fullscreen',
+          style: { primaryColor: '#fff', backgroundColor: '#000', fontSize: 48 },
+          assetBindings: [
+            {
+              slot: 'main-prop',
+              assetId: 'asset-1',
+              filePath: 'assets/generated/prop-cutout.png',
+              treatment: {
+                profile: 'editorial-realist-cutout',
+                lighting: 'soft-left',
+                palette: 'low-saturation',
+                shadow: 'soft-ground',
+                perspective: 'front-3q',
+              },
+              placement: { x: 100, y: 200, width: 400, depth: 'foreground' },
+            },
+          ],
+        },
+      },
+    ];
+
+    const { timeline: out, assets } = prepareTimelineForHyperframes(timeline, '/abs/project');
+    const binding = out.overlays[0]?.aiCardData?.assetBindings?.[0];
+
+    expect(binding?.filePath).toBe('assets/motion-1-asset-main-prop-asset-1.png');
+    expect(assets).toContainEqual({
+      sourcePath: '/abs/project/assets/generated/prop-cutout.png',
+      publicPath: 'assets/motion-1-asset-main-prop-asset-1.png',
+    });
+  });
 });

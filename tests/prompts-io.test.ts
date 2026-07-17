@@ -113,6 +113,19 @@ describe('loadEffectivePromptTemplate fallback chain', () => {
     expect(tpl.user).toContain('FRESH GLOBAL');
   });
 
+  it('keeps the compatible v8 cover override when builtin v9 only adds guidance', async () => {
+    await writePromptYaml(
+      'global',
+      'cover.regeneration',
+      'name: cover.regeneration\nversion: 8\nuser: |-\n  用户封面规则 {{styleSystemBlock}}\n',
+      { userDataPath },
+    );
+    const tpl = await loadEffectivePromptTemplate('cover.regeneration', { userDataPath });
+    expect(tpl.sourceScope).toBe('global');
+    expect(tpl.user).toContain('用户封面规则');
+    expect(tpl.version).toBe(9);
+  });
+
   it('respects overrides with version >= builtin or without version', async () => {
     await writePromptYaml(
       'global',

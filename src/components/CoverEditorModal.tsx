@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, Select, type SelectOption } from '../ui';
+import { Button, ConfirmDialog, Select, type SelectOption } from '../ui';
 import { AppIcon } from './AppIcon';
 import { CoverEditorCanvas } from './cover-editor/CoverEditorCanvas';
 import type { CoverEditorCanvasHandle } from '../lib/cover-editor/fabric-bridge';
@@ -65,6 +65,7 @@ export function CoverEditorModal({
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<'close' | 'overwrite' | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -77,7 +78,8 @@ export function CoverEditorModal({
 
   const handleCancel = useCallback(() => {
     if (dirty) {
-      if (!window.confirm('未保存的修改将丢失，确定关闭吗？')) return;
+      setConfirmAction('close');
+      return;
     }
     onClose();
   }, [dirty, onClose]);
@@ -85,6 +87,7 @@ export function CoverEditorModal({
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
+      if (confirmAction) return;
       // 若当前焦点在 input/textarea/canvas 上，跳过模态快捷键拦截（让 Fabric / 表单自然处理）
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea') return;
@@ -101,7 +104,7 @@ export function CoverEditorModal({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, handleCancel]);
+  }, [confirmAction, open, handleCancel]);
 
   function handleAspectChange(next: AspectRatioPreset) {
     setPreset(next);
@@ -141,13 +144,18 @@ export function CoverEditorModal({
     setActiveTool('select');
   }
 
-  function handleSave(mode: CoverSaveMode) {
-    if (mode === 'overwrite') {
-      if (!window.confirm('将覆盖原图，且无法恢复，确定继续？')) return;
-    }
+  function commitSave(mode: CoverSaveMode) {
     const dataUrl = canvasRef.current?.exportDataUrl() ?? '';
     const edits = canvasRef.current?.getEditState() ?? createEmptyEditState();
     onSaveRequested({ mode, dataUrl, edits: { ...edits, aspectRatio: preset } });
+  }
+
+  function handleSave(mode: CoverSaveMode) {
+    if (mode === 'overwrite') {
+      setConfirmAction('overwrite');
+      return;
+    }
+    commitSave(mode);
   }
 
   const aspectOptions: SelectOption[] = useMemo(
@@ -167,7 +175,8 @@ export function CoverEditorModal({
   if (!open || !mounted) return null;
 
   const modalNode = (
-    <div
+    <>
+      <div
       className={styles.backdrop}
       onMouseDown={(e) => {
         // 只在直接点击 backdrop 时才关闭；点击 modal 内部不触发
@@ -354,7 +363,26 @@ export function CoverEditorModal({
           )}
         </div>
       </div>
-    </div>
+      </div>
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setConfirmAction(null);
+        }}
+        title={confirmAction === 'close' ? '放弃未保存的修改？' : '覆盖原图？'}
+        description={
+          confirmAction === 'close'
+            ? '关闭后，本次封面编辑将不会保存。'
+            : '当前候选图片将被替换，且无法恢复。'
+        }
+        confirmText={confirmAction === 'close' ? '放弃修改' : '覆盖原图'}
+        confirmVariant="destructive"
+        onConfirm={() => {
+          if (confirmAction === 'close') onClose();
+          if (confirmAction === 'overwrite') commitSave('overwrite');
+        }}
+      />
+    </>
   );
 
   return createPortal(modalNode, document.body);

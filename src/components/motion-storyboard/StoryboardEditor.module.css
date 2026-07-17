@@ -1,0 +1,99 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px;
+  gap: var(--space-3);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.label {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.beatList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.beat {
+  display: grid;
+  grid-template-columns: 44px minmax(96px, 0.5fr) minmax(120px, 0.8fr) minmax(0, 1fr) 30px;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.beatIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--color-panel);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.beatText {
+  min-width: 0;
+}
+
+.beatCue {
+  min-width: 0;
+}
+
+.beatRole {
+  min-width: 0;
+}
+
+.iconButton {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.validation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text-placeholder);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
+.validationError {
+  color: var(--color-danger);
+}
+
+@media (max-width: 720px) {
+  .grid,
+  .beat {
+    grid-template-columns: 1fr;
+  }
+
+  .beatIndex {
+    width: 100%;
+    justify-content: flex-start;
+    padding-inline: var(--space-2);
+  }
+}

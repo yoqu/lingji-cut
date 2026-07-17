@@ -5,7 +5,8 @@
  *   get_ks_cookie    → login  (快手 APP 扫码，有头)
  *   KSVideo.upload   → uploadVideo / uploadKuaishouVideo
  */
-import type { Page } from 'playwright';
+import { existsSync } from 'node:fs';
+import type { Locator, Page, Response } from 'playwright';
 import { withContext } from '../engine';
 import { LoginExpiredError } from '../errors';
 import {
@@ -24,9 +25,16 @@ const KUAISHOU_UPLOAD_URL = 'https://cp.kuaishou.com/article/publish/video';
 const KUAISHOU_LOGIN_URL =
   'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api&callback=https%3A%2F%2Fcp.kuaishou.com%2Frest%2Finfra%2Fsts%3FfollowUrl%3Dhttps%253A%252F%252Fcp.kuaishou.com%252Farticle%252Fpublish%252Fvideo%26setRootDomain%3Dtrue';
 
-// Glob patterns for page.waitForURL (port of KUAISHOU_UPLOAD_URL_PATTERN / KUAISHOU_MANAGE_URL_PATTERN)
+// Glob pattern for page.waitForURL (port of KUAISHOU_UPLOAD_URL_PATTERN)
 const KUAISHOU_UPLOAD_URL_PATTERN = '**/article/publish/video**';
-const KUAISHOU_MANAGE_URL_PATTERN = '**/article/manage/video?status=2&from=publish**';
+const KUAISHOU_MANAGE_PATH = '/article/manage/video';
+const KUAISHOU_AUTHOR_DECLARATION = '个人观点，仅供参考';
+const KUAISHOU_MAX_TAGS = 3;
+const KUAISHOU_HASHTAG_PATTERN = /#([^#\s，,。！？!?：:；;、]+)/g;
+const KUAISHOU_SUBMIT_PATH = /^\/rest\/cp\/works\/v[23]\/video\/pc\/submit$/;
+const KUAISHOU_SUBMIT_TIMEOUT_MS = 15_000;
+const KUAISHOU_MESSAGE_SELECTOR =
+  '.ant-message-notice-content, .ant-notification-notice-message, [role="alert"]';
 
 // ─── Cookie-invalidity selector ───────────────────────────────────────────────
 // port of KUAISHOU_COOKIE_INVALID_SELECTOR = "div.names div.container div.name:text('机构服务')"
@@ -187,12 +195,37 @@ async function _handleUploadError(page: Page, filePath: string): Promise<void> {
 }
 
 /**
+ * 硬摘除残留的封面弹窗。实机验证（2026-07-14）：该弹窗不响应 Escape，点 X 也无效；
+ * 一旦打开且未走「确认」闭环就永远挂着，`ant-modal-wrap` 拦截后续所有页面点击
+ * （作者声明/发布按钮全部被 intercepts pointer events 卡死）。只能从 DOM 摘除。
+ */
+async function _removeKsCoverModal(page: Page): Promise<void> {
+  try {
+    await page.evaluate(() => {
+      document.querySelectorAll('.ant-modal-wrap, .ant-modal-mask').forEach((el) => el.remove());
+      document.querySelectorAll('.ant-scrolling-effect').forEach((el) => {
+        el.classList.remove('ant-scrolling-effect');
+        (el as HTMLElement).style.removeProperty('overflow');
+        (el as HTMLElement).style.removeProperty('width');
+      });
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
  * set_thumbnail
  * port of KSVideo.set_thumbnail
+ * 实机验证过的闭环：封面设置入口 → 弹窗「上传封面」tab → 弹窗内 file input →
+ * 页脚「确认」→ 弹窗关闭（toast「封面应用成功」）。
  */
 async function _setKsThumbnail(page: Page, thumbnailPath: string): Promise<void> {
-  const coverLabel = page.locator('span').filter({ hasText: '封面设置' });
+  // .first()：页面存在多个含「封面设置」的 span（嵌套/tooltip）时避免 strict mode 抛错
+  const coverLabel = page.locator('span').filter({ hasText: '封面设置' }).first();
   await coverLabel.waitFor({ state: 'visible', timeout: 30_000 });
+  // joyride 引导遮罩可能在上传期间挂载并拦截整页点击，点封面入口前先清一次
+  await _closeGuideOverlay(page);
   await coverLabel.locator('xpath=../following-sibling::div[1]').locator('div').nth(0).click();
 
   const modal = page.locator('div[role="document"].ant-modal');
@@ -202,7 +235,7 @@ async function _setKsThumbnail(page: Page, thumbnailPath: string): Promise<void>
   await uploadCoverTab.waitFor({ state: 'visible', timeout: 10_000 });
   await uploadCoverTab.click();
 
-  const fileInput = modal.locator('input[type="file"]');
+  const fileInput = modal.locator('input[type="file"]').first();
   await fileInput.waitFor({ state: 'attached', timeout: 30_000 });
   await fileInput.setInputFiles(thumbnailPath);
   await sleep(1000);
@@ -250,6 +283,155 @@ async function _setKsScheduleTime(page: Page, publishDate: Date): Promise<void> 
   // 4. Press Enter to confirm
   await page.keyboard.press('Enter');
   await sleep(2000);
+}
+
+/** 快手新版发布表单要求选择作者声明；已有选择时保留用户原值。 */
+async function _setKsAuthorDeclaration(page: Page): Promise<void> {
+  const label = page.getByText('作者声明', { exact: true }).first();
+  if (!(await label.count())) return;
+
+  const select = label.locator('xpath=..').locator('.ant-select').first();
+  await select.waitFor({ state: 'visible', timeout: 10_000 });
+  if ((await select.locator('.ant-select-selection-item').count()) > 0) return;
+
+  await _closeGuideOverlay(page);
+  await select.click({ timeout: 10_000 });
+  const option = page.getByText(KUAISHOU_AUTHOR_DECLARATION, { exact: true }).first();
+  if (!(await option.count())) {
+    throw new Error(`快手作者声明设置失败：未找到“${KUAISHOU_AUTHOR_DECLARATION}”选项`);
+  }
+  await option.click({ timeout: 10_000 });
+  await select.locator('.ant-select-selection-item').waitFor({ state: 'visible', timeout: 10_000 });
+}
+
+function _normalizeKuaishouTag(rawTag: string): string {
+  return rawTag.replace(/^#+/, '').trim().split(/[\s，,。！？!?：:；;、#]/, 1)[0] ?? '';
+}
+
+export function buildKuaishouCaptionPlan(
+  description: string,
+  tags: string[],
+): { description: string; tagsToAppend: string[] } {
+  const seen = new Set<string>();
+  const normalizedDescription = description
+    .replace(KUAISHOU_HASHTAG_PATTERN, (_token, rawTag: string) => {
+      const tag = _normalizeKuaishouTag(rawTag);
+      const key = tag.toLocaleLowerCase();
+      if (!tag || seen.has(key) || seen.size >= KUAISHOU_MAX_TAGS) return '';
+      seen.add(key);
+      return `#${tag}`;
+    })
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  const tagsToAppend: string[] = [];
+  for (const rawTag of tags) {
+    if (seen.size >= KUAISHOU_MAX_TAGS) break;
+    const tag = _normalizeKuaishouTag(rawTag);
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tagsToAppend.push(tag);
+  }
+  return { description: normalizedDescription, tagsToAppend };
+}
+
+async function _fillKsDescription(page: Page, editor: Locator, description: string): Promise<void> {
+  try {
+    await editor.click({ timeout: 5_000 });
+  } catch {
+    await _closeGuideOverlay(page);
+    await editor.click({ timeout: 10_000 });
+  }
+  try {
+    await editor.fill(description, { timeout: 10_000 });
+    return;
+  } catch {
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+KeyA' : 'Control+KeyA');
+    await page.keyboard.press('Delete');
+    await page.keyboard.type(description);
+  }
+}
+
+/** query 参数会随快手路由版本变化，成功确认只依赖可信 origin 与管理页 path。 */
+function _isKuaishouManageUrl(url: URL): boolean {
+  const pathname = url.pathname.replace(/\/+$/, '');
+  return url.origin === 'https://cp.kuaishou.com' && pathname === KUAISHOU_MANAGE_PATH;
+}
+
+function _isKuaishouSubmitResponse(response: Response): boolean {
+  const url = new URL(response.url());
+  return (
+    url.origin === 'https://cp.kuaishou.com' &&
+    KUAISHOU_SUBMIT_PATH.test(url.pathname) &&
+    response.request().method() === 'POST'
+  );
+}
+
+interface KuaishouSubmitDiagnostic {
+  endpoint: string;
+  httpStatus: number;
+  result?: unknown;
+  originResult?: unknown;
+  message: string;
+}
+
+class KuaishouPublishRejectedError extends Error {}
+
+function _safeDiagnosticValue(value: unknown): string {
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').slice(0, 120);
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return 'unknown';
+}
+
+async function _readKuaishouSubmitDiagnostic(
+  response: Response,
+): Promise<KuaishouSubmitDiagnostic> {
+  let payload: Record<string, unknown> = {};
+  try {
+    const json = await response.json();
+    if (json && typeof json === 'object') payload = json as Record<string, unknown>;
+  } catch {
+    /* non-JSON response: fall back to HTTP status */
+  }
+  return {
+    endpoint: new URL(response.url()).pathname,
+    httpStatus: response.status(),
+    result: payload.result,
+    originResult: payload.originResult,
+    message: typeof payload.message === 'string' ? payload.message : '',
+  };
+}
+
+function _isKuaishouSubmitSuccess(diagnostic: KuaishouSubmitDiagnostic): boolean {
+  return diagnostic.result === 1 || diagnostic.result === '1';
+}
+
+async function _waitForKuaishouPageMessage(page: Page): Promise<string> {
+  const message = page.locator(KUAISHOU_MESSAGE_SELECTOR).first();
+  try {
+    await message.waitFor({ state: 'visible', timeout: 6000 });
+    return _safeDiagnosticValue(await message.textContent());
+  } catch {
+    return '';
+  }
+}
+
+function _formatKuaishouSubmitFailure(
+  diagnostic: KuaishouSubmitDiagnostic,
+  currentUrl: string,
+  pageMessage: string,
+): string {
+  const reason = _safeDiagnosticValue(
+    diagnostic.message ||
+      pageMessage ||
+      `HTTP ${diagnostic.httpStatus} 返回了无法识别的发布结果`,
+  );
+  return (
+    `快手发布失败：${reason}。诊断: endpoint=${diagnostic.endpoint}; ` +
+    `http=${diagnostic.httpStatus}; result=${_safeDiagnosticValue(diagnostic.result)}; ` +
+    `originResult=${_safeDiagnosticValue(diagnostic.originResult)}; currentUrl=${currentUrl}` +
+    (pageMessage && pageMessage !== reason ? `; pageMessage=${pageMessage}` : '')
+  );
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -302,21 +484,10 @@ export async function uploadKuaishouVideo(page: Page, opts: UploadVideoOptions):
   const descEditor = (await page.locator('#work-description-edit').count())
     ? page.locator('#work-description-edit')
     : page.getByText('描述').locator('xpath=following-sibling::div');
-  try {
-    await descEditor.click({ timeout: 5_000 });
-  } catch {
-    // 引导遮罩可能在上一次关闭之后才挂载并拦截点击：再关一次重试
-    await _closeGuideOverlay(page);
-    await descEditor.click({ timeout: 10_000 });
-  }
-  await page.keyboard.press('Backspace');
-  await page.keyboard.press('Control+KeyA');
-  await page.keyboard.press('Delete');
-  await page.keyboard.type(opts.desc || opts.title);
-  await page.keyboard.press('Enter');
-
-  const tags = (opts.tags ?? []).slice(0, 3);
-  for (const tag of tags) {
+  const captionPlan = buildKuaishouCaptionPlan(opts.desc || opts.title, opts.tags ?? []);
+  await _fillKsDescription(page, descEditor, captionPlan.description);
+  if (captionPlan.tagsToAppend.length > 0) await page.keyboard.press('Enter');
+  for (const tag of captionPlan.tagsToAppend) {
     await page.keyboard.type(`#${tag} `);
     await sleep(2000);
   }
@@ -341,30 +512,60 @@ export async function uploadKuaishouVideo(page: Page, opts: UploadVideoOptions):
     retryCount++;
   }
 
-  // 7. Set thumbnail if provided
-  if (opts.thumbnail) {
-    try {
-      await _setKsThumbnail(page, opts.thumbnail);
-    } catch {
-      /* thumbnail setting failed, continue to publish */
+  // 7. Set thumbnail if provided（快手单封面，优先 3:4 竖图）
+  //    先校验封面文件存在再碰 UI：路径失效（如封面被删/移动）时 setInputFiles 抛错
+  //    会把关不掉的封面弹窗留在页面上，卡死后续所有步骤。
+  //    失败重试一轮（先硬摘残留弹窗 + 清遮罩）；仍失败则跳过封面继续发布，
+  //    但必须经 onProgress 外发原因，不允许静默吞掉。
+  const thumbnail = opts.covers?.['3:4'] ?? opts.thumbnail;
+  if (thumbnail && !existsSync(thumbnail)) {
+    opts.onProgress?.(80, `快手封面文件不存在（已跳过封面继续发布）：${thumbnail}`);
+  } else if (thumbnail) {
+    let coverError = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await _setKsThumbnail(page, thumbnail);
+        coverError = '';
+        break;
+      } catch (err) {
+        coverError = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        await _removeKsCoverModal(page);
+        await _closeGuideOverlay(page);
+        await sleep(1000);
+      }
+    }
+    if (coverError) {
+      // 最后一轮失败后可能仍有残留弹窗，发布前必须摘干净
+      await _removeKsCoverModal(page);
+      opts.onProgress?.(80, `快手封面设置失败（已跳过封面继续发布）：${coverError}`);
     }
   }
 
-  // 8. Set schedule time if provided
+  // 8. Set required author declaration without overwriting an existing choice
+  await _setKsAuthorDeclaration(page);
+
+  // 9. Set schedule time if provided
   if (opts.scheduleAt) {
     await _setKsScheduleTime(page, new Date(opts.scheduleAt));
   }
 
-  // 9. Publish: click 发布 → optional confirm 确认发布 → wait for manage URL
+  // 10. Publish: click 发布 → optional confirm 确认发布 → wait for manage URL
   //    有界重试：页面异常（遮罩拦截/结构变化/跳转失败）时抛可读错误，而非无限挂起
   const publishDeadline = Date.now() + 120_000;
   let lastError = '';
+  let lastPageMessage = '';
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      if (_isKuaishouManageUrl(new URL(page.url()))) break;
+
       // 引导遮罩可能中途再弹出并拦截点击，每轮先清一次
       await _closeGuideOverlay(page);
 
+      const submitResponsePromise = page
+        .waitForResponse(_isKuaishouSubmitResponse, { timeout: KUAISHOU_SUBMIT_TIMEOUT_MS })
+        .catch(() => null);
+      const pageMessagePromise = _waitForKuaishouPageMessage(page);
       const publishButton = page.getByText('发布', { exact: true });
       if ((await publishButton.count()) > 0) {
         // 显式短超时：单轮点击被拦时快速进入下一轮（下一轮会再清遮罩）
@@ -378,14 +579,36 @@ export async function uploadKuaishouVideo(page: Page, opts: UploadVideoOptions):
         await confirmButton.click({ timeout: 5_000 });
       }
 
-      await page.waitForURL(KUAISHOU_MANAGE_URL_PATTERN, { timeout: 5000 });
-      break;
+      try {
+        await page.waitForURL(_isKuaishouManageUrl, { timeout: 5000, waitUntil: 'commit' });
+        break;
+      } catch (navigationError) {
+        const submitResponse = await submitResponsePromise;
+        lastPageMessage = (await pageMessagePromise) || lastPageMessage;
+        if (!submitResponse) {
+          if (/发布成功/.test(lastPageMessage)) break;
+          if (lastPageMessage) {
+            throw new KuaishouPublishRejectedError(
+              `快手发布失败：${lastPageMessage}。诊断: submitResponse=not-observed; currentUrl=${page.url()}`,
+            );
+          }
+          throw navigationError;
+        }
+
+        const diagnostic = await _readKuaishouSubmitDiagnostic(submitResponse);
+        if (_isKuaishouSubmitSuccess(diagnostic)) break;
+        throw new KuaishouPublishRejectedError(
+          _formatKuaishouSubmitFailure(diagnostic, page.url(), lastPageMessage),
+        );
+      }
     } catch (err) {
+      if (err instanceof KuaishouPublishRejectedError) throw err;
       lastError = err instanceof Error ? err.message.split('\n').slice(0, 4).join(' | ') : String(err);
       if (Date.now() > publishDeadline) {
         const blockers = await _describeVisibleBlockers(page);
         throw new Error(
-          `快手发布确认超时：点击发布后未跳转到作品管理页。最后一轮异常: ${lastError}` +
+          `快手发布确认超时：点击发布后未跳转到作品管理页。当前页面: ${page.url()}；最后一轮异常: ${lastError}` +
+            (lastPageMessage ? `；页面提示: ${lastPageMessage}` : '') +
             (blockers ? `；页面可见弹窗/提示: ${blockers}` : ''),
         );
       }

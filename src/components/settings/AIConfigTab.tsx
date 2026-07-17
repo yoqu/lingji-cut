@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { loadAISettings, saveAISettings } from '../../store/ai';
-import { Field, Divider, Select, SaveButton, SettingsPageHeader, Textarea } from '../../ui';
+import { Field, Divider, Select, SaveButton, SettingsPageHeader, Textarea, useToast } from '../../ui';
 import type { SelectOption } from '../../ui';
 import type { ImageProvider, LLMProvider, VideoProvider } from '../../types/ai';
 import { ProviderListSection } from './ProviderListSection';
@@ -17,9 +17,11 @@ import styles from './SettingsCommon.module.css';
 
 interface AIConfigTabProps {
   onRegisterLeaveGuard?: (guard: (() => Promise<boolean>) | null) => void;
+  confirmLeave?: (title: string) => Promise<boolean>;
 }
 
-export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
+export function AIConfigTab({ onRegisterLeaveGuard, confirmLeave }: AIConfigTabProps) {
+  const { showToast } = useToast();
   const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [defaultProviderId, setDefaultProviderId] = useState<string | null>(null);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
@@ -190,7 +192,11 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
       saveFeedbackTimerRef.current = setTimeout(() => setSaved(false), 2000);
       return true;
     } catch (error) {
-      window.alert(error instanceof Error ? `保存配置失败：${error.message}` : '保存配置失败，请稍后重试。');
+      showToast(error instanceof Error ? error.message : '请稍后重试。', {
+        title: '保存 AI 配置失败',
+        type: 'error',
+        duration: 5000,
+      });
       return false;
     }
   }, [
@@ -204,6 +210,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
     videoProviders,
     defaultVideoProviderId,
     defaultVideoModel,
+    showToast,
   ]);
 
   useSettingsTabGuard({
@@ -211,6 +218,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
     hasUnsavedChanges,
     onSave: handleSave,
     onRegisterLeaveGuard,
+    confirmLeave,
   });
 
   const currentDefaultImageProvider = useMemo(
@@ -221,7 +229,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
   const imageProviderOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: '未选择' },
-      ...imageProviders.map((p) => ({ value: p.id, label: p.name || '未命名 Provider' })),
+      ...imageProviders.map((p) => ({ value: p.id, label: p.name || '未命名生成服务' })),
     ],
     [imageProviders],
   );
@@ -267,7 +275,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
   const videoProviderOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: '未选择' },
-      ...videoProviders.map((p) => ({ value: p.id, label: p.name || '未命名 Provider' })),
+      ...videoProviders.map((p) => ({ value: p.id, label: p.name || '未命名生成服务' })),
     ],
     [videoProviders],
   );
@@ -307,12 +315,12 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
     <>
       <SettingsPageHeader
         title="AI 基础配置"
-        description="配置 OpenAI 兼容接口、封面图像生成与视频生成服务"
+        description="配置文本、封面图像与视频生成服务"
       />
 
       <div className={styles.formStack}>
         {/* Provider 列表 */}
-        <Field label="LLM Providers">
+        <Field label="文本生成服务">
           <ProviderListSection
             providers={providers}
             defaultProviderId={defaultProviderId}
@@ -327,7 +335,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
 
         <Divider label="封面图像生成" />
 
-        <Field label="Image Providers">
+        <Field label="图片生成服务">
           <ImageProviderListSection
             imageProviders={imageProviders}
             defaultImageProviderId={defaultImageProviderId}
@@ -335,7 +343,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
           />
         </Field>
 
-        <Field label="默认 Image Provider">
+        <Field label="默认图片生成服务">
           <Select
             value={defaultImageProviderId ?? ''}
             options={imageProviderOptions}
@@ -354,7 +362,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
 
         <Field
           label="全局封面图提示词"
-          hint="生成封面时将与基于内容生成的提示词拼接后发送给图像 Provider，可用于固定品牌、画质、风格、构图偏好等。"
+          hint="生成封面时将与基于内容生成的提示词拼接后发送给图片生成服务，可用于固定品牌、画质、风格、构图偏好等。"
         >
           <Textarea
             value={globalCoverImagePrompt}
@@ -367,7 +375,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
 
         <Divider label="视频生成" />
 
-        <Field label="Video Providers">
+        <Field label="视频生成服务">
           <VideoProviderListSection
             videoProviders={videoProviders}
             defaultVideoProviderId={defaultVideoProviderId}
@@ -375,7 +383,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
           />
         </Field>
 
-        <Field label="默认 Video Provider">
+        <Field label="默认视频生成服务">
           <Select
             value={defaultVideoProviderId ?? ''}
             options={videoProviderOptions}
@@ -391,6 +399,7 @@ export function AIConfigTab({ onRegisterLeaveGuard }: AIConfigTabProps) {
             disabled={!currentDefaultVideoProvider}
           />
         </Field>
+
       </div>
 
       <SaveButton

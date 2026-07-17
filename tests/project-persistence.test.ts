@@ -11,12 +11,13 @@ import {
   extractMetaSection,
   resolveWorkTitle,
   mergeProjectSection,
+  migrateProjectData,
 } from '../src/lib/project-persistence';
 
 describe('project-persistence', () => {
-  it('createDefaultProjectData 返回 version 1 的默认结构', () => {
+  it('createDefaultProjectData 返回 version 3 的默认结构', () => {
     const data = createDefaultProjectData();
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(3);
     expect(data.timeline).toBeNull();
     expect(data.aiAnalysis).toEqual({
       analysisResult: null,
@@ -30,6 +31,32 @@ describe('project-persistence', () => {
     });
     expect(data.createdAt).toBeDefined();
     expect(data.updatedAt).toBeDefined();
+  });
+
+  it('修复已经写成 version 3 但仍携带 V2 production 的中间态项目', () => {
+    const data = createDefaultProjectData();
+    const legacyProduction = {
+      version: 2,
+      motionBible: {
+        visualThesis: '旧视觉命题',
+        rhythm: { density: 'balanced', heavySegments: [], quietSegments: [] },
+        carrierPlan: [],
+        styleRules: { paletteUse: '系统蓝', typographyUse: '短标题' },
+        transitionRules: { default: 'crossfade', matchCutCandidates: [] },
+      },
+      sequences: [],
+      shots: [],
+      audioPlan: {
+        bgm: [], ambience: [], stingers: [], sfx: [],
+        ducking: { enabled: true, reductionDb: 6, attackMs: 80, releaseMs: 350, holdMs: 600 },
+        mastering: { targetLufs: -15, toleranceLu: 1, maxTruePeakDbtp: -1 },
+      },
+    } as const;
+    const migrated = migrateProjectData({ ...data, production: legacyProduction });
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.data.version).toBe(3);
+    expect(migrated.data.production?.version).toBe(3);
+    expect(migrated.data.production?.execution).toEqual(legacyProduction);
   });
 
   it('extractTimelineSection 提取 timeline 段', () => {

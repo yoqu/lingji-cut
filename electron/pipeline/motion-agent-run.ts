@@ -13,8 +13,9 @@
  *      → file-first 写 workDir/motionCard.tsx。
  *   3. 机械质检：tsx-lint（禁 API / 非法 import / 循环风险）→ 注入的 validate
  *      （assertCardRenders：编译 + 冒烟渲染 + 布局探针含字幕安全区）；失败回喂雕刻，≤ MAX_FIX_ITER。
- *   4. 审查：5 个设计问题（分镜兑现 / 状态演进 / 焦点层级 / 运动多样 / 风格保真）
- *      → 严格 JSON 裁决；不通过则 issues 回喂雕刻，≤ MAX_REVIEW_ITER。
+ *   4. 审查：内容正确性与设计兑现度分级裁决；只有内容缺失、错锚、焦点缺席、
+ *      矛盾终态等硬错误阻断，设计保真偏差只记录 warning。硬错误回喂雕刻，
+ *      ≤ MAX_REVIEW_ITER。
  *
  * 循环上限、阶段进度（onPhase）与 abort 全部由本编排器确定性控制，不依赖模型自觉。
  */
@@ -28,6 +29,8 @@ import type {
   MotionCardAgentResult,
 } from '../../src/lib/ai-analysis';
 import type { AISettings, PromptBindingMap } from '../../src/types/ai';
+import type { AssetResolutionResult, CardAssetBinding } from '../../src/types/assets';
+import type { MotionCardMechanicalValidation } from '../../src/types/motion';
 import type { PromptKind } from '../../src/lib/prompts/types';
 import { resolvePromptBinding } from '../../src/lib/llm/binding-resolver';
 import { piModelRef } from '../agent-runtime/pi-provider-projection';
@@ -39,6 +42,18 @@ import {
 } from '../../src/lib/motion-storyboard';
 import { lintMotionCardTsx, formatLintIssues } from '../../src/lib/motion-card-lint';
 import { buildFallbackCardTsx } from '../../src/lib/motion-card-fallback';
+import { buildMotionCardProductionReport } from '../../src/lib/motion-production-report';
+import { inspectResolvedCardAssets } from '../../src/lib/asset-resolution';
+import { motionAssetSignature } from '../../src/lib/motion-asset-layer';
+import {
+  selectMotionCardKeyframes,
+  selectMotionCardProbeFrames,
+} from '../../src/lib/motion-keyframes';
+import { buildTimingPlan } from '../../src/lib/motion-timing';
+import {
+  motionCardContactSheetCacheKey,
+  renderMotionCardContactSheet,
+} from '../remotion/smoke-render';
 import {
   PiHeadlessSession,
   ensurePiHeadlessConfig,
@@ -54,23 +69,77 @@ export const MAX_STORYBOARD_PARSE_RETRY = 2;
 export const MAX_FIX_ITER = 3;
 export const MAX_REVIEW_ITER = 2;
 
-export interface ReviewVerdict {
-  pass: boolean;
-  issues: Array<{ severity?: string; element?: string; rule?: string; fix?: string }>;
+export interface ReviewVerdictIssue {
+  severity?: 'error' | 'warn' | string;
+  element?: string;
+  rule?: string;
+  fix?: string;
+  code?: string;
+  message?: string;
+  frame?: number;
+  beat?: number;
+  visualProblem?: string;
 }
 
-/** 容错解析审查 JSON：抽第一个 {...}；解析失败按通过处理（审查员不阻断出卡）。 */
+export const BLOCKING_REVIEW_CODES = [
+  'content-missing',
+  'content-mismatch',
+  'cue-mismatch',
+  'focus-missing',
+  'contradictory-state',
+] as const;
+
+const blockingReviewCodes = new Set<string>(BLOCKING_REVIEW_CODES);
+
+function normalizeReviewIssue(issue: ReviewVerdictIssue): ReviewVerdictIssue {
+  const code = typeof issue.code === 'string' ? issue.code.trim() : '';
+  return {
+    ...issue,
+    ...(code ? { code } : {}),
+    severity: blockingReviewCodes.has(code) ? 'error' : 'warn',
+  };
+}
+
+export interface ReviewVerdict {
+  pass: boolean;
+  issues: ReviewVerdictIssue[];
+  unavailableReason?: string;
+}
+
+function unavailableReviewVerdict(reason: string): ReviewVerdict {
+  return {
+    pass: false,
+    unavailableReason: reason,
+    issues: [
+      {
+        severity: 'warn',
+        code: 'review-unavailable',
+        message: reason,
+        rule: '审查输出',
+        fix: '保留机械质检结果，并在后续重生或精雕时重新触发审查。',
+      },
+    ],
+  };
+}
+
+/** 容错解析审查 JSON：抽第一个 {...}；解析失败显式降级，不伪装为审查通过。 */
 export function parseReviewVerdict(text: string): ReviewVerdict {
   const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return { pass: true, issues: [] };
+  if (!m) return unavailableReviewVerdict('审查员未输出 JSON 裁决，无法形成设计审片结论。');
   try {
     const parsed = JSON.parse(m[0]) as Partial<ReviewVerdict>;
+    const issues = Array.isArray(parsed.issues)
+      ? parsed.issues
+          .filter((issue): issue is ReviewVerdictIssue => Boolean(issue) && typeof issue === 'object')
+          .map(normalizeReviewIssue)
+      : [];
+    const hasBlockingIssue = issues.some((issue) => issue?.severity === 'error');
     return {
-      pass: parsed.pass !== false,
-      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+      pass: !hasBlockingIssue,
+      issues,
     };
   } catch {
-    return { pass: true, issues: [] };
+    return unavailableReviewVerdict('审查员 JSON 裁决解析失败，无法形成设计审片结论。');
   }
 }
 
@@ -85,11 +154,62 @@ function safeStringify(value: unknown): string {
   }
 }
 
+function validationIssuesFromError(error: unknown): MotionCardMechanicalValidation['issues'] | null {
+  if (!error || typeof error !== 'object' || !('validation' in error)) return null;
+  const validation = (error as { validation?: Partial<MotionCardMechanicalValidation> }).validation;
+  return Array.isArray(validation?.issues) ? validation.issues : null;
+}
+
+function imageMime(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.gif') return 'image/gif';
+  return 'image/png';
+}
+
+async function prepareContactSheetAssets(
+  bindings: CardAssetBinding[],
+  projectPath: string,
+): Promise<{ bindings: CardAssetBinding[]; issues: Array<{ severity: 'warning'; code: string; message: string }> }> {
+  const issues: Array<{ severity: 'warning'; code: string; message: string }> = [];
+  const prepared = await Promise.all(bindings.map(async (binding) => {
+    if (/^(data:|https?:)/i.test(binding.filePath)) return binding;
+    const filePath = path.isAbsolute(binding.filePath)
+      ? binding.filePath
+      : path.resolve(projectPath, binding.filePath);
+    try {
+      const bytes = await fs.readFile(filePath);
+      return {
+        ...binding,
+        filePath: `data:${imageMime(filePath)};base64,${bytes.toString('base64')}`,
+      };
+    } catch {
+      issues.push({
+        severity: 'warning',
+        code: 'asset-preview-unavailable',
+        message: `资产“${binding.request?.query ?? binding.slot}”无法读取，关键帧审片不会显示该资产。`,
+      });
+      return null;
+    }
+  }));
+  return { bindings: prepared.filter((item): item is CardAssetBinding => item != null), issues };
+}
+
 function formatIssues(issues: ReviewVerdict['issues']): string {
   return issues
     .map(
-      (it, i) =>
-        `${i + 1}. [${it.severity ?? 'warn'}] ${it.element ?? ''} 违反「${it.rule ?? ''}」：${it.fix ?? ''}`,
+      (it, i) => {
+        const where = [
+          typeof it.frame === 'number' ? `frame ${it.frame}` : '',
+          typeof it.beat === 'number' ? `beat ${it.beat}` : '',
+          it.element ?? '',
+        ]
+          .filter(Boolean)
+          .join(' / ');
+        const detail = it.visualProblem ?? it.message ?? it.fix ?? '';
+        return `${i + 1}. [${it.severity ?? 'warn'}] ${where} 违反「${it.rule ?? ''}」：${detail}`;
+      },
     )
     .join('\n');
 }
@@ -111,6 +231,8 @@ export interface MotionAgentProviderOptions {
   onPhase?: (phase: string) => void;
   /** 观测事件回调（角色流式输出/工具调用/编排里程碑），供渲染端观测面板。 */
   onAgentEvent?: (ev: AgentFeedEmitInput) => void;
+  /** 可选：生成关键帧 contact sheet PNG 的缓存目录；不传则只记录关键帧索引。 */
+  contactSheetCacheDir?: string;
   /** 测试注入。 */
   deps?: {
     createSession?: (input: PiHeadlessCreateInput) => Promise<Pick<PiHeadlessSession, 'prompt' | 'dispose' | 'abort'>>;
@@ -133,6 +255,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
     sculptorModel,
     onPhase,
     onAgentEvent,
+    contactSheetCacheDir,
     deps = {},
   } = opts;
   const createSession = deps.createSession ?? PiHeadlessSession.create.bind(PiHeadlessSession);
@@ -226,18 +349,30 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
     let sculptor: Awaited<ReturnType<typeof createSession>> | null = null;
     try {
       // ── 1. 导演：JSON 分镜 + 机器校验回喂 ─────────────────────────────────────
-      setPhase('导演', 'director');
-      const directorRole = await loadRole('card-director');
-      const director = await createSession({
-        systemPrompt: directorRole.systemPrompt,
-        tools: [],
-        cwd: workDir,
-        signal,
-        model: directorModel,
-        ...roleStream('director', directorModel),
-      });
       let direction = '';
-      try {
+      const storyboardDraft = parseStoryboard(ctx.animationDirectionDraft ?? '');
+      const storyboardDraftVerdict = validateStoryboard(storyboardDraft, {
+        cueCount: ctx.cueCount ?? 0,
+        transcript: ctx.segmentTranscript,
+        requireCapacityModel: true,
+      });
+      if (ctx.reuseStoryboardDraft && storyboardDraft && storyboardDraftVerdict.ok) {
+        setPhase('复用分镜', 'director');
+        direction = JSON.stringify(storyboardDraft, null, 2);
+        milestone('已按当前合法 storyboard 跳过导演，直接进入雕刻');
+        emit('director', true, { reusedStoryboard: true });
+      } else {
+        setPhase('导演', 'director');
+        const directorRole = await loadRole('card-director');
+        const director = await createSession({
+          systemPrompt: directorRole.systemPrompt,
+          tools: [],
+          cwd: workDir,
+          signal,
+          model: directorModel,
+          ...roleStream('director', directorModel),
+        });
+        try {
         const parts = [ctx.buildDirectorPrompt()];
         if (ctx.animationDirectionDraft) {
           parts.push(`===== 用户已有的动画指导草案（保留其载体与节拍意图，补全为合法 storyboard）=====\n${ctx.animationDirectionDraft}`);
@@ -247,7 +382,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             `===== 现有组件源码（精雕模式：先诊断其设计问题——载体选错 / 状态演进缺失 / 焦点不明 / 节拍脱节，分镜须针对性修正）=====\n\`\`\`tsx\n${ctx.existingTsx}\n\`\`\``,
           );
         }
-        const FIELD_EXAMPLE = `{"claim":"...","carrier":"data-hero","scene":"...","focus":{"beat":1,"emphasis":"countup-settle"},"beats":[{"cue":null,"kind":"build","adds":"标题「考研报名」","motion":"软落入场"},{"cue":2,"kind":"build","adds":"数字 28842","changes":"标题保持","motion":"计数到 28842"}]}`;
+        const FIELD_EXAMPLE = `{"claim":"...","carrier":"data-hero","layout":"title-hero","scene":"...","elements":[{"id":"title","role":"support","slot":"header","content":"考研报名","heightRatio":0.12},{"id":"hero","role":"focus","slot":"main","content":"28842人","heightRatio":0.42}],"capacity":{"maxVisible":2,"maxHeightRatio":0.62},"focus":{"beat":1,"emphasis":"countup-settle"},"beats":[{"cue":null,"kind":"build","adds":"标题「考研报名」","motion":"软落入场","lifecycle":{"enter":["title"]}},{"cue":2,"kind":"build","adds":"数字 28842","changes":"标题收为辅助，数字成为焦点","motion":"计数到 28842","lifecycle":{"enter":["hero"],"collapse":["title"]}}]}`;
         let reply = (await promptWithRetry(director, parts.join('\n\n'))).trim();
         // 解析失败与语义失败分开计预算：解析重试只需"重新输出 JSON"，
         // 不该消耗针对 cue/数字等设计错误的语义回喂轮（弱导演常先散文/截断再给对 JSON）。
@@ -259,6 +394,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
           const verdictSb = validateStoryboard(storyboard, {
             cueCount: ctx.cueCount ?? 0,
             transcript: ctx.segmentTranscript,
+            requireCapacityModel: true,
           });
           if (verdictSb.ok && storyboard) {
             direction = JSON.stringify(storyboard, null, 2);
@@ -320,8 +456,93 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
       } finally {
         director.dispose();
       }
-      emit('director');
+        emit('director');
+      }
       throwIfAborted();
+
+      const storyboardForAssets = parseStoryboard(direction);
+      let resolvedAssetBindings: CardAssetBinding[] = [];
+      let assetResolution: AssetResolutionResult = { bindings: [], generationRequests: [], unresolved: [] };
+      if (storyboardForAssets?.assets?.length && ctx.resolveAssets) {
+        setPhase('资产生成', 'director');
+        milestone(`检测到 ${storyboardForAssets.assets.length} 个资产需求，开始匹配素材库并自动生成缺失资产`);
+        try {
+          const startedAt = Date.now();
+          ctx.telemetry?.emit('asset.resolve.start', {
+            segmentId: ctx.segmentId,
+            requested: storyboardForAssets.assets.length,
+          });
+          const assetResult = await ctx.resolveAssets({
+            requests: storyboardForAssets.assets,
+            sourceCardId: ctx.sourceCardId ?? `${ctx.segmentId}-card-1`,
+            signal,
+          });
+          assetResolution = assetResult;
+          resolvedAssetBindings = assetResult.bindings;
+          ctx.telemetry?.emit('asset.resolve.end', {
+            segmentId: ctx.segmentId,
+            durationMs: Date.now() - startedAt,
+            ok: true,
+            requested: storyboardForAssets.assets.length,
+            matched: assetResult.bindings.length,
+            pending: assetResult.generationRequests.length,
+            unresolved: assetResult.unresolved.length,
+            ...(assetResult.activity ?? {}),
+          });
+          emit('assets', true, {
+            bindings: assetResult.bindings.length,
+            pending: assetResult.generationRequests.length,
+            unresolved: assetResult.unresolved.length,
+          });
+          milestone(
+            `资产解析完成：可用 ${assetResult.bindings.length} 个，待生成/失败 ${assetResult.generationRequests.length} 个，未解析 ${assetResult.unresolved.length} 个`,
+          );
+        } catch (err) {
+          ctx.telemetry?.emit('asset.resolve.end', {
+            segmentId: ctx.segmentId,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          if (signal?.aborted) throw err;
+          assetResolution = {
+            bindings: [],
+            generationRequests: [],
+            unresolved: storyboardForAssets.assets,
+          };
+          emit('assets', false, { error: err instanceof Error ? err.message : String(err) });
+          milestone(`资产解析/生成失败，继续生成无资产 Motion Card：${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      const storyboard = storyboardForAssets ?? parseStoryboard(direction);
+      const durationInFrames = ctx.timingInput
+        ? Math.max(1, Math.round((ctx.timingInput.durationMs / 1000) * ctx.timingInput.fps))
+        : 150;
+      const timingPlan = ctx.timingInput
+        ? buildTimingPlan({
+            ...ctx.timingInput,
+            storyboard,
+          })
+        : undefined;
+      const framesChecked = selectMotionCardKeyframes({
+        storyboard,
+        durationInFrames,
+        cues: timingPlan?.cues,
+      });
+      const probeFrames = selectMotionCardProbeFrames({
+        storyboard,
+        durationInFrames,
+        cues: timingPlan?.cues,
+        timingPlan,
+      });
+      const validationInput = {
+        cues: timingPlan?.cues ?? [],
+        timingPlan,
+        frames: probeFrames,
+        durationInFrames,
+        assetBindings: resolvedAssetBindings,
+        checkRenderedLayout: true,
+      };
 
       // ── 2. 雕刻 ────────────────────────────────────────────────────────────────
       setPhase('雕刻', 'sculpt');
@@ -336,7 +557,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         ...roleStream('sculptor', sculptorModel),
       });
       const sculptParts = [
-        ctx.buildCardPrompt(direction),
+        ctx.buildCardPrompt(direction, resolvedAssetBindings),
         `===== 本段口播逐字稿（内容忠实的唯一来源）=====\n${ctx.segmentTranscript}`,
         ctx.existingTsx
           ? `===== 执行 =====\n工作目录已有 motionCard.tsx（现有实现）。按任务书与分镜用 edit 工具针对性改造它；改造完成即停止。`
@@ -358,6 +579,15 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
       let reviewIter = 0;
       let rescueTried = false;
       let fallbackUsed = false;
+      let latestLintIssues: ReturnType<typeof lintMotionCardTsx>['issues'] = [];
+      let latestLayoutIssues: Array<{
+        severity: 'error' | 'warning';
+        code: string;
+        message: string;
+        frame?: number;
+        element?: string;
+      }> = [];
+      let finalReviewIssues: ReviewVerdict['issues'] = [];
 
       // 终极兜底：LLM 雕刻彻底失败时，由分镜确定性编译一张纯原语简版卡（不经 LLM）。
       const tryDeterministicFallback = async (lastProblem: string): Promise<boolean> => {
@@ -365,12 +595,13 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
           const storyboard = parseStoryboard(direction);
           if (!storyboard) return false;
           const fallbackTsx = buildFallbackCardTsx(storyboard, ctx.presetMotionTokens ?? '{}');
-          const lint = lintMotionCardTsx(fallbackTsx);
+          const lint = lintMotionCardTsx(fallbackTsx, { requireSafeLayout: ctx.qualityMode !== 'director' });
           if (!lint.ok) {
             emit('fallback', false, { error: formatLintIssues(lint.issues).slice(0, 200) });
             return false;
           }
-          await ctx.validate?.(fallbackTsx);
+          const validation = await ctx.validate?.(fallbackTsx, validationInput);
+          latestLayoutIssues = validation?.issues ?? [];
           await fs.writeFile(tsxPath, fallbackTsx, 'utf-8');
           tsx = fallbackTsx;
           fallbackUsed = true;
@@ -393,13 +624,21 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             problem = 'motionCard.tsx 缺失或没有 export default 的组件；请用 write 工具写入完整组件。';
           } else {
             setPhase('验证', 'mechqa');
-            const lint = lintMotionCardTsx(tsx);
+            const lint = lintMotionCardTsx(tsx, { requireSafeLayout: ctx.qualityMode !== 'director' });
+            latestLintIssues = lint.issues;
             if (!lint.ok) {
               problem = `静态 lint 未通过：\n${formatLintIssues(lint.issues.filter((i) => i.severity === 'error'))}`;
             } else {
               try {
-                await ctx.validate?.(tsx);
+                const validation = await ctx.validate?.(tsx, validationInput);
+                latestLayoutIssues = validation?.issues ?? [];
+                const layoutErrors = latestLayoutIssues.filter((issue) => issue.severity === 'error');
+                if (layoutErrors.length > 0) {
+                  problem = `布局探针未通过：\n${layoutErrors.map((issue) => `[${issue.code}] ${issue.message}`).join('\n')}`;
+                }
               } catch (err) {
+                const validationIssues = validationIssuesFromError(err);
+                if (validationIssues) latestLayoutIssues = validationIssues;
                 problem = `渲染校验失败：${err instanceof Error ? err.message : String(err)}`;
               }
             }
@@ -441,12 +680,79 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
 
       await validateWithFixes();
 
+      let contactSheetCacheKey: string | undefined;
+      let contactSheetPath: string | undefined;
+      let contactSheetCached: boolean | undefined;
+      let contactSheetError: string | undefined;
+      let preparedContactSheetKey: string | undefined;
+      let reviewUnavailableReason: string | undefined;
+      const contactSheetAssets = await prepareContactSheetAssets(resolvedAssetBindings, opts.projectPath);
+      const assetIssues = [
+        ...inspectResolvedCardAssets(assetResolution),
+        ...contactSheetAssets.issues,
+      ];
+
+      const updateContactSheet = async (): Promise<void> => {
+        const nextKey = contactSheetCacheDir
+          ? motionCardContactSheetCacheKey({
+              tsx,
+              frames: framesChecked,
+              storyboard: direction,
+              assetSignature: motionAssetSignature(contactSheetAssets.bindings),
+            })
+          : undefined;
+        if (preparedContactSheetKey === nextKey) return;
+        preparedContactSheetKey = nextKey;
+        contactSheetCacheKey = nextKey;
+        contactSheetPath = undefined;
+        contactSheetCached = undefined;
+        contactSheetError = undefined;
+        if (!contactSheetCacheDir || !nextKey) return;
+        try {
+          const sheet = await renderMotionCardContactSheet(tsx, {
+            frames: framesChecked,
+            cacheDir: contactSheetCacheDir,
+            cacheKey: nextKey,
+            cues: timingPlan?.cues,
+            timingPlan,
+            durationInFrames,
+            assetBindings: contactSheetAssets.bindings,
+          });
+          contactSheetPath = sheet.cachePath;
+          contactSheetCached = sheet.cached;
+        } catch (err) {
+          contactSheetError = err instanceof Error ? err.message : String(err);
+          milestone(`关键帧 contact sheet 生成失败：${contactSheetError}`);
+        }
+      };
+
+      const visualReviewUnavailableReason = (): string => {
+        if (contactSheetError) return `关键帧 contact sheet 生成失败：${contactSheetError}`;
+        if (contactSheetPath) {
+          return '关键帧 contact sheet 已生成，但当前 pi headless 审查会话未提供可靠的图片多模态输入；本轮按 storyboard + TSX 文本审查降级。';
+        }
+        return '未配置关键帧 contact sheet 缓存目录；本轮按 storyboard + TSX 文本审查降级。';
+      };
+
+      const buildVisualEvidencePrompt = async (): Promise<string> => {
+        await updateContactSheet();
+        return [
+          `===== 关键帧审片材料（contact sheet）=====`,
+          `关键帧 frame index：${framesChecked.join(', ') || '无'}`,
+          contactSheetPath
+            ? `contact sheet PNG：${contactSheetPath}${contactSheetCached ? '（缓存命中）' : '（本轮生成）'}`
+            : `contact sheet PNG：不可用（${visualReviewUnavailableReason()}）`,
+          `重要：如果当前运行时不能实际读取本地图像，不要声称已完成视觉审片；仍可基于 storyboard、关键帧索引与 TSX 做文本设计审查，并把不可见的画面风险写成 warn。`,
+        ].join('\n');
+      };
+
       const reviewerRole = await loadRole('card-reviewer');
       for (;;) {
         // 兜底卡是确定性模板产物，设计审查没有可改空间，直接收尾。
         if (fallbackUsed) break;
         throwIfAborted();
         setPhase('审查', 'review');
+        const visualEvidencePrompt = await buildVisualEvidencePrompt();
         const reviewer = await createSession({
           systemPrompt: reviewerRole.systemPrompt,
           tools: [],
@@ -461,7 +767,9 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             await promptWithRetry(reviewer, 
               [
                 `===== 导演的 JSON 分镜（storyboard，设计蓝图）=====\n${direction}`,
+                ctx.motionBible ? ctx.motionBible : `Motion Bible：无（按单卡分镜独立审查）。`,
                 `===== 机械校验结论 =====\n已通过（静态 lint + 编译 + 冒烟渲染 + 布局探针含字幕安全区）；机械规则不必复查，只判设计兑现度。`,
+                visualEvidencePrompt,
                 `===== motionCard.tsx =====\n\`\`\`tsx\n${tsx}\n\`\`\``,
               ].join('\n\n'),
             ),
@@ -469,15 +777,31 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         } finally {
           reviewer.dispose();
         }
-        if (verdict.pass || reviewIter >= MAX_REVIEW_ITER) {
-          if (!verdict.pass) {
-            emit('review', false, { unresolved: verdict.issues.length });
-            milestone(`审查意见未完全解决（${verdict.issues.length} 项），按回炉上限收卡`);
-          } else {
-            emit('review');
-            milestone('审查通过');
-          }
+        finalReviewIssues = verdict.issues;
+        if (verdict.unavailableReason) {
+          reviewUnavailableReason = verdict.unavailableReason;
+          emit('review', false, { unavailable: true, error: verdict.unavailableReason });
+          milestone(`审查不可用：${verdict.unavailableReason}`);
           break;
+        }
+        if (verdict.pass) {
+          emit('review');
+          milestone('审查通过');
+          break;
+        }
+        if (reviewIter >= MAX_REVIEW_ITER) {
+          emit('review', false, { unresolved: verdict.issues.length, qualityMode: ctx.qualityMode ?? 'auto' });
+          if ((ctx.qualityMode ?? 'auto') === 'auto') {
+            setPhase('质量降级', 'sculpt', reviewIter);
+            const problem = `审查 ${MAX_REVIEW_ITER} 轮后仍有 ${verdict.issues.length} 项阻断问题：${formatIssues(verdict.issues)}`;
+            if (await tryDeterministicFallback(problem)) {
+              milestone('审查问题未能消除，自动模式已切换为安全布局兜底卡');
+              break;
+            }
+          }
+          throw new Error(
+            `Motion Card 质量门禁阻断：审查 ${MAX_REVIEW_ITER} 轮后仍未通过。${formatIssues(verdict.issues)}`,
+          );
         }
         milestone(`审查未通过（${verdict.issues.length} 项）：\n${formatIssues(verdict.issues)}`);
         reviewIter += 1;
@@ -494,7 +818,29 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         kind: 'done',
         text: fallbackUsed ? '完成（兜底出卡）' : '生成完成',
       });
-      return { tsx, animationDirection: direction };
+      await updateContactSheet();
+      return {
+        tsx,
+        animationDirection: direction,
+        assetBindings: resolvedAssetBindings,
+        productionReport: buildMotionCardProductionReport({
+          fallbackUsed,
+          fixRounds: fixIter,
+          reviewRounds: reviewIter,
+          framesChecked,
+          lintIssues: latestLintIssues,
+          layoutIssues: latestLayoutIssues,
+          reviewIssues: finalReviewIssues,
+          assetIssues,
+          renderOk: true,
+          visualReviewAvailable: false,
+          unavailableReason: reviewUnavailableReason ?? visualReviewUnavailableReason(),
+          contactSheetPath,
+          contactSheetCacheKey,
+          contactSheetCached,
+          contactSheetError,
+        }),
+      };
     } catch (err) {
       feedEmit?.({
         role: 'orchestrator',

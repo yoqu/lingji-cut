@@ -51,6 +51,12 @@ async function _fillTitleAndDesc(
   await page.keyboard.press('Control+A');
   await page.keyboard.press('Delete');
 
+  // 先写描述正文，再换行接话题标签（描述与标签共用同一 contenteditable 编辑器）
+  if (desc) {
+    await page.keyboard.type(desc);
+    await page.keyboard.press('Enter');
+  }
+
   for (const tag of tags) {
     await page.keyboard.type(` #${tag}`);
     await page.keyboard.press('Space');

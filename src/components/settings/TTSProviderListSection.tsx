@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import type { TTSProvider } from '../../types/ai';
 import { Badge, Button, EmptyState } from '../../ui';
 import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
@@ -50,10 +51,10 @@ export function TTSProviderListSection({
     <div className={styles.root}>
       {providers.length === 0 ? (
         <EmptyState
-          eyebrow="TTS Provider"
-          title="暂无 TTS Provider"
-          description="添加 MiniMax 或 Xiaomi MiMo 后即可用于一键成稿语音合成。"
-          actions={<Button type="button" variant="secondary" onClick={openAdd}>+ 添加 TTS Provider</Button>}
+          eyebrow="口播生成"
+          title="暂无口播生成服务"
+          description="添加 MiniMax 或 Xiaomi MiMo 后即可用于自动剪辑的口播合成。"
+          actions={<Button type="button" variant="secondary" leftIcon={<Plus size={14} />} onClick={openAdd}>添加口播生成服务</Button>}
         />
       ) : (
         <>
@@ -73,8 +74,8 @@ export function TTSProviderListSection({
                       <Badge variant="secondary" size="xs">服务端托管</Badge>
                     ) : (
                       <>
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setEditTarget(provider)}>编辑</Button>
-                        <Button type="button" variant="destructive" size="sm" onClick={() => handleDelete(provider.id)}>删除</Button>
+                        <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => setEditTarget(provider)}>编辑</Button>
+                        <Button type="button" variant="destructive" size="sm" leftIcon={<Trash2 size={12} />} onClick={() => handleDelete(provider.id)}>删除</Button>
                       </>
                     )}
                   </div>
@@ -86,7 +87,7 @@ export function TTSProviderListSection({
               </div>
             ))}
           </div>
-          <Button type="button" variant="secondary" className={styles.addProviderButton} onClick={openAdd}>+ 添加 TTS Provider</Button>
+          <Button type="button" variant="secondary" className={styles.addProviderButton} leftIcon={<Plus size={14} />} onClick={openAdd}>添加口播生成服务</Button>
         </>
       )}
 

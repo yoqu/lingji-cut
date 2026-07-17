@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 export type ProgressMode = 'determinate' | 'indeterminate' | 'streaming';
+export type TaskProgressStatus = 'active' | 'completed' | 'error' | 'cancelled';
 
 export type TaskCategory =
   | 'ai-write'
@@ -30,8 +31,9 @@ export interface TaskProgressItem {
   onCancel?: () => void;
   startedAt: number;
   completedAt?: number;
-  status: 'active' | 'completed' | 'error';
+  status: TaskProgressStatus;
   error?: string;
+  cancelReason?: string;
   completionAction?: TaskCompletionAction;
   parentId?: string;
 }
@@ -56,6 +58,7 @@ interface TaskProgressStore {
   updateTask: (id: string, patch: UpdateTaskPatch) => void;
   completeTask: (id: string, action?: TaskCompletionAction) => void;
   failTask: (id: string, error: string) => void;
+  cancelTask: (id: string, reason?: string) => void;
   removeTask: (id: string) => void;
 }
 
@@ -102,6 +105,9 @@ function deriveActiveCount(tasks: Map<string, TaskProgressItem>): number {
 }
 
 const removalTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const COMPLETED_REMOVAL_DELAY_MS = 5000;
+const ERROR_REMOVAL_DELAY_MS = 10000;
+const CANCELLED_REMOVAL_DELAY_MS = 5000;
 
 function scheduleRemoval(id: string, delayMs: number) {
   clearRemovalTimer(id);
@@ -120,6 +126,47 @@ function clearRemovalTimer(id: string) {
   }
 }
 
+type SettledStatus = Exclude<TaskProgressStatus, 'active'>;
+
+function settleTaskItem(
+  task: TaskProgressItem,
+  status: SettledStatus,
+  completedAt: number,
+  detail?: string,
+  completionAction?: TaskCompletionAction,
+): TaskProgressItem {
+  return {
+    ...task,
+    status,
+    progress: status === 'completed' ? 100 : task.progress,
+    completedAt,
+    canCancel: false,
+    onCancel: undefined,
+    error: status === 'error' ? detail : undefined,
+    cancelReason: status === 'cancelled' ? detail : undefined,
+    completionAction: status === 'completed' ? completionAction : undefined,
+  };
+}
+
+function settleActiveChildren(
+  tasks: Map<string, TaskProgressItem>,
+  parentId: string,
+  status: SettledStatus,
+  completedAt: number,
+  detail?: string,
+): void {
+  const delay = status === 'error'
+    ? ERROR_REMOVAL_DELAY_MS
+    : status === 'completed'
+      ? COMPLETED_REMOVAL_DELAY_MS
+      : CANCELLED_REMOVAL_DELAY_MS;
+  for (const child of tasks.values()) {
+    if (child.parentId !== parentId || child.status !== 'active') continue;
+    tasks.set(child.id, settleTaskItem(child, status, completedAt, detail));
+    scheduleRemoval(child.id, delay);
+  }
+}
+
 export const useTaskProgressStore = create<TaskProgressStore>((set, get) => ({
   tasks: new Map(),
   panelOpen: false,
@@ -129,6 +176,7 @@ export const useTaskProgressStore = create<TaskProgressStore>((set, get) => ({
   setPanelOpen: (open) => set({ panelOpen: open }),
 
   startTask: (input) => {
+    clearRemovalTimer(input.id);
     const task: TaskProgressItem = {
       ...input,
       startedAt: Date.now(),
@@ -150,7 +198,7 @@ export const useTaskProgressStore = create<TaskProgressStore>((set, get) => ({
   updateTask: (id, patch) => {
     const tasks = get().tasks;
     const existing = tasks.get(id);
-    if (!existing) return;
+    if (!existing || existing.status !== 'active') return;
     const updated = { ...existing, ...patch };
     const next = new Map(tasks);
     next.set(id, updated);
@@ -163,62 +211,56 @@ export const useTaskProgressStore = create<TaskProgressStore>((set, get) => ({
   completeTask: (id, action) => {
     const tasks = get().tasks;
     const existing = tasks.get(id);
-    if (!existing) return;
+    if (!existing || existing.status !== 'active') return;
+    const completedAt = Date.now();
     const next = new Map(tasks);
-    next.set(id, {
-      ...existing,
-      status: 'completed',
-      progress: 100,
-      completedAt: Date.now(),
-      completionAction: action,
-    });
+    next.set(id, settleTaskItem(existing, 'completed', completedAt, undefined, action));
     // 父任务完成：把仍 active 的子任务一并收尾
     if (!existing.parentId) {
-      for (const child of next.values()) {
-        if (child.parentId === id && child.status === 'active') {
-          next.set(child.id, {
-            ...child,
-            status: 'completed',
-            progress: 100,
-            completedAt: Date.now(),
-          });
-          scheduleRemoval(child.id, 5000);
-        }
-      }
+      settleActiveChildren(next, id, 'completed', completedAt);
     }
     set({
       tasks: next,
       primaryTask: derivePrimaryTask(next),
       activeCount: deriveActiveCount(next),
     });
-    scheduleRemoval(id, 5000);
+    scheduleRemoval(id, COMPLETED_REMOVAL_DELAY_MS);
   },
 
   failTask: (id, error) => {
     const tasks = get().tasks;
     const existing = tasks.get(id);
-    if (!existing) return;
+    if (!existing || existing.status !== 'active') return;
+    const completedAt = Date.now();
     const next = new Map(tasks);
-    next.set(id, { ...existing, status: 'error', error, completedAt: Date.now() });
+    next.set(id, settleTaskItem(existing, 'error', completedAt, error));
     if (!existing.parentId) {
-      for (const child of next.values()) {
-        if (child.parentId === id && child.status === 'active') {
-          next.set(child.id, {
-            ...child,
-            status: 'error',
-            error,
-            completedAt: Date.now(),
-          });
-          scheduleRemoval(child.id, 10000);
-        }
-      }
+      settleActiveChildren(next, id, 'error', completedAt, error);
     }
     set({
       tasks: next,
       primaryTask: derivePrimaryTask(next),
       activeCount: deriveActiveCount(next),
     });
-    scheduleRemoval(id, 10000);
+    scheduleRemoval(id, ERROR_REMOVAL_DELAY_MS);
+  },
+
+  cancelTask: (id, reason) => {
+    const tasks = get().tasks;
+    const existing = tasks.get(id);
+    if (!existing || existing.status !== 'active') return;
+    const completedAt = Date.now();
+    const next = new Map(tasks);
+    next.set(id, settleTaskItem(existing, 'cancelled', completedAt, reason));
+    if (!existing.parentId) {
+      settleActiveChildren(next, id, 'cancelled', completedAt, reason);
+    }
+    set({
+      tasks: next,
+      primaryTask: derivePrimaryTask(next),
+      activeCount: deriveActiveCount(next),
+    });
+    scheduleRemoval(id, CANCELLED_REMOVAL_DELAY_MS);
   },
 
   removeTask: (id) => {

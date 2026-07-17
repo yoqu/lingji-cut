@@ -16,8 +16,8 @@ interface EmptyGuideProps {
  * 根据工作流状态展示不同引导：
  * - 无工作目录 → 选择工作目录
  * - 有目录但无原稿 → 导入原稿 / 新建空白
- * - 有原稿无口播稿 → 引导去 AI 对话生成口播稿
- * - 有口播稿但未审稿 → 引导去 AI 审稿
+ * - 有原稿无口播稿 → 引导生成口播稿
+ * - 有口播稿但未审稿 → 引导审查口播稿
  */
 export function EmptyGuide({
   hasProjectDir,
@@ -73,17 +73,17 @@ export function EmptyGuide({
     [canDrop, onDropFile],
   );
 
-  // 有原稿、无口播稿 → 引导直接 AI 生成
+  // 有原稿、无口播稿 → 引导直接生成
   if (showGenerateGuide) {
     return (
       <div style={containerStyle}>
-        <div style={iconContainerStyle('#34c759')}>
+        <div style={iconContainerStyle('var(--color-system-blue)')}>
           <Sparkles size={24} />
         </div>
         <div style={textGroupStyle}>
-          <div style={titleStyle}>原稿已就绪，AI 生成口播稿</div>
+          <div style={titleStyle}>原稿已就绪</div>
           <div style={descStyle}>
-            点击下方按钮，AI 将根据原稿内容和选定模板自动生成口播稿
+            根据原稿内容、当前角色和模板生成口播稿
           </div>
         </div>
         <div style={buttonGroupStyle}>
@@ -94,7 +94,7 @@ export function EmptyGuide({
             onClick={() => generateScriptCb && void generateScriptCb()}
             disabled={!generateScriptCb}
           >
-            AI 生成口播稿
+            生成口播稿
           </Button>
         </div>
       </div>
@@ -111,7 +111,7 @@ export function EmptyGuide({
         <div style={textGroupStyle}>
           <div style={titleStyle}>口播稿已生成</div>
           <div style={descStyle}>
-            点击标签页查看口播稿，或点击下方按钮进行 AI 审稿
+            打开口播稿继续编辑，或先生成逐条审查建议
           </div>
         </div>
         <div style={buttonGroupStyle}>
@@ -122,7 +122,7 @@ export function EmptyGuide({
             onClick={() => reviewScriptCb && void reviewScriptCb()}
             disabled={!reviewScriptCb}
           >
-            AI 审稿
+            审查口播稿
           </Button>
         </div>
       </div>
@@ -141,7 +141,7 @@ export function EmptyGuide({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div style={iconContainerStyle(dragOver ? '#34c759' : '#0a84ff')}>
+      <div style={iconContainerStyle('var(--color-system-blue)')}>
         {dragOver ? <Import size={24} /> : <FilePlus2 size={24} />}
       </div>
       <div style={textGroupStyle}>

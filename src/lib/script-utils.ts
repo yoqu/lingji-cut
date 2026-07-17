@@ -149,6 +149,7 @@ export async function generateScriptDraft(
   originalText: string,
   templateId: string,
   roleId?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const { systemPrompt, userPrompt } = buildScriptDraftPrompt(originalText, templateId, roleId);
 
@@ -156,7 +157,7 @@ export async function generateScriptDraft(
   if (!settings) throw new Error('请先在 AI 设置中配置 LLM');
 
   const binding = resolveTemplateBinding(settings, templateId);
-  return generateText(settings, systemPrompt, userPrompt, binding);
+  return generateText(settings, systemPrompt, userPrompt, binding, signal);
 }
 
 /**
@@ -224,11 +225,12 @@ export async function runScriptReview(scriptText: string): Promise<Annotation[]>
 export async function runScriptReviewStream(
   scriptText: string,
   onChunk: (chunk: string) => void,
-  options?: { onReasoningChunk?: (chunk: string) => void },
+  options?: { onReasoningChunk?: (chunk: string) => void; signal?: AbortSignal },
 ): Promise<Annotation[]> {
   const ctx = await loadScriptReviewContext();
   return reviewScriptStream(ctx.settings, ctx.projectBindings, ctx.template, scriptText, {
     onChunk,
     onReasoningChunk: options?.onReasoningChunk,
+    signal: options?.signal,
   });
 }

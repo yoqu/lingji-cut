@@ -33,7 +33,7 @@ describe('ai-config-utils', () => {
         }),
       ),
     ).toEqual({
-      name: '请输入 Provider 名称',
+      name: '请输入生成服务名称',
       baseUrl: '请输入 Base URL',
       apiKey: '请输入 API Key',
       models: '请至少添加一个模型',

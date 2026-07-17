@@ -58,28 +58,71 @@ export function buildFallbackCardTsx(sb: MotionStoryboard, presetTokensJson: str
   };
   tryHero(focusIdx);
   beats.forEach((_, i) => tryHero(i));
+  const resolvedHero = hero as { value: number; unit: string } | null;
 
   const heroLabel = heroBeatIdx >= 0
     ? cleanScreenText((beats[heroBeatIdx].adds ?? '').replace(/[\d,，.%]+/g, ''), 10)
     : '';
 
-  // 其余拍进列表，与各自 beat 对齐。垂直预算（安全盒 ≈ H*0.72）：
-  // 有 StatHero（≈0.42H）时最多 2 条；无 hero 时最多 3 条——确定性模板必须确定性放得下。
+  // 其余拍只用于没有专用载体/焦点数字时的单一 ListBuild，绝不与第二个主原语叠加。
   const listEntries = beats
     .map((b, i) => ({ text: cleanScreenText(b.adds ?? ''), i }))
     .filter((e) => e.i !== 0 && e.i !== heroBeatIdx && e.text.length > 0)
-    .slice(0, hero ? 2 : 3);
+    .slice(0, 3);
 
-  const listBlock = listEntries.length > 0
-    ? `        <ListBuild items={[${listEntries.map((e) => q(e.text)).join(', ')}]} beats={[${listEntries
-        .map((e) => `beats[${e.i}]`)
-        .join(', ')}]} />`
-    : '';
-  const heroBlock = hero
-    ? `        <StatHero value={${(hero as { value: number }).value}} unit=${q((hero as { unit: string }).unit)} label=${q(heroLabel)} beat={beats[${heroBeatIdx}]} />`
-    : '';
+  const items = beats.map((b) => cleanScreenText(b.adds ?? '', 12)).filter(Boolean).slice(0, 4);
+  const mainBlock = (() => {
+    if (sb.carrier === 'data-hero' && resolvedHero) {
+      return `          <StatHero value={${resolvedHero.value}} unit=${q(resolvedHero.unit)} label=${q(heroLabel)} beat={beats[${heroBeatIdx}]} />`;
+    }
+    if (sb.carrier === 'comparison' && items.length >= 2) {
+      return `          <CompareRow left={{ label: ${q(items[0])}, value: ${q(items[0])} }} right={{ label: ${q(items[1])}, value: ${q(items[1])} }} beat={beats[1] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'process') {
+      return `          <ProcessFlow steps={[${items.slice(0, 4).map(q).join(', ')}]} beat={beats[1] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'quote') {
+      const quote = cleanScreenText(beats[focusIdx]?.adds ?? sb.claim, 22);
+      return `          <QuoteBlock text=${q(quote)} beat={beats[${Math.max(0, focusIdx)}] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'timeline') {
+      return `          <TimelineRail items={[${items.map(q).join(', ')}]} beat={beats[1] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'matrix') {
+      return `          <MatrixQuadrant items={[${items.map((text, i) => `{ label: ${q(text)}, x: ${25 + (i % 3) * 25}, y: ${35 + (i % 2) * 32}, focus: ${i === Math.max(0, focusIdx)} }`).join(', ')}]} beat={beats[1] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'funnel') {
+      return `          <FunnelStack steps={[${items.map((text, i) => `{ label: ${q(text)}, value: ${q(i === 0 && resolvedHero ? `${resolvedHero.value}${resolvedHero.unit}` : '')} }`).join(', ')}]} beat={beats[1] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'network') {
+      return `          <NetworkMap nodes={[${items.map(q).join(', ')}]} links={[[0,1],[1,2],[0,3]]} beat={beats[1] ?? beats[0]} />`;
+    }
+    if (sb.carrier === 'before-after') {
+      return `          <BeforeAfter before=${q(items[0] ?? '之前')} after=${q(items[1] ?? items[items.length - 1] ?? '之后')} beat={beats[1] ?? beats[0]} mode="wipe" />`;
+    }
+    if (sb.carrier === 'stacked-composition') {
+      return `          <StackedComposition items={[${items.map((text, i) => `{ label: ${q(text)}, value: ${Math.max(10, 50 - i * 8)} }`).join(', ')}]} beat={beats[1] ?? beats[0]} />`;
+    }
+    const safeList = listEntries.length > 0
+      ? listEntries
+      : [{ text: cleanScreenText(beats[focusIdx]?.adds ?? sb.claim), i: Math.max(0, focusIdx) }];
+    return `          <ListBuild items={[${safeList.map((entry) => q(entry.text)).join(', ')}]} beats={[${safeList.map((entry) => `beats[${entry.i}]`).join(', ')}]} />`;
+  })();
 
-  return `import { CardStage, useBeats, Kicker, StatHero, ListBuild } from '@lingji/motion-kit';
+  const layout = sb.layout ?? (sb.carrier === 'comparison' || sb.carrier === 'before-after'
+    ? 'split-compare'
+    : sb.carrier === 'data-hero'
+      ? 'title-hero'
+      : sb.carrier === 'list-build' || sb.carrier === 'process'
+        ? 'list-with-kicker'
+        : 'chart-with-kicker');
+  const headerSlot = layout === 'single-focus'
+    ? ''
+    : `        <MotionSlot name="header" role="support">
+          <Kicker text=${q(cleanScreenText(sb.claim, 14))} beat={beats[0]} />
+        </MotionSlot>\n`;
+
+  return `import { CardStage, SafeLayout, MotionSlot, useBeats, Kicker, StatHero, CompareRow, ListBuild, ProcessFlow, QuoteBlock, TimelineRail, MatrixQuadrant, FunnelStack, NetworkMap, BeforeAfter, StackedComposition } from '@lingji/motion-kit';
 
 const TOKENS = ${presetTokensJson};
 
@@ -87,10 +130,11 @@ export default function Card({ cues = [] }) {
   const beats = useBeats(cues, ${anchorsLiteral});
   return (
     <CardStage tokens={TOKENS}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 40, maxHeight: '100%' }}>
-        <Kicker text=${q(cleanScreenText(sb.claim, 14))} beat={beats[0]} />
-${[heroBlock, listBlock].filter(Boolean).join('\n')}
-      </div>
+      <SafeLayout variant=${q(layout)}>
+${headerSlot}        <MotionSlot name="main" role="focus">
+${mainBlock}
+        </MotionSlot>
+      </SafeLayout>
     </CardStage>
   );
 }

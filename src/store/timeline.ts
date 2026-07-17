@@ -33,6 +33,7 @@ import {
 } from '../lib/timeline-placement';
 import { resegmentSrtEntries } from '../lib/srt-resegment';
 import { remapHighlightsAfterResegment } from '../lib/subtitle-highlights';
+import { getProductionSaveGuard } from '../lib/production-save-guard';
 
 type OverlayDraft = Omit<OverlayItem, 'id'>;
 type TimelineSnapshot = TimelineData;
@@ -54,6 +55,8 @@ export interface TimelineStore {
   timeline: TimelineData;
   srtEntries: SrtEntry[];
   originalSrtEntries: SrtEntry[];
+  /** 仅用于使预览重新加载被同名覆盖的口播文件，不写入 project.json。 */
+  podcastRevision: number;
   assets: AssetItem[];
   overlayClipboard: OverlayClipboardItem | null;
   canUndo: boolean;
@@ -87,6 +90,11 @@ export interface TimelineStore {
   removeTrack: (id: string) => void;
   addOverlay: (overlay: OverlayDraft) => string;
   addAICardsToTimeline: (cards: AICardTimelineDraft[]) => void;
+  replaceAICardsOnTimeline: (
+    cards: AICardTimelineDraft[],
+    sourceCardIds: string[],
+    options?: { skipAutosave?: boolean },
+  ) => void;
   appendAICardToTimeline: (
     card: AICardTimelineDraft,
     options?: { coalesceHistory?: boolean },
@@ -99,6 +107,10 @@ export interface TimelineStore {
   trimOverlayClip: (id: string, edge: 'start' | 'end', newEdgeMs: number) => void;
   splitOverlayClipsAt: (playheadMs: number, targetIds?: string[]) => void;
   removeOverlay: (id: string) => void;
+  removeOverlaysByIds: (
+    ids: string[],
+    options?: { ignoreTrackLock?: boolean },
+  ) => void;
   undo: () => void;
   redo: () => void;
   historyPast: TimelineSnapshot[];
@@ -483,6 +495,7 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
   timeline: createDefaultTimeline(),
   srtEntries: [],
   originalSrtEntries: [],
+  podcastRevision: 0,
   assets: [],
   overlayClipboard: null,
   canUndo: false,
@@ -510,11 +523,12 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
     set({ subtitleSelection: [] });
   },
   setTimeline: (timeline) =>
-    set(() => {
+    set((state) => {
       const normalizedTimeline = normalizeTimeline(timeline);
 
       return {
         timeline: normalizedTimeline,
+        podcastRevision: state.podcastRevision + 1,
         assets: syncAssetsWithTimeline([], normalizedTimeline),
         overlayClipboard: null,
         historyPast: [],
@@ -526,10 +540,11 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
     }),
   applyExternalTimeline: (timeline) =>
     withExternalReflection(() =>
-      set(() => {
+      set((state) => {
         const normalizedTimeline = normalizeTimeline(timeline);
         return {
           timeline: normalizedTimeline,
+          podcastRevision: state.podcastRevision + 1,
           assets: syncAssetsWithTimeline([], normalizedTimeline),
         };
       }),
@@ -672,7 +687,10 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
         },
       });
 
-      return buildCommittedTimelineState(state, nextTimeline);
+      return {
+        ...buildCommittedTimelineState(state, nextTimeline),
+        podcastRevision: state.podcastRevision + 1,
+      };
     }),
   setGlobalBackground: (path) =>
     set((state) => {
@@ -885,6 +903,29 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
 
       return buildCommittedTimelineState(state, nextTimeline);
     }),
+  replaceAICardsOnTimeline: (cards, sourceCardIds, options) => {
+    const replace = () => set((state) => {
+      const sourceIds = new Set(sourceCardIds);
+      const nextSourceIds = new Set(cards.map((card) => card.sourceCardId));
+      const tracks = [...state.timeline.tracks];
+      const overlays = state.timeline.overlays.filter((overlay) => (
+        overlay.overlayType !== 'ai-card'
+        || !overlay.aiCardData?.sourceCardId
+        || !sourceIds.has(overlay.aiCardData.sourceCardId)
+        || nextSourceIds.has(overlay.aiCardData.sourceCardId)
+      ));
+      for (const card of cards) {
+        applyAICardDraftToTimeline(state, tracks, overlays, card);
+      }
+      const nextTimeline = normalizeTimeline({ ...state.timeline, tracks, overlays });
+      return buildCommittedTimelineState(state, nextTimeline);
+    });
+    if (options?.skipAutosave) {
+      withExternalReflection(replace);
+      return;
+    }
+    replace();
+  },
   appendAICardToTimeline: (card, options) =>
     set((state) => {
       const tracks = [...state.timeline.tracks];
@@ -1224,6 +1265,23 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
 
       return buildCommittedTimelineState(state, nextTimeline);
     }),
+  removeOverlaysByIds: (ids, options) =>
+    set((state) => {
+      if (ids.length === 0) return {};
+      const requested = new Set(ids);
+      const removable = options?.ignoreTrackLock
+        ? requested
+        : new Set(state.timeline.overlays
+            .filter((overlay) => requested.has(overlay.id))
+            .filter((overlay) => !state.timeline.tracks.find((track) => track.id === overlay.trackId)?.locked)
+            .map((overlay) => overlay.id));
+      if (removable.size === 0) return {};
+      const nextTimeline = normalizeTimeline({
+        ...state.timeline,
+        overlays: state.timeline.overlays.filter((overlay) => !removable.has(overlay.id)),
+      });
+      return buildCommittedTimelineState(state, nextTimeline);
+    }),
   undo: () =>
     set((state) => {
       if (state.historyPast.length === 0) {
@@ -1318,13 +1376,25 @@ if (typeof window !== 'undefined') {
     }
 
     emitSaveStatus('saving');
+    const productionGuard = getProductionSaveGuard();
     if (saveTimer) {
       clearTimeout(saveTimer);
     }
 
     saveTimer = setTimeout(() => {
-      void window.electronAPI
-        .saveProjectSection(projectDir, 'timeline', JSON.stringify(state.timeline))
+      const saveRequest = productionGuard
+        ? window.electronAPI.saveProjectSection(
+            projectDir,
+            'timeline',
+            JSON.stringify(state.timeline),
+            productionGuard,
+          )
+        : window.electronAPI.saveProjectSection(
+            projectDir,
+            'timeline',
+            JSON.stringify(state.timeline),
+          );
+      void saveRequest
         .then(() => {
           emitSaveStatus('saved');
         })

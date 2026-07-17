@@ -28,7 +28,8 @@ describe('MediaCardPreview', () => {
     const html = renderToStaticMarkup(
       <MediaCardPreview content={baseContent('idle')} previewSrc={null} />,
     );
-    expect(/未生成|点击生成/.test(html)).toBe(true);
+    expect(html).toContain('尚未生成图片');
+    expect(html).toContain('填写生成描述后');
   });
 
   it('generating 显示 spinner 与百分比', () => {
@@ -36,6 +37,7 @@ describe('MediaCardPreview', () => {
       <MediaCardPreview content={baseContent('generating')} previewSrc={null} percent={42} />,
     );
     expect(html.includes('42%')).toBe(true);
+    expect(html).toContain('正在生成图片');
   });
 
   it('ready (image) 渲染 <img>', () => {
@@ -63,6 +65,7 @@ describe('MediaCardPreview', () => {
       />,
     );
     expect(html.includes('配额用尽')).toBe(true);
+    expect(html).toContain('检查生成描述、服务与模型设置');
   });
 
   it('cancelled 显示已取消提示', () => {
@@ -70,5 +73,13 @@ describe('MediaCardPreview', () => {
       <MediaCardPreview content={baseContent('cancelled')} previewSrc={null} />,
     );
     expect(/取消|重新生成/.test(html)).toBe(true);
+  });
+
+  it('ready 但结果文件不可用时给出可行动提示', () => {
+    const html = renderToStaticMarkup(
+      <MediaCardPreview content={baseContent('ready')} previewSrc={null} />,
+    );
+    expect(html).toContain('无法显示生成结果');
+    expect(html).toContain('请重新生成图片');
   });
 });

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { detectResumableAutoRun } from '../src/lib/auto-run-resume';
+import { detectResumableAutoRun, listStartableSteps } from '../src/lib/auto-run-resume';
 import { createDefaultProjectData, type ProjectData } from '../src/lib/project-persistence';
 import type { TimelineData } from '../src/types';
 import type { AIAnalysisResult, CoverCandidate } from '../src/types/ai';
+import { createEmptyProductionState } from '../src/lib/director-workflow';
 
 function makeTimeline(overrides: Partial<TimelineData> = {}): TimelineData {
   return {
@@ -33,6 +34,42 @@ const FAKE_COVER: CoverCandidate = {
 } as unknown as CoverCandidate;
 
 describe('detectResumableAutoRun', () => {
+  it('V3 导演检查点优先于旧时间线产物推断', () => {
+    const production = createEmptyProductionState(1);
+    production.workflow.stage = 'director-review';
+    production.draftPlan = { revision: 2 } as never;
+    const result = detectResumableAutoRun({
+      scriptContent: '有口播稿', originalContent: '有原稿',
+      project: makeProject({ production }),
+    });
+    expect(result).toMatchObject({
+      kind: 'resumable',
+      checkpoint: 'director-review',
+      nextStep: 'director_planning',
+    });
+  });
+
+  it('V3 暂停态从 production_running 补缺失项', () => {
+    const production = createEmptyProductionState(1);
+    production.workflow.stage = 'production-paused';
+    production.approvedPlan = { revision: 1, approvedAt: 1 } as never;
+    const result = detectResumableAutoRun({
+      scriptContent: '有口播稿', originalContent: '有原稿',
+      project: makeProject({ production }),
+    });
+    expect(result).toMatchObject({ kind: 'resumable', nextStep: 'production_running' });
+  });
+
+  it('V3 complete 不因旧产物缺失误报恢复', () => {
+    const production = createEmptyProductionState(1);
+    production.workflow.stage = 'complete';
+    const result = detectResumableAutoRun({
+      scriptContent: '有口播稿', originalContent: '有原稿',
+      project: makeProject({ production }),
+    });
+    expect(result.kind).toBe('none');
+  });
+
   it('script.md 和 original.md 都为空时返回 none（从未启动）', () => {
     const result = detectResumableAutoRun({
       scriptContent: '',
@@ -220,5 +257,31 @@ describe('detectResumableAutoRun', () => {
     if (result.kind === 'resumable') {
       expect(result.persistedAutoParams).toBeNull();
     }
+  });
+});
+
+describe('listStartableSteps', () => {
+  it('返回检测点及其之前的线性阶段', () => {
+    expect(listStartableSteps('script_generating')).toEqual(['script_generating']);
+    expect(listStartableSteps('tts_generating')).toEqual([
+      'script_generating',
+      'tts_generating',
+    ]);
+    expect(listStartableSteps('arranging')).toEqual([
+      'script_generating',
+      'tts_generating',
+      'ai_analyzing',
+      'cover_generating',
+      'arranging',
+    ]);
+  });
+
+  it('restart 时允许任意线性阶段', () => {
+    expect(listStartableSteps('script_generating', { restart: true })).toHaveLength(5);
+  });
+
+  it('director 阶段不提供手动起点', () => {
+    expect(listStartableSteps('director_planning')).toEqual([]);
+    expect(listStartableSteps('production_running')).toEqual([]);
   });
 });

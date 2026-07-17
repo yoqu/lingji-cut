@@ -101,7 +101,7 @@ export function ConfigBackupTab() {
           <CardHeader>
             <CardTitle>导出配置</CardTitle>
             <CardDescription>
-              将 LLM Provider、TTS、口播模板、审查规范、自定义角色、Claude Code Agent 配置等完整打包为一个 JSON 文件。
+              将文本生成服务、口播配置、口播模板、审查规范、自定义角色、Claude Code Agent 配置等完整打包为一个 JSON 文件。
             </CardDescription>
           </CardHeader>
           <CardContent>

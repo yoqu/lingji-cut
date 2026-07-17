@@ -1,9 +1,23 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import * as React from 'react';
 import * as JsxRuntime from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as Remotion from 'remotion';
 import { compileCardTsx } from './compile-card-node';
 import { createMotionKit, type MotionKitRemotion } from '../../src/remotion/motion-kit';
+import type { CardAssetBinding } from '../../src/types/assets';
+import type {
+  MotionCardMechanicalValidation,
+  MotionCardValidationInput,
+  TimingPlan,
+} from '../../src/types/motion';
+import {
+  isMotionAssetUnderlay,
+  motionAssetSignature,
+  motionAssetStyle,
+} from '../../src/lib/motion-asset-layer';
 
 export interface SmokeRenderResult {
   ok: boolean;
@@ -14,6 +28,8 @@ export interface CardValidationIssue {
   severity: 'error' | 'warning';
   code: string;
   message: string;
+  frame?: number;
+  element?: string;
 }
 
 export interface MotionCardValidationResult {
@@ -23,7 +39,62 @@ export interface MotionCardValidationResult {
   framesChecked: number[];
 }
 
+export class MotionCardValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly validation: MotionCardMechanicalValidation,
+  ) {
+    super(message);
+    this.name = 'MotionCardValidationError';
+  }
+}
+
+export interface MotionCardKeyframeMarkup {
+  frame: number;
+  markup: string;
+}
+
+export interface MotionCardContactSheetResult {
+  frames: number[];
+  png: Buffer;
+  cached: boolean;
+  cachePath?: string;
+}
+
+export interface MotionCardContactSheetOptions {
+  frames: number[];
+  cues?: number[];
+  cardAsset?: (rel: string) => string;
+  cacheDir?: string;
+  cacheKey?: string;
+  thumbWidth?: number;
+  columns?: number;
+  assetBindings?: CardAssetBinding[];
+  timingPlan?: TimingPlan;
+  durationInFrames?: number;
+}
+
 const SMOKE_DURATION_IN_FRAMES = 150;
+
+export function motionCardContactSheetCacheKey(input: {
+  tsx: string;
+  frames: number[];
+  storyboard?: string;
+  assetSignature?: string;
+  version?: string;
+}): string {
+  const hash = crypto.createHash('sha256');
+  hash.update(input.version ?? 'v1');
+  hash.update('\0');
+  hash.update(input.tsx);
+  hash.update('\0');
+  hash.update(input.frames.join(','));
+  hash.update('\0');
+  hash.update(input.storyboard ?? '');
+  hash.update('\0');
+  hash.update(input.assetSignature ?? '');
+  return hash.digest('hex').slice(0, 24);
+}
 
 /**
  * 构造一份只覆盖 useCurrentFrame / useVideoConfig 的 Remotion 垫片：
@@ -31,7 +102,7 @@ const SMOKE_DURATION_IN_FRAMES = 150;
  * 而我们要在生成期"裸渲染"卡片，因此必须用固定值覆盖。
  * 其余 interpolate / spring / Easing / AbsoluteFill / Sequence 等保持真实实现。
  */
-function makeRemotionShim(frame: number): typeof Remotion {
+function makeRemotionShim(frame: number, durationInFrames = SMOKE_DURATION_IN_FRAMES): typeof Remotion {
   return {
     ...Remotion,
     useCurrentFrame: () => frame,
@@ -39,7 +110,7 @@ function makeRemotionShim(frame: number): typeof Remotion {
       width: 1920,
       height: 1080,
       fps: 30,
-      durationInFrames: SMOKE_DURATION_IN_FRAMES,
+      durationInFrames,
       id: 'smoke',
       defaultProps: {},
       props: {},
@@ -56,9 +127,10 @@ function evalCardComponent(
   compiledJs: string,
   frame: number,
   cardAsset: (rel: string) => string = (rel) => rel,
+  durationInFrames = SMOKE_DURATION_IN_FRAMES,
 ): React.ComponentType<Record<string, unknown>> | null {
   if (!compiledJs.trim()) return null;
-  const remotionShim = makeRemotionShim(frame);
+  const remotionShim = makeRemotionShim(frame, durationInFrames);
   // motion-kit 绑定当前帧的 remotion 垫片，使 kit 内部 useCurrentFrame/useVideoConfig 在裸渲染下可用。
   const motionKit = createMotionKit(remotionShim as unknown as MotionKitRemotion);
   const requireShim = (id: string): unknown => {
@@ -74,6 +146,170 @@ function evalCardComponent(
   factory(requireShim, moduleObj, moduleObj.exports, cardAsset);
   const exported = moduleObj.exports as { default?: unknown };
   return (exported.default as React.ComponentType<Record<string, unknown>>) ?? null;
+}
+
+function normalizeFrames(frames: number[]): number[] {
+  return Array.from(
+    new Set(
+      frames
+        .map((frame) => Math.max(0, Math.round(frame)))
+        .filter((frame) => Number.isFinite(frame)),
+    ),
+  ).sort((a, b) => a - b);
+}
+
+export async function renderMotionCardKeyframeMarkups(
+  tsx: string,
+  options: Pick<
+    MotionCardContactSheetOptions,
+    'frames' | 'cues' | 'cardAsset' | 'timingPlan' | 'durationInFrames'
+  >,
+): Promise<MotionCardKeyframeMarkup[]> {
+  const compiled = await compileCardTsx('contact-sheet', tsx);
+  if (compiled.error || !compiled.js) {
+    throw new Error(compiled.error ?? 'Motion Card 编译产物为空');
+  }
+
+  const frames = normalizeFrames(options.frames);
+  const durationInFrames = Math.max(1, Math.round(options.durationInFrames ?? SMOKE_DURATION_IN_FRAMES));
+  const markups: MotionCardKeyframeMarkup[] = [];
+  for (const frame of frames) {
+    const Comp = evalCardComponent(compiled.js, frame, options.cardAsset, durationInFrames);
+    if (!Comp) {
+      throw new Error('Motion Card 未导出可渲染组件');
+    }
+    markups.push({
+      frame,
+      markup: renderToStaticMarkup(React.createElement(Comp, {
+        cues: options.cues ?? [],
+        timingPlan: options.timingPlan,
+      })),
+    });
+  }
+  return markups;
+}
+
+function contactSheetHtml(
+  markups: MotionCardKeyframeMarkup[],
+  options: {
+    thumbWidth: number;
+    columns: number;
+    assetBindings?: CardAssetBinding[];
+    timingPlan?: TimingPlan;
+    durationInFrames: number;
+  },
+): string {
+  const { thumbWidth, columns } = options;
+  const scale = thumbWidth / 1920;
+  const thumbHeight = Math.round(1080 * scale);
+  const gap = 16;
+  const rows = Math.max(1, Math.ceil(markups.length / columns));
+  const width = columns * thumbWidth + (columns + 1) * gap;
+  const height = rows * (thumbHeight + 28) + (rows + 1) * gap;
+  const assetMarkup = (frame: number, underlay: boolean) => (options.assetBindings ?? [])
+    .filter((binding) => isMotionAssetUnderlay(binding) === underlay)
+    .map((binding) => renderToStaticMarkup(React.createElement('img', {
+      key: `${binding.slot}:${binding.assetId}`,
+      src: binding.filePath,
+      alt: '',
+      style: motionAssetStyle(binding, frame, {
+        width: 1920,
+        height: 1080,
+        durationInFrames: options.durationInFrames,
+        timingPlan: options.timingPlan,
+      }),
+    })))
+    .join('');
+  const hasUnderlay = options.assetBindings?.some(isMotionAssetUnderlay) === true;
+  const cells = markups
+    .map(
+      ({ frame, markup }) => `
+        <section class="cell">
+          <div class="shot">
+            <div class="stage"${hasUnderlay ? ' style="--lingji-card-stage-bg:transparent"' : ''}>
+              ${assetMarkup(frame, true)}
+              <div class="card">${markup}</div>
+              ${assetMarkup(frame, false)}
+            </div>
+          </div>
+          <div class="label">frame ${frame}</div>
+        </section>`,
+    )
+    .join('');
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; padding: 0; width: ${width}px; min-height: ${height}px; background: #111318; }
+    body { box-sizing: border-box; padding: ${gap}px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #d8dce7; }
+    .grid { display: grid; grid-template-columns: repeat(${columns}, ${thumbWidth}px); gap: ${gap}px; }
+    .cell { width: ${thumbWidth}px; }
+    .shot { width: ${thumbWidth}px; height: ${thumbHeight}px; overflow: hidden; background: #05070a; border: 1px solid rgba(255,255,255,0.14); box-sizing: border-box; }
+    .stage { position: relative; width: 1920px; height: 1080px; transform: scale(${scale}); transform-origin: top left; overflow: hidden; }
+    .card { position: absolute; inset: 0; z-index: 1; }
+    .label { height: 20px; padding-top: 6px; font-size: 12px; line-height: 1; color: rgba(216,220,231,0.72); }
+  </style>
+</head>
+<body><main class="grid">${cells}</main></body>
+</html>`;
+}
+
+export async function renderMotionCardContactSheet(
+  tsx: string,
+  options: MotionCardContactSheetOptions,
+): Promise<MotionCardContactSheetResult> {
+  const frames = normalizeFrames(options.frames);
+  const cacheKey = options.cacheKey ?? motionCardContactSheetCacheKey({
+    tsx,
+    frames,
+    assetSignature: motionAssetSignature(options.assetBindings ?? []),
+  });
+  const cachePath = options.cacheDir ? path.join(options.cacheDir, `${cacheKey}.png`) : undefined;
+  if (cachePath) {
+    try {
+      return { frames, png: await fs.readFile(cachePath), cached: true, cachePath };
+    } catch {
+      // cache miss
+    }
+  }
+
+  const markups = await renderMotionCardKeyframeMarkups(tsx, { ...options, frames });
+  const thumbWidth = options.thumbWidth ?? 360;
+  const columns = Math.max(1, options.columns ?? Math.min(3, Math.max(1, markups.length)));
+  const html = contactSheetHtml(markups, {
+    thumbWidth,
+    columns,
+    assetBindings: options.assetBindings,
+    timingPlan: options.timingPlan,
+    durationInFrames: options.durationInFrames ?? SMOKE_DURATION_IN_FRAMES,
+  });
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const rows = Math.max(1, Math.ceil(markups.length / columns));
+    const scale = thumbWidth / 1920;
+    const thumbHeight = Math.round(1080 * scale);
+    const gap = 16;
+    const viewport = {
+      width: columns * thumbWidth + (columns + 1) * gap,
+      height: rows * (thumbHeight + 28) + (rows + 1) * gap,
+    };
+    const page = await browser.newPage({ viewport });
+    try {
+      await page.setContent(html, { waitUntil: 'load' });
+      const png = await page.screenshot({ type: 'png', fullPage: true });
+      if (cachePath) {
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, png);
+      }
+      return { frames, png, cached: false, cachePath };
+    } finally {
+      await page.close().catch(() => {});
+    }
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }
 
 function stripTags(markup: string): string {
@@ -97,6 +333,9 @@ function countPattern(source: string, pattern: RegExp): number {
 }
 
 interface LayoutProbe {
+  frame: number;
+  nodeIndex: number;
+  parentIndex: number | null;
   tag: string;
   text: string;
   x: number;
@@ -115,12 +354,21 @@ interface LayoutProbe {
   wordBreak: string;
   overflowX: string;
   overflowY: string;
+  opacity: number;
+  visibility: string;
+  zIndex: string;
   directText: boolean;
   isMedia: boolean;
   /** 计算样式 color（rgb/rgba 字符串） */
   color: string;
   /** 沿祖先链合成出的有效背景色 [r,g,b]（0-255）；遇渐变/图片或无不透明底时为 null（跳过对比度检查） */
   effectiveBg: [number, number, number] | null;
+  /** 元素 data-role 属性（如 CardStage 内容盒标记 "cardstage-content"），无则 undefined */
+  role?: string;
+  motionId?: string;
+  motionLayer?: string;
+  motionDepth?: string;
+  allowOverlap?: boolean;
 }
 
 /** 解析 computed style 的 rgb()/rgba() 颜色为 [r,g,b,a]。 */
@@ -163,7 +411,50 @@ function rectsOverlap(a: LayoutProbe, b: LayoutProbe): boolean {
     a.y + a.height > b.y;
 }
 
-async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] | null> {
+function validationAssetMarkup(
+  frame: number,
+  bindings: CardAssetBinding[],
+  underlay: boolean,
+  timingPlan: TimingPlan | undefined,
+  durationInFrames: number,
+): string {
+  return bindings
+    .filter((binding) => isMotionAssetUnderlay(binding) === underlay)
+    .map((binding) => {
+      const style = motionAssetStyle(binding, frame, {
+        width: 1920,
+        height: 1080,
+        durationInFrames,
+        timingPlan,
+      });
+      if (style.height == null) {
+        const sourceWidth = binding.metadata?.width ?? 0;
+        const sourceHeight = binding.metadata?.height ?? 0;
+        const width = typeof style.width === 'number' ? style.width : binding.placement.width;
+        style.height = sourceWidth > 0 && sourceHeight > 0
+          ? width * (sourceHeight / sourceWidth)
+          : width * 0.75;
+      }
+      return renderToStaticMarkup(React.createElement('img', {
+        src: binding.filePath,
+        alt: '',
+        'data-motion-id': `asset:${binding.slot}`,
+        'data-motion-layer': underlay ? 'asset-underlay' : 'asset-foreground',
+        'data-motion-depth': binding.placement.depth ?? 'midground',
+        style,
+      }));
+    })
+    .join('');
+}
+
+async function inspectRenderedLayout(
+  markups: MotionCardKeyframeMarkup[],
+  options: {
+    assetBindings?: CardAssetBinding[];
+    timingPlan?: TimingPlan;
+    durationInFrames: number;
+  },
+): Promise<LayoutProbe[] | null> {
   if (!markups.length) return [];
   try {
     const { chromium } = await import('playwright');
@@ -171,17 +462,39 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
     try {
       const nodes: LayoutProbe[] = [];
-      for (const markup of markups) {
+      for (const { frame, markup } of markups) {
+        const underlay = validationAssetMarkup(
+          frame,
+          options.assetBindings ?? [],
+          true,
+          options.timingPlan,
+          options.durationInFrames,
+        );
+        const foreground = validationAssetMarkup(
+          frame,
+          options.assetBindings ?? [],
+          false,
+          options.timingPlan,
+          options.durationInFrames,
+        );
         await page.setContent(
-          `<!doctype html><html><head><style>html,body{margin:0;padding:0;width:1920px;height:1080px;overflow:hidden}#root{width:1920px;height:1080px;overflow:hidden}</style></head><body><div id="root">${markup}</div></body></html>`,
+          `<!doctype html><html><head><style>html,body{margin:0;padding:0;width:1920px;height:1080px;overflow:hidden}#root,.stage{position:relative;width:1920px;height:1080px;overflow:hidden}.card{position:absolute;inset:0;z-index:1}</style></head><body><div id="root"><div class="stage">${underlay}<div class="card">${markup}</div>${foreground}</div></div></body></html>`,
           { waitUntil: 'load' },
         );
         nodes.push(
-          ...(await page.evaluate(() => Array.from(document.querySelectorAll('#root *')).map((el) => {
+          ...(await page.evaluate((currentFrame) => {
+            const elements = Array.from(document.querySelectorAll('#root *'));
+            return elements.map((el, nodeIndex) => {
             const r = el.getBoundingClientRect();
             const s = getComputedStyle(el as Element);
             const directText = Array.from(el.childNodes).some((n) => Boolean(n.nodeType === Node.TEXT_NODE && n.textContent?.trim()));
             const text = (el.textContent ?? '').trim();
+            let effectiveOpacity = 1;
+            let opacityNode: Element | null = el as Element;
+            while (opacityNode && opacityNode.id !== 'root') {
+              effectiveOpacity *= Number.parseFloat(getComputedStyle(opacityNode).opacity || '1');
+              opacityNode = opacityNode.parentElement;
+            }
             // 有效背景：从自身沿祖先链合成 background-color（rgba 按 alpha 叠加），
             // 直到不透明底；途中遇渐变/图片背景或到根仍无不透明底 → null（对比度不判）。
             const effectiveBg = ((): [number, number, number] | null => {
@@ -215,6 +528,9 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
               return [br, bgc, bb];
             })();
             return {
+              frame: currentFrame,
+              nodeIndex,
+              parentIndex: el.parentElement ? elements.indexOf(el.parentElement) : -1,
               tag: (el as Element).tagName.toLowerCase(),
               text,
               x: r.x, y: r.y, width: r.width, height: r.height,
@@ -230,16 +546,30 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
               wordBreak: s.wordBreak,
               overflowX: s.overflowX,
               overflowY: s.overflowY,
+              opacity: effectiveOpacity,
+              visibility: s.visibility,
+              zIndex: s.zIndex,
               directText,
               isMedia: ['img', 'video', 'canvas', 'svg'].includes((el as Element).tagName.toLowerCase()),
               color: s.color,
               effectiveBg,
+              role: (el as HTMLElement).dataset.role || undefined,
+              motionId: (el as HTMLElement).dataset.motionId || undefined,
+              motionLayer: (el as HTMLElement).dataset.motionLayer || undefined,
+              motionDepth: (el as HTMLElement).dataset.motionDepth || undefined,
+              allowOverlap: (el as HTMLElement).dataset.motionAllowOverlap === 'true',
             };
-          }))),
+          });
+          }, frame)).map((node) => ({
+            ...node,
+            parentIndex: node.parentIndex >= 0 ? node.parentIndex : null,
+          })) as LayoutProbe[],
         );
       }
       return nodes.filter(
         (n) =>
+          n.opacity > 0.03 &&
+          n.visibility !== 'hidden' &&
           ((n.width > 0 && n.height > 0 && n.display !== 'none' && n.position !== 'fixed') ||
             n.isMedia ||
             n.directText),
@@ -255,12 +585,18 @@ async function inspectRenderedLayout(markups: string[]): Promise<LayoutProbe[] |
 
 async function inspectLayoutRisks(
   tsx: string,
-  markups: string[],
+  markups: MotionCardKeyframeMarkup[],
   checkRenderedLayout: boolean,
+  options: {
+    assetBindings?: CardAssetBinding[];
+    timingPlan?: TimingPlan;
+    durationInFrames: number;
+  },
 ): Promise<CardValidationIssue[]> {
   const issues: CardValidationIssue[] = [];
-  const text = markups.map(stripTags).join(' ').trim();
-  const textRuns = markups.flatMap(visibleTextRuns);
+  const markupSources = markups.map((item) => item.markup);
+  const text = markupSources.map(stripTags).join(' ').trim();
+  const textRuns = markupSources.flatMap(visibleTextRuns);
   const longestRun = textRuns.reduce((max, run) => Math.max(max, run.length), 0);
   const absoluteCount = countPattern(tsx, /position\s*:\s*['"]absolute['"]/g);
   const hasTextAlignment =
@@ -286,7 +622,7 @@ async function inspectLayoutRisks(
       message: '源码包含 TODO/省略类占位内容，请补全后再写入卡片。',
     });
   }
-  if (!text && !/<svg|<img|<video|<canvas/i.test(markups.join(' '))) {
+  if (!text && !/<svg|<img|<video|<canvas/i.test(markupSources.join(' '))) {
     issues.push({
       severity: 'warning',
       code: 'no-visible-content',
@@ -341,7 +677,7 @@ async function inspectLayoutRisks(
   }
   if (!checkRenderedLayout) return issues;
 
-  const layoutNodes = await inspectRenderedLayout(markups);
+  const layoutNodes = await inspectRenderedLayout(markups, options);
   if (layoutNodes === null) {
     issues.push({
       severity: 'warning',
@@ -366,7 +702,9 @@ async function inspectLayoutRisks(
       pushCappedIssue({
         severity: node.isMedia || node.directText ? 'error' : 'warning',
         code: 'layout-overflow',
-        message: `元素 ${node.tag}（"${node.text.slice(0, 12)}"）超出画布边界（x=${Math.round(node.x)}, y=${Math.round(node.y)}, w=${Math.round(node.width)}, h=${Math.round(node.height)}），可能被裁切。`,
+        message: `frame ${node.frame} 的元素 ${node.tag}（"${node.text.slice(0, 12)}"）超出画布边界（x=${Math.round(node.x)}, y=${Math.round(node.y)}, w=${Math.round(node.width)}, h=${Math.round(node.height)}），可能被裁切。`,
+        frame: node.frame,
+        element: node.motionId,
       });
     }
     // 底部 20% 为口播字幕安全区；文字/媒体元素起始于画面下部且延伸入安全区（留 4% 容差）按 error。
@@ -380,7 +718,9 @@ async function inspectLayoutRisks(
       pushCappedIssue({
         severity: 'error',
         code: 'subtitle-zone-violation',
-        message: `元素 ${node.tag}（"${node.text.slice(0, 12)}"）侵入底部字幕安全区（y+height=${Math.round(node.y + node.height)} > ${Math.round(1080 * 0.84)}）；内容必须收在 y ≤ H*0.80 内。`,
+        message: `frame ${node.frame} 的元素 ${node.tag}（"${node.text.slice(0, 12)}"）侵入底部字幕安全区（y+height=${Math.round(node.y + node.height)} > ${Math.round(1080 * 0.84)}）；内容必须收在 y ≤ H*0.80 内。`,
+        frame: node.frame,
+        element: node.motionId,
       });
     }
     // 文字与有效背景对比度：字色 ≈ 底色（撞色）判 error 回喂重修；偏低只警示。
@@ -411,25 +751,80 @@ async function inspectLayoutRisks(
         severity: 'error',
         code: 'text-clipped',
         message: isCanvasRoot
-          ? `内容总尺寸（${node.scrollWidth}×${node.scrollHeight}）明显超出画布 1920×1080，放不下的部分会被裁掉——必须删减文字/缩小元素，而不是硬塞。`
-          : `文本元素 ${node.tag}（"${node.text.slice(0, 12)}"）被自身 overflow 裁切（scroll ${node.scrollWidth}×${node.scrollHeight} > client ${node.clientWidth}×${node.clientHeight}），文字显示不全。`,
+            ? `内容总尺寸（${node.scrollWidth}×${node.scrollHeight}）明显超出画布 1920×1080，放不下的部分会被裁掉——必须删减文字/缩小元素，而不是硬塞。`
+          : `frame ${node.frame} 的文本元素 ${node.tag}（"${node.text.slice(0, 12)}"）被自身 overflow 裁切（scroll ${node.scrollWidth}×${node.scrollHeight} > client ${node.clientWidth}×${node.clientHeight}），文字显示不全。`,
+        frame: node.frame,
+        element: node.motionId,
+      });
+    }
+    // 内容盒累计高度溢出：CardStage 内容区（data-role="cardstage-content"）是 flex column 无 overflow，
+    // 子内容超过 0.72H 时 scrollHeight > clientHeight（布局尺寸，不受镜头 scale 影响），
+    // 居中对称溢出会被外层 overflow:hidden 裁切，视觉上即"元素全挤叠在一起"。
+    if (
+      node.role === 'cardstage-content' &&
+      node.clientHeight > 0 &&
+      node.scrollHeight > node.clientHeight + 1
+    ) {
+      pushCappedIssue({
+        severity: 'error',
+        code: 'content-box-overflow',
+        message: `frame ${node.frame} 的内容区元素累计高度 ${Math.round(node.scrollHeight)}px 超过可用 ${Math.round(node.clientHeight)}px（0.72H），会被居中裁切--必须删减元素/缩短文案/减少列表项，而不是堆叠。`,
+        frame: node.frame,
+        element: node.motionId,
       });
     }
   }
+  const byFrame = new Map<number, Map<number, LayoutProbe>>();
+  for (const node of layoutNodes) {
+    const frameNodes = byFrame.get(node.frame) ?? new Map<number, LayoutProbe>();
+    frameNodes.set(node.nodeIndex, node);
+    byFrame.set(node.frame, frameNodes);
+  }
+  const isAncestor = (candidate: LayoutProbe, node: LayoutProbe): boolean => {
+    if (candidate.frame !== node.frame) return false;
+    const frameNodes = byFrame.get(node.frame);
+    let parentIndex = node.parentIndex;
+    while (parentIndex != null) {
+      if (parentIndex === candidate.nodeIndex) return true;
+      parentIndex = frameNodes?.get(parentIndex)?.parentIndex ?? null;
+    }
+    return false;
+  };
+  const overlapRatio = (a: LayoutProbe, b: LayoutProbe): number => {
+    const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+    const height = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+    const smallerArea = Math.max(1, Math.min(a.width * a.height, b.width * b.height));
+    return (width * height) / smallerArea;
+  };
+  const collisionLabel = (node: LayoutProbe): string =>
+    node.motionId ?? `${node.tag}${node.text ? `「${node.text.slice(0, 12)}」` : ''}`;
+  const ignoredLayer = (node: LayoutProbe): boolean =>
+    node.allowOverlap || node.motionLayer === 'decorative' || node.motionLayer === 'asset-underlay';
   for (let i = 0; i < layoutNodes.length; i += 1) {
     for (let j = i + 1; j < layoutNodes.length; j += 1) {
       const a = layoutNodes[i];
       const b = layoutNodes[j];
+      if (a.frame !== b.frame) continue;
+      if (isAncestor(a, b) || isAncestor(b, a)) continue;
+      if (ignoredLayer(a) || ignoredLayer(b)) continue;
       if (!rectsOverlap(a, b)) continue;
       if (a.text === b.text && a.tag === b.tag) continue;
-      const textHeavy = Boolean(a.directText || a.isMedia || b.directText || b.isMedia);
-      if (textHeavy && (a.position !== 'static' || b.position !== 'static')) {
-        pushCappedIssue({
-          severity: 'warning',
-          code: 'possible-occlusion',
-          message: `检测到 ${a.tag} 与 ${b.tag} 的可视区域重叠，需确认没有文字/媒体遮挡。`,
-        });
-      }
+      const ratio = overlapRatio(a, b);
+      if (ratio < 0.08) continue;
+      const textText = a.directText && b.directText;
+      const foregroundAsset =
+        (a.motionLayer === 'asset-foreground' && b.directText)
+        || (b.motionLayer === 'asset-foreground' && a.directText);
+      const semanticBlocks = a.motionLayer === 'semantic' && b.motionLayer === 'semantic';
+      const certainOcclusion = textText || foregroundAsset || semanticBlocks;
+      if (!certainOcclusion && !(a.directText || b.directText || a.isMedia || b.isMedia)) continue;
+      pushCappedIssue({
+        severity: certainOcclusion ? 'error' : 'warning',
+        code: certainOcclusion ? 'semantic-occlusion' : 'possible-occlusion',
+        message: `frame ${a.frame} 检测到 ${collisionLabel(a)} 与 ${collisionLabel(b)} 重叠 ${(ratio * 100).toFixed(1)}%，${certainOcclusion ? '已形成语义内容遮挡，必须调整槽位、删减内容或让旧元素退出' : '需确认是否为有意叠加'}。`,
+        frame: a.frame,
+        element: `${collisionLabel(a)} ↔ ${collisionLabel(b)}`,
+      }, 5);
     }
   }
   return issues;
@@ -447,11 +842,8 @@ export async function smokeRenderCardTsx(tsx: string): Promise<SmokeRenderResult
 
 export async function validateMotionCardTsx(
   tsx: string,
-  options: {
-    cues?: number[];
+  options: MotionCardValidationInput & {
     cardAsset?: (rel: string) => string;
-    frames?: number[];
-    checkRenderedLayout?: boolean;
   } = {},
 ): Promise<MotionCardValidationResult> {
   const compiled = await compileCardTsx('smoke', tsx);
@@ -465,11 +857,15 @@ export async function validateMotionCardTsx(
     };
   }
 
-  const frames = options.frames ?? [0, Math.floor(SMOKE_DURATION_IN_FRAMES / 2), SMOKE_DURATION_IN_FRAMES - 1];
-  const markups: string[] = [];
+  const durationInFrames = Math.max(1, Math.round(options.durationInFrames ?? SMOKE_DURATION_IN_FRAMES));
+  const frames = normalizeFrames(
+    (options.frames ?? [0, Math.floor(durationInFrames / 2), durationInFrames - 1])
+      .map((frame) => Math.min(durationInFrames - 1, frame)),
+  );
+  const markups: MotionCardKeyframeMarkup[] = [];
   for (const frame of frames) {
     try {
-      const Comp = evalCardComponent(compiled.js, frame, options.cardAsset);
+      const Comp = evalCardComponent(compiled.js, frame, options.cardAsset, durationInFrames);
       if (!Comp) {
         const render = { ok: false, error: 'Motion Card 未导出可渲染组件' };
         return {
@@ -479,7 +875,13 @@ export async function validateMotionCardTsx(
           framesChecked: frames,
         };
       }
-      markups.push(renderToStaticMarkup(React.createElement(Comp, { cues: options.cues ?? [] })));
+      markups.push({
+        frame,
+        markup: renderToStaticMarkup(React.createElement(Comp, {
+          cues: options.cues ?? [],
+          timingPlan: options.timingPlan,
+        })),
+      });
     } catch (error) {
       const render = { ok: false, error: error instanceof Error ? error.message : String(error) };
       return {
@@ -490,7 +892,16 @@ export async function validateMotionCardTsx(
       };
     }
   }
-  const issues = await inspectLayoutRisks(tsx, markups, options.checkRenderedLayout !== false);
+  const issues = await inspectLayoutRisks(
+    tsx,
+    markups,
+    options.checkRenderedLayout !== false,
+    {
+      assetBindings: options.assetBindings,
+      timingPlan: options.timingPlan,
+      durationInFrames,
+    },
+  );
   const render = { ok: true };
   const ok = !issues.some((i) => i.severity === 'error');
   return {
@@ -505,14 +916,30 @@ export async function validateMotionCardTsx(
  * 生成期断言卡片可渲染；不可渲染或存在 error 级布局问题（文字截断 / 越界 /
  * 字幕安全区侵入）时抛出带"请重新生成"后缀的错误，由编排器修复循环捕获回喂。
  */
-export async function assertCardRenders(tsx: string): Promise<void> {
-  const result = await validateMotionCardTsx(tsx, { checkRenderedLayout: true });
+export async function assertCardRenders(
+  tsx: string,
+  options: MotionCardValidationInput = {},
+): Promise<MotionCardMechanicalValidation> {
+  const result = await validateMotionCardTsx(tsx, { ...options, checkRenderedLayout: true });
+  const validation: MotionCardMechanicalValidation = {
+    ok: result.ok,
+    renderOk: result.render.ok,
+    issues: result.issues,
+    framesChecked: result.framesChecked,
+  };
   if (!result.render.ok) {
-    throw new Error(`Motion Card 渲染校验失败：${result.render.error}；请重新生成`);
+    throw new MotionCardValidationError(
+      `Motion Card 渲染校验失败：${result.render.error}；请重新生成`,
+      validation,
+    );
   }
   const errors = result.issues.filter((i) => i.severity === 'error');
   if (errors.length > 0) {
     const detail = errors.map((i) => `[${i.code}] ${i.message}`).join('；');
-    throw new Error(`Motion Card 布局校验失败：${detail}；请重新生成`);
+    throw new MotionCardValidationError(
+      `Motion Card 布局校验失败：${detail}；请重新生成`,
+      validation,
+    );
   }
+  return validation;
 }

@@ -1,17 +1,21 @@
-import { Film, PenLine, Upload } from 'lucide-react';
+import { Boxes, Clapperboard, Film, PenLine, Upload } from 'lucide-react';
 import { m, LayoutGroup } from 'framer-motion';
 import type { AppPage } from '../lib/electron-api';
 import { springs } from '../ui/lib/motion';
 import { Button } from '../ui';
 import styles from './WorkspaceTabs.module.css';
+import { useEffect, useState } from 'react';
+import type { ProjectData } from '../lib/project-persistence';
+import type { DirectorWorkflowStage } from '../types/director';
 
-type WorkspaceTab = 'script-workbench' | 'editor' | 'publish';
+type WorkspaceTab = 'script-workbench' | 'director-workbench' | 'editor' | 'asset-center' | 'publish';
 
 interface WorkspaceTabsProps {
   active: WorkspaceTab;
   onSwitch: (tab: WorkspaceTab) => void;
   /** script.md 整体进度：null 表示无稿件（隐藏圆环），50 = 已生成未审，100 = 审稿完成 */
   scriptProgress?: number | null;
+  projectDir?: string | null;
 }
 
 // SVG 进度圆环，r=5 circumference≈31.42
@@ -21,7 +25,7 @@ const RING_C = 2 * Math.PI * RING_R;
 function ScriptProgressRing({ progress }: { progress: number }) {
   const done = progress >= 100;
   const dashoffset = RING_C * (1 - progress / 100);
-  const color = done ? '#34d399' : 'var(--color-text-tertiary, #636366)';
+  const color = done ? 'var(--color-success)' : 'var(--color-text-tertiary, #636366)';
 
   return (
     <svg
@@ -60,7 +64,7 @@ function ScriptProgressRing({ progress }: { progress: number }) {
         <polyline
           points="4.5,7 6.2,8.8 9.5,5.5"
           fill="none"
-          stroke="#34d399"
+          stroke="var(--color-success)"
           strokeWidth="1.5"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -72,11 +76,14 @@ function ScriptProgressRing({ progress }: { progress: number }) {
 
 const tabs: { key: WorkspaceTab; label: string; icon: React.ReactNode; page: AppPage }[] = [
   { key: 'script-workbench', label: '写稿工作台', icon: <PenLine />, page: 'script-workbench' },
+  { key: 'director-workbench', label: '导演台', icon: <Clapperboard />, page: 'director-workbench' },
   { key: 'editor', label: '视频编辑器', icon: <Film />, page: 'editor' },
+  { key: 'asset-center', label: '资产', icon: <Boxes />, page: 'asset-center' },
   { key: 'publish', label: '发布', icon: <Upload />, page: 'publish' },
 ];
 
-export function WorkspaceTabs({ active, onSwitch, scriptProgress }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ active, onSwitch, scriptProgress, projectDir }: WorkspaceTabsProps) {
+  const directorStage = useDirectorTabStage(projectDir ?? null);
   return (
     <nav className={styles.root}>
       <LayoutGroup id="workspace-tabs">
@@ -111,6 +118,14 @@ export function WorkspaceTabs({ active, onSwitch, scriptProgress }: WorkspaceTab
                   {tab.key === 'script-workbench' && scriptProgress != null && (
                     <ScriptProgressRing progress={scriptProgress} />
                   )}
+                  {tab.key === 'director-workbench' && directorStage && (
+                    <span
+                      className={styles.statusDot}
+                      data-state={directorTabState(directorStage)}
+                      aria-label={directorTabLabel(directorStage)}
+                      title={directorTabLabel(directorStage)}
+                    />
+                  )}
                 </span>
               </Button>
             </span>
@@ -119,4 +134,40 @@ export function WorkspaceTabs({ active, onSwitch, scriptProgress }: WorkspaceTab
       </LayoutGroup>
     </nav>
   );
+}
+
+function useDirectorTabStage(projectDir: string | null): DirectorWorkflowStage | null {
+  const [stage, setStage] = useState<DirectorWorkflowStage | null>(null);
+  useEffect(() => {
+    let active = true;
+    setStage(null);
+    if (!projectDir || !window.electronAPI) return;
+    const refresh = () => void window.electronAPI.loadProject(projectDir)
+      .then((raw) => {
+        if (active) setStage((JSON.parse(raw) as ProjectData).production?.workflow.stage ?? null);
+      })
+      .catch(() => undefined);
+    refresh();
+    const off = window.electronAPI.onProjectUpdated?.((event) => {
+      if (event.projectPath === projectDir && event.sections.includes('production')) refresh();
+    });
+    return () => { active = false; off?.(); };
+  }, [projectDir]);
+  return stage;
+}
+
+function directorTabState(stage: DirectorWorkflowStage): 'active' | 'waiting' | 'error' | 'done' {
+  if (stage === 'error' || stage === 'quality-blocked') return 'error';
+  if (stage === 'director-review' || stage === 'animatic-review' || stage === 'production-paused') return 'waiting';
+  if (stage === 'complete') return 'done';
+  return 'active';
+}
+
+function directorTabLabel(stage: DirectorWorkflowStage): string {
+  if (stage === 'director-review') return '导演方案待批准';
+  if (stage === 'animatic-review') return 'Animatic 待确认';
+  if (stage === 'production-paused') return '制作已暂停';
+  if (stage === 'error' || stage === 'quality-blocked') return '导演台需要处理';
+  if (stage === 'complete') return '制作已完成';
+  return '导演流程进行中';
 }

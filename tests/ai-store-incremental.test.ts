@@ -21,6 +21,7 @@ function makeCard(segmentId: string, title = `card-${segmentId}`): AICard {
 
 describe('AI store — incremental analysis slice', () => {
   beforeEach(() => {
+    useAIStore.getState().clearAnalysis();
     useAIStore.getState().endIncrementalAnalysis();
   });
 
@@ -45,6 +46,26 @@ describe('AI store — incremental analysis slice', () => {
     ]);
   });
 
+  it('setPlannedAnalysisResult persists structure without cards', () => {
+    useAIStore.getState().setPlannedAnalysisResult({
+      segments: [
+        { id: 's1', title: 'First', summary: 'one', startMs: 0, endMs: 1000 },
+        { id: 's2', title: 'Second', summary: 'two', startMs: 1000, endMs: 2000 },
+      ],
+      coverPrompts: ['cover'],
+      summary: 'program summary',
+      keywords: ['alpha'],
+      globalPrompt: 'global',
+    });
+
+    const result = useAIStore.getState().analysisResult;
+    expect(result?.segments.map((segment) => segment.id)).toEqual(['s1', 's2']);
+    expect(result?.cards).toEqual([]);
+    expect(result?.summary).toBe('program summary');
+    expect(result?.keywords).toEqual(['alpha']);
+    expect(result?.globalPrompt).toBe('global');
+  });
+
   it('upsertAnalyzedCard keeps cards ordered by planned index even when arriving out of order', () => {
     useAIStore.getState().beginIncrementalAnalysis([
       { segmentId: 's1', title: 'First' },
@@ -61,6 +82,29 @@ describe('AI store — incremental analysis slice', () => {
     expect(inc.cards.map((c) => c.segmentId)).toEqual(['s1', 's2', 's3']);
     // matching skeletons removed; none left
     expect(inc.skeletons).toEqual([]);
+  });
+
+  it('upsertAnalyzedCard also merges streamed cards into the persisted analysis result', () => {
+    useAIStore.getState().setPlannedAnalysisResult({
+      segments: [
+        { id: 's1', title: 'First', summary: 'one', startMs: 0, endMs: 1000 },
+        { id: 's2', title: 'Second', summary: 'two', startMs: 1000, endMs: 2000 },
+      ],
+      coverPrompts: [],
+      summary: '',
+      keywords: [],
+    });
+    useAIStore.getState().beginIncrementalAnalysis([
+      { segmentId: 's1', title: 'First' },
+      { segmentId: 's2', title: 'Second' },
+    ]);
+
+    useAIStore.getState().upsertAnalyzedCard(makeCard('s2'));
+    useAIStore.getState().upsertAnalyzedCard(makeCard('s1'));
+
+    expect(
+      useAIStore.getState().analysisResult?.cards.map((card) => card.segmentId),
+    ).toEqual(['s1', 's2']);
   });
 
   it('upsertAnalyzedCard removes only the matching skeleton', () => {

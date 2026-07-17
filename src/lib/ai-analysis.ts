@@ -22,7 +22,13 @@ import {
   type MediaCardContent,
   type PromptBindingMap,
 } from '../types/ai';
-import type { MotionCardPayload } from '../types/motion';
+import type {
+  MotionBible,
+  MotionCardMechanicalValidation,
+  MotionCardPayload,
+  MotionCardProductionReport,
+  MotionCardValidationInput,
+} from '../types/motion';
 import { generateStructuredData, generateText } from './llm';
 import { resolvePromptBinding } from './llm/binding-resolver';
 import type { TelemetryHook } from './telemetry/auto-run';
@@ -35,6 +41,21 @@ import {
 import { getMotionStyleNotes, getMotionTokensBlock, getStyleFacetBlock, resolveStylePresetId } from './card-style';
 import { MOTION_KIT_API_DOC } from '../remotion/motion-kit';
 import { compileMotionSource } from './motion-compiler';
+import {
+  buildDeterministicMotionBible,
+  buildMotionBibleDirectiveBlock,
+  checkMotionBibleConsistency,
+  parseMotionBible,
+  validateMotionBible,
+} from './motion-bible';
+import { parseStoryboard } from './motion-storyboard';
+import { requiresVerifiedRealFootage } from './visual-authenticity';
+import type {
+  AssetGenerationRequest,
+  AssetResolutionResult,
+  CardAssetBinding,
+  StoryboardAssetRequest,
+} from '../types/assets';
 
 export type AnalyzeCardSubStage = 'start' | 'generating-image' | 'done' | 'failed';
 
@@ -77,6 +98,11 @@ export type GenerateCardImageFn = (
   args: GenerateCardImageInvocation,
 ) => Promise<MediaCardContent>;
 
+export type MotionCardValidationFn = (
+  tsx: string,
+  input?: MotionCardValidationInput,
+) => MotionCardMechanicalValidation | void | Promise<MotionCardMechanicalValidation | void>;
+
 /**
  * Motion Card 多 agent 生成上下文：ai-analysis 负责组装全部提示词素材（cue 契约、
  * 风格 facet、模板），以闭包形式交给主进程注入的 provider（pi 导演→雕刻→审查编排器）。
@@ -87,8 +113,12 @@ export interface MotionCardAgentContext {
   segmentTitle: string;
   /** 渲染 cards.animation 模板（导演的任务书）。 */
   buildDirectorPrompt: () => string;
-  /** 渲染 cards.segment 模板（雕刻师的任务书）；传入导演产出的 JSON 分镜。 */
-  buildCardPrompt: (animationDirection?: string) => string;
+  /** 渲染 cards.segment 模板（雕刻师的任务书）；传入导演产出的 JSON 分镜和已解析资产。 */
+  buildCardPrompt: (animationDirection?: string, assetBindings?: CardAssetBinding[]) => string;
+  /** 当前卡片 ID，用于把资产生成请求与 Motion Card 绑定。 */
+  sourceCardId?: string;
+  /** 导演分镜产出 assets 后，在雕刻师对话前解析/生成资产。 */
+  resolveAssets?: ResolveCardAssetsFn;
   /** 段内逐字稿（±2s 缓冲），供雕刻师忠实取材。 */
   segmentTranscript: string;
   /** 本段逐句字幕句数（与运行时 cues 数组长度一致），供 storyboard 校验 cue 越界。 */
@@ -97,10 +127,23 @@ export interface MotionCardAgentContext {
   presetMotionTokens?: string;
   /** 用户已有的动画指导草案；导演须把它当作创作约束。 */
   animationDirectionDraft?: string;
-  /** 精雕/重生成时的现有组件源码，导演据此做针对性诊断。 */
+  /** 为 true 时，合法 animationDirectionDraft 可直接复用并跳过导演；默认走导演重出。 */
+  reuseStoryboardDraft?: boolean;
+  /** 精雕时的现有组件源码，导演据此做针对性诊断；全新重生成不得传入。 */
   existingTsx?: string;
-  /** 冒烟渲染校验（assertCardRenders）；抛错触发编排器内修复循环。 */
-  validate?: (tsx: string) => void | Promise<void>;
+  /** 当前 segment 的 Motion Bible 摘要块，供审查员核对整片一致性。 */
+  motionBible?: string;
+  /** 自动模式只接受安全布局；导演模式在质量错误未解决时阻断工作流。 */
+  qualityMode?: 'auto' | 'director';
+  /** 真实字幕窗口与时长；编排器据此构造 TimingPlan 和逐拍探针帧。 */
+  timingInput?: {
+    srt: SrtEntry[];
+    startMs: number;
+    durationMs: number;
+    fps: number;
+  };
+  /** 机械渲染校验；返回 layout issues，error 会触发编排器内修复循环。 */
+  validate?: MotionCardValidationFn;
   label?: string;
   telemetry?: TelemetryHook;
 }
@@ -109,11 +152,21 @@ export interface MotionCardAgentResult {
   tsx: string;
   /** 导演最终采用的 JSON 分镜（回写 card.animationDirection，Inspector 可见可改）。 */
   animationDirection?: string;
+  /** 导演资产请求解析后的可用绑定；供渲染层植入。 */
+  assetBindings?: CardAssetBinding[];
+  /** 生成期制作质检报告（lint / 渲染 / 审查 / 兜底状态汇总）。 */
+  productionReport?: MotionCardProductionReport;
 }
 
 export type MotionCardAgentProvider = (
   ctx: MotionCardAgentContext,
 ) => Promise<MotionCardAgentResult>;
+
+export type ResolveCardAssetsFn = (args: {
+  requests: StoryboardAssetRequest[];
+  sourceCardId: string;
+  signal?: AbortSignal;
+}) => Promise<AssetResolutionResult>;
 
 interface AnalyzeSrtOptions {
   maxTokens?: number;
@@ -121,8 +174,10 @@ interface AnalyzeSrtOptions {
   generateText?: typeof generateText;
   /** Motion Card 多 agent 生成器（pi 导演→雕刻→审查）；motion 段必需，仅主进程注入。 */
   generateMotionCard?: MotionCardAgentProvider;
+  /** Motion Card 资产需求解析器：匹配已有资产，缺失写入待生成队列。 */
+  resolveCardAssets?: ResolveCardAssetsFn;
   /** 生成期 Motion Card 冒烟渲染校验；抛错触发重生成。仅主进程注入。 */
-  validateMotionSource?: (tsx: string) => void | Promise<void>;
+  validateMotionSource?: MotionCardValidationFn;
   generateCardImage?: GenerateCardImageFn;
   globalPrompt?: string;
   /** 项目级视觉风格预设 ID；注入各 build 函数的 styleSystemBlock。 */
@@ -130,11 +185,15 @@ interface AnalyzeSrtOptions {
   /** 全局默认视觉风格预设 ID；优先级低于项目级。 */
   defaultStylePresetId?: string;
   planningTemplate?: PromptTemplate;
+  /** 可编辑的导演制作规则；程序化注入 planning 与 motion bible，不依赖模板占位符。 */
+  directorTemplate?: PromptTemplate;
   cardTemplate?: PromptTemplate;
   imageTemplate?: PromptTemplate;
   /** cover.regeneration 模板；提供则一键流水线会在 planning 完成后单独跑一轮
    * 封面提示词生成（COVER_REGENERATION 视觉系统），覆盖 planning 内置的 coverPrompts。 */
   coverTemplate?: PromptTemplate;
+  /** motion.bible 模板；planning 后、单卡生成前生成整片 Motion Bible。 */
+  motionBibleTemplate?: PromptTemplate;
   /** cards.animation 模板（导演任务书）；缺省回退内置默认。 */
   animationTemplate?: PromptTemplate;
   projectBindings?: PromptBindingMap | null;
@@ -164,8 +223,9 @@ interface RegenerateCardOptions {
   generateText?: typeof generateText;
   /** Motion Card 多 agent 生成器；motion 卡必需，仅主进程注入。 */
   generateMotionCard?: MotionCardAgentProvider;
+  resolveCardAssets?: ResolveCardAssetsFn;
   /** 生成期 Motion Card 冒烟渲染校验；抛错触发重生成。仅主进程注入。 */
-  validateMotionSource?: (tsx: string) => void | Promise<void>;
+  validateMotionSource?: MotionCardValidationFn;
   globalPrompt?: string;
   projectStylePresetId?: string;
   defaultStylePresetId?: string;
@@ -176,8 +236,13 @@ interface RegenerateCardOptions {
   imageTemplate?: PromptTemplate;
   /** cards.animation 模板（动画指导）；缺省回退内置默认。 */
   animationTemplate?: PromptTemplate;
-  /** 手动传入的分镜（storyboard）；缺省沿用既有卡片的 animationDirection。 */
+  motionBible?: MotionBible;
+  /** 精雕时手动传入的分镜（storyboard）；普通重生成不会沿用既有分镜。 */
   animationDirection?: string;
+  /** 为 true 时，合法 animationDirection 可作为最终分镜直接复用；详情页重生成默认 false。 */
+  reuseStoryboardDraft?: boolean;
+  /** 精雕模式才参考旧分镜、旧 TSX 与旧卡片摘要；普通重生成默认从空白创作。 */
+  refineExistingMotion?: boolean;
   projectBindings?: PromptBindingMap | null;
 }
 
@@ -219,9 +284,9 @@ export interface SegmentPlanningResult {
   globalPrompt?: string;
 }
 
-const TARGET_PLANNED_SEGMENT_DURATION_MS = 40_000;
-const MAX_PLANNED_SEGMENT_DURATION_MS = 60_000;
-const MIN_PLANNED_SPLIT_DURATION_MS = 18_000;
+const TARGET_PLANNED_SEGMENT_DURATION_MS = 6_000;
+const MAX_PLANNED_SEGMENT_DURATION_MS = 10_000;
+const MIN_PLANNED_SPLIT_DURATION_MS = 3_500;
 const MAX_SEGMENT_EXCERPT_CHARS = 220;
 
 function msToTimestamp(ms: number): string {
@@ -292,6 +357,14 @@ function buildMotionCardPayloadStrict(
   };
 }
 
+function hashMotionSource(source: string): string {
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = (hash * 31 + source.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
 function normalizeSemanticType(value: unknown): AISegmentSemanticType {
   return value === 'data' ||
     value === 'explanation' ||
@@ -347,31 +420,44 @@ function normalizeSegment(rawSegment: unknown, index: number): AISegmentAnalysis
     return null;
   }
 
+  const title =
+    typeof candidate.title === 'string' && candidate.title.trim()
+      ? candidate.title.trim()
+      : `段落 ${index + 1}`;
+  const summary =
+    typeof candidate.summary === 'string' && candidate.summary.trim()
+      ? candidate.summary.trim()
+      : `段落 ${index + 1}`;
+  const transcriptExcerpt =
+    typeof candidate.transcriptExcerpt === 'string' && candidate.transcriptExcerpt.trim()
+      ? candidate.transcriptExcerpt.trim()
+      : undefined;
+  const keywords = normalizeStringArray(candidate.keywords);
+  const entities = normalizeStringArray(candidate.entities);
+  const requiresRealFootage = requiresVerifiedRealFootage({
+    title,
+    summary,
+    transcriptExcerpt,
+    keywords,
+    entities,
+  });
+
   return {
     id: typeof candidate.id === 'string' && candidate.id.trim() ? candidate.id.trim() : `segment-${index + 1}`,
-    title:
-      typeof candidate.title === 'string' && candidate.title.trim()
-        ? candidate.title.trim()
-        : `段落 ${index + 1}`,
-    summary:
-      typeof candidate.summary === 'string' && candidate.summary.trim()
-        ? candidate.summary.trim()
-        : `段落 ${index + 1}`,
+    title,
+    summary,
     startMs,
     endMs,
-    transcriptExcerpt:
-      typeof candidate.transcriptExcerpt === 'string' && candidate.transcriptExcerpt.trim()
-        ? candidate.transcriptExcerpt.trim()
-        : undefined,
+    transcriptExcerpt,
     semanticType: normalizeSemanticType(candidate.semanticType),
     complexityLevel: normalizeComplexityLevel(candidate.complexityLevel),
     visualizationScore: Number.isFinite(candidate.visualizationScore)
       ? Math.max(0, Math.min(100, Number(candidate.visualizationScore)))
       : 50,
     pacingNeed: normalizePacingNeed(candidate.pacingNeed),
-    keywords: normalizeStringArray(candidate.keywords),
-    entities: normalizeStringArray(candidate.entities),
-    visualType: normalizeVisualType(candidate.visualType),
+    keywords,
+    entities,
+    visualType: requiresRealFootage ? 'motion' : normalizeVisualType(candidate.visualType),
   };
 }
 
@@ -453,8 +539,10 @@ function buildMotionCardShell(params: {
   currentCard?: AICard;
   content?: string;
   animationDirection?: string;
+  productionReport?: MotionCardProductionReport;
+  assetBindings?: CardAssetBinding[];
 }): AICard {
-  const { segment, tsx, cardPrompt, currentCard, content, animationDirection } = params;
+  const { segment, tsx, cardPrompt, currentCard, content, animationDirection, productionReport, assetBindings } = params;
   // 沿用既有卡片的语义类型（重生成保持一致）；新卡片默认 'motion'。image/video 不属于 motion 流程。
   const type: AICardType =
     currentCard && currentCard.type !== 'image' && currentCard.type !== 'video'
@@ -464,6 +552,27 @@ function buildMotionCardShell(params: {
     currentCard?.displayMode === 'pip' ? 'pip' : 'fullscreen';
   const title = currentCard?.title?.trim() || segment.title?.trim() || `卡片 ${segment.id}`;
   const motionCard = buildMotionCardPayloadStrict({ tsx }, cardPrompt?.trim() ?? '');
+  const storyboard = parseStoryboard(animationDirection ?? '');
+  const assetRequests = storyboard?.assets;
+  if (storyboard) {
+    motionCard.storyboard = storyboard;
+  }
+  const previousStoryboard = currentCard?.motionCard?.storyboard ?? parseStoryboard(currentCard?.animationDirection ?? '');
+  const previousTsx = currentCard?.motionCard?.tsx;
+  if (previousStoryboard || previousTsx) {
+    motionCard.storyboardHistory = [
+      ...(currentCard?.motionCard?.storyboardHistory ?? []),
+      {
+        savedAt: Date.now(),
+        storyboard: previousStoryboard ?? undefined,
+        tsx: previousTsx,
+        tsxHash: previousTsx ? hashMotionSource(previousTsx) : undefined,
+      },
+    ].slice(-8);
+  }
+  if (productionReport) {
+    motionCard.productionReport = productionReport;
+  }
 
   return {
     id: currentCard?.id ?? `${segment.id}-card-1`,
@@ -479,6 +588,8 @@ function buildMotionCardShell(params: {
     style: currentCard?.style ?? getDefaultCardStyle(type),
     cardPrompt: cardPrompt?.trim() || currentCard?.cardPrompt,
     animationDirection: animationDirection?.trim() || undefined,
+    assetRequests,
+    assetBindings: assetBindings?.length ? assetBindings : currentCard?.assetBindings,
     content: content ?? '',
     renderMode: 'motion-card',
     motionCard,
@@ -934,13 +1045,24 @@ function buildProgramContext(params: {
 export function buildSegmentPlanningPrompt(
   globalPrompt?: string,
   template?: PromptTemplate,
+  directorTemplate?: PromptTemplate,
 ): string {
   const tpl = template ?? getBuiltinPromptTemplate('planning.segment');
   const trimmed = globalPrompt?.trim();
   const globalPromptLine = trimmed ? `额外创作要求：${trimmed}` : '';
-  return renderUserPromptWithLock('planning.segment', tpl, {
+  const promptWithDirectorRules = {
+    ...tpl,
+    user: `${tpl.user}${buildDirectorRulesBlock(directorTemplate)}`,
+  };
+  return renderUserPromptWithLock('planning.segment', promptWithDirectorRules, {
     globalPromptLine,
   });
+}
+
+function buildDirectorRulesBlock(template?: PromptTemplate): string {
+  const rules = (template ?? getBuiltinPromptTemplate('production.director')).user.trim();
+  if (!rules) return '';
+  return `\n\n【可配置导演制作规则】\n${rules}`;
 }
 
 export function buildCoverPromptRegenerationPrompt(
@@ -963,6 +1085,86 @@ export function buildCoverPromptRegenerationPrompt(
   });
 }
 
+export function buildMotionBiblePrompt(
+  planning: Pick<SegmentPlanningResult, 'segments' | 'summary' | 'keywords' | 'globalPrompt'>,
+  template?: PromptTemplate,
+  directorTemplate?: PromptTemplate,
+): string {
+  const tpl = template ?? getBuiltinPromptTemplate('motion.bible');
+  const segments = planning.segments.map((segment, index) => ({
+    index,
+    id: segment.id,
+    title: segment.title,
+    summary: segment.summary,
+    semanticType: segment.semanticType,
+    complexityLevel: segment.complexityLevel,
+    pacingNeed: segment.pacingNeed,
+    visualType: segment.visualType ?? 'motion',
+    keywords: segment.keywords,
+  }));
+  const promptWithDirectorRules = {
+    ...tpl,
+    user: `${tpl.user}${buildDirectorRulesBlock(directorTemplate)}`,
+  };
+  return renderUserPromptWithLock('motion.bible', promptWithDirectorRules, {
+    globalPrompt: truncatePromptValue(planning.globalPrompt ?? '', 240) || '无',
+    programSummary: truncatePromptValue(planning.summary, 240) || '无',
+    keywords: planning.keywords.length > 0 ? planning.keywords.join('、') : '无',
+    segments: JSON.stringify(segments, null, 2),
+  });
+}
+
+export async function generateMotionBible(
+  planning: Pick<SegmentPlanningResult, 'segments' | 'summary' | 'keywords' | 'globalPrompt'>,
+  settings: AISettings,
+  options: {
+    generateStructuredData?: typeof generateStructuredData;
+    motionBibleTemplate?: PromptTemplate;
+    directorTemplate?: PromptTemplate;
+    projectBindings?: PromptBindingMap | null;
+    telemetry?: TelemetryHook;
+  } = {},
+): Promise<MotionBible> {
+  const {
+    generateStructuredData: requestStructuredData = generateStructuredData,
+    motionBibleTemplate,
+    directorTemplate,
+    projectBindings,
+    telemetry,
+  } = options;
+  const fallback = (warning: string): MotionBible =>
+    buildDeterministicMotionBible({
+      summary: planning.summary,
+      keywords: planning.keywords,
+      segments: planning.segments,
+      warning,
+    });
+
+  try {
+    const binding = maybeResolveBinding('motion.bible', settings, projectBindings);
+    const payload = await requestStructuredData(
+      settings,
+      buildMotionBiblePrompt(planning, motionBibleTemplate, directorTemplate),
+      '',
+      binding,
+      { label: 'motion.bible', telemetry },
+    );
+    const bible = parseMotionBible(payload, planning.segments);
+    if (!bible) return fallback('motion.bible 返回内容无法解析，已使用 deterministic bible。');
+    const issues = validateMotionBible(bible, planning.segments);
+    const errors = issues.filter((issue) => issue.severity === 'error');
+    if (errors.length > 0) {
+      return fallback(`motion.bible schema 校验失败：${errors.map((issue) => issue.message).join('；')}`);
+    }
+    return {
+      ...bible,
+      warnings: issues.length > 0 ? [...(bible.warnings ?? []), ...issues] : bible.warnings,
+    };
+  } catch (err) {
+    return fallback(`motion.bible 生成失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function buildSegmentCardPrompt(
   params: {
     programContext: string;
@@ -978,6 +1180,9 @@ export function buildSegmentCardPrompt(
     segmentCues?: string;
     /** cards.animation 产出的 JSON 分镜，注入 {{animationDirection}} 指导出卡。 */
     animationDirection?: string;
+    /** 已解析并可供外部资产层植入的素材绑定。 */
+    assetBindings?: CardAssetBinding[];
+    motionBible?: MotionBible;
   },
   template?: PromptTemplate,
 ): string {
@@ -993,6 +1198,8 @@ export function buildSegmentCardPrompt(
     stylePresetId,
     segmentCues,
     animationDirection,
+    assetBindings,
+    motionBible,
   } = params;
   const tpl = template ?? getBuiltinPromptTemplate('cards.segment');
 
@@ -1013,6 +1220,26 @@ export function buildSegmentCardPrompt(
       ].join('\n')
     : '当前卡片线索：无';
 
+  const assetContext = assetBindings?.length
+    ? [
+        '已解析资产（外部资产层会按 slot 植入；组件内不要重复手画这些物件）：',
+        ...assetBindings.map((binding, index) => {
+          const placement = binding.placement;
+          const request = binding.request;
+          return [
+            `${index + 1}. slot=${binding.slot}`,
+            `assetId=${binding.assetId}`,
+            `role=${request?.role ?? 'object'}`,
+            `query=${request?.query ?? binding.slot}`,
+            `importance=${request?.importance ?? 'secondary'}`,
+            `placementHint=${request?.placementHint ?? '无'}`,
+            `suggestedPlacement=x:${placement.x}, y:${placement.y}, width:${placement.width}, depth:${placement.depth ?? 'midground'}`,
+          ].join('；');
+        }),
+        '布局要求：信息图层需要为这些资产预留呼吸空间，通过留白、压暗、让位或视线方向与资产呼应；不要用 TSX 重新绘制同一物件。',
+      ].join('\n')
+    : '已解析资产：无。';
+
   return renderUserPromptWithLock('cards.segment', tpl, {
     globalPrompt: truncatePromptValue(globalPrompt ?? '', 240) || '无',
     programSummary: truncatePromptValue(programSummary ?? '', 180) || '无',
@@ -1027,6 +1254,8 @@ export function buildSegmentCardPrompt(
     cardPrompt: truncatePromptValue(cardPrompt ?? '', 240) || '无',
     // JSON 分镜（storyboard）；上限放宽到 4000 保证结构完整，不截断 JSON。
     animationDirection: truncatePromptValue(animationDirection ?? '', 4000) || '无',
+    assetContext,
+    motionBible: buildMotionBibleDirectiveBlock(motionBible, segment.id),
     currentCardSection,
     programContext,
     segmentVisualType: visualType ?? 'motion',
@@ -1051,10 +1280,11 @@ export function buildAnimationDirectionPrompt(
     keywords?: string[];
     cardPrompt?: string;
     segmentCues?: string;
+    motionBible?: MotionBible;
   },
   template?: PromptTemplate,
 ): string {
-  const { segment, globalPrompt, programSummary, keywords = [], cardPrompt, segmentCues } = params;
+  const { segment, globalPrompt, programSummary, keywords = [], cardPrompt, segmentCues, motionBible } = params;
   const tpl = template ?? getBuiltinPromptTemplate('cards.animation');
   return renderUserPromptWithLock('cards.animation', tpl, {
     globalPrompt: truncatePromptValue(globalPrompt ?? '', 240) || '无',
@@ -1068,6 +1298,7 @@ export function buildAnimationDirectionPrompt(
     segmentTranscriptExcerpt: truncatePromptValue(segment.transcriptExcerpt ?? '', 260) || '无',
     segmentCues: segmentCues?.trim() ? segmentCues : '  （无逐句字幕节拍可用）',
     cardPrompt: truncatePromptValue(cardPrompt ?? '', 240) || '无',
+    motionBible: buildMotionBibleDirectiveBlock(motionBible, segment.id),
   });
 }
 
@@ -1084,10 +1315,11 @@ export async function generateAnimationDirection(
     generateText?: typeof generateText;
     cardPrompt?: string;
     animationTemplate?: PromptTemplate;
+    motionBible?: MotionBible;
     projectBindings?: PromptBindingMap | null;
   } = {},
 ): Promise<string> {
-  const { generateText: requestText = generateText, cardPrompt, animationTemplate, projectBindings } = options;
+  const { generateText: requestText = generateText, cardPrompt, animationTemplate, motionBible, projectBindings } = options;
   const binding = maybeResolveBinding('cards.animation', settings, projectBindings);
   const userMessage = buildAnimationDirectionPrompt(
     {
@@ -1097,6 +1329,7 @@ export async function generateAnimationDirection(
       keywords: planning.keywords,
       cardPrompt,
       segmentCues: buildSegmentCuesBlock(entries, segment.startMs, segment.endMs),
+      motionBible,
     },
     animationTemplate,
   );
@@ -1250,6 +1483,7 @@ export async function planTranscriptSegments(
     generateStructuredData: requestStructuredData = generateStructuredData,
     globalPrompt,
     planningTemplate,
+    directorTemplate,
     projectBindings,
     telemetry,
   } = options;
@@ -1261,7 +1495,7 @@ export async function planTranscriptSegments(
   const binding = maybeResolveBinding('planning.segment', settings, projectBindings);
   const payload = await requestStructuredData(
     settings,
-    buildSegmentPlanningPrompt(globalPrompt, planningTemplate),
+    buildSegmentPlanningPrompt(globalPrompt, planningTemplate, directorTemplate),
     buildSrtText(entries),
     binding,
     { label: 'planning.segment', telemetry },
@@ -1308,8 +1542,9 @@ export async function generateCardForSegment(
     generateText?: typeof generateText;
     /** Motion Card 多 agent 生成器（pi 导演→雕刻→审查）；motion 段必需，仅主进程注入。 */
     generateMotionCard?: MotionCardAgentProvider;
+    resolveCardAssets?: ResolveCardAssetsFn;
     /** 生成期 Motion Card 冒烟渲染校验；抛错触发重生成。仅主进程注入（需 esbuild/react-dom）。 */
-    validateMotionSource?: (tsx: string) => void | Promise<void>;
+    validateMotionSource?: MotionCardValidationFn;
     globalPrompt?: string;
     /** 已解析的视觉风格预设 ID（含单卡 / 项目 / 全局优先级）；注入 build 函数的 styleSystemBlock。 */
     stylePresetId?: string;
@@ -1319,6 +1554,7 @@ export async function generateCardForSegment(
     imageTemplate?: PromptTemplate;
     /** cards.animation 模板（动画指导）；缺省回退内置默认。 */
     animationTemplate?: PromptTemplate;
+    motionBible?: MotionBible;
     /** 手动传入的分镜草案；作为导演的创作约束（导演仍会产出合法 storyboard）。 */
     animationDirection?: string;
     projectBindings?: PromptBindingMap | null;
@@ -1327,6 +1563,10 @@ export async function generateCardForSegment(
     prevSegment?: AISegment;
     nextSegment?: AISegment;
     visualType?: AISegmentVisualType;
+    reuseStoryboardDraft?: boolean;
+    /** 仅精雕模式开启：把现有 Motion Card 作为 Agent 上下文。 */
+    refineExistingMotion?: boolean;
+    qualityMode?: 'auto' | 'director';
     telemetry?: TelemetryHook;
   } = {},
 ): Promise<AICard> {
@@ -1334,6 +1574,7 @@ export async function generateCardForSegment(
     generateStructuredData: requestStructuredData = generateStructuredData,
     generateText: requestText = generateText,
     generateMotionCard,
+    resolveCardAssets,
     validateMotionSource,
     globalPrompt,
     stylePresetId,
@@ -1342,6 +1583,7 @@ export async function generateCardForSegment(
     cardTemplate,
     imageTemplate,
     animationTemplate,
+    motionBible,
     animationDirection,
     projectBindings,
     segmentIndex,
@@ -1349,6 +1591,9 @@ export async function generateCardForSegment(
     prevSegment,
     nextSegment,
     visualType,
+    reuseStoryboardDraft,
+    refineExistingMotion = false,
+    qualityMode = 'auto',
     telemetry,
   } = options;
 
@@ -1393,9 +1638,12 @@ export async function generateCardForSegment(
         ? `cards.segment#${segmentIndex + 1}/${totalSegments}（${segment.id}）`
         : `cards.segment（${segment.id}）`;
 
+    const sourceCardId = currentCard?.id ?? `${segment.id}-card-1`;
     const generated = await generateMotionCard({
       segmentId: segment.id,
       segmentTitle: segment.title,
+      sourceCardId,
+      resolveAssets: resolveCardAssets,
       buildDirectorPrompt: () =>
         buildAnimationDirectionPrompt(
           {
@@ -1405,10 +1653,11 @@ export async function generateCardForSegment(
             keywords: planning.keywords,
             cardPrompt,
             segmentCues,
+            motionBible,
           },
           animationTemplate,
         ),
-      buildCardPrompt: (direction) =>
+      buildCardPrompt: (direction, assetBindings) =>
         buildSegmentCardPrompt(
           {
             programContext,
@@ -1416,12 +1665,14 @@ export async function generateCardForSegment(
             globalPrompt: globalPrompt?.trim() || planning.globalPrompt,
             stylePresetId,
             cardPrompt,
-            currentCard,
+            currentCard: refineExistingMotion ? currentCard : undefined,
             programSummary: planning.summary,
             keywords: planning.keywords,
             visualType,
             segmentCues,
             animationDirection: direction,
+            assetBindings,
+            motionBible,
           },
           cardTemplate,
         ),
@@ -1429,7 +1680,16 @@ export async function generateCardForSegment(
       cueCount: entries.filter((e) => e.startMs >= segment.startMs && e.startMs < segment.endMs).length,
       presetMotionTokens: getMotionTokensBlock(stylePresetId),
       animationDirectionDraft: animationDirection?.trim() || undefined,
-      existingTsx: currentCard?.motionCard?.tsx || undefined,
+      reuseStoryboardDraft,
+      existingTsx: refineExistingMotion ? currentCard?.motionCard?.tsx || undefined : undefined,
+      motionBible: buildMotionBibleDirectiveBlock(motionBible, segment.id),
+      qualityMode,
+      timingInput: {
+        srt: entries,
+        startMs: segment.startMs,
+        durationMs: Math.max(1, segment.endMs - segment.startMs),
+        fps: 30,
+      },
       validate: validateMotionSource,
       label: positionLabel,
       telemetry,
@@ -1437,13 +1697,23 @@ export async function generateCardForSegment(
 
     // 文案忠于字幕：content 用本段字幕原文（无字幕时退回段落摘要），杜绝 AI 改写丢字。
     const verbatim = buildPlainTranscriptRange(entries, segment.startMs, segment.endMs);
+    const generatedDirection = generated.animationDirection?.trim() || animationDirection?.trim() || undefined;
+    const storyboard = parseStoryboard(generatedDirection ?? '');
+    const assetResolution = !generated.assetBindings?.length && storyboard?.assets?.length && resolveCardAssets
+      ? await resolveCardAssets({
+          requests: storyboard.assets,
+          sourceCardId,
+        })
+      : null;
     finalCard = buildMotionCardShell({
       segment,
       tsx: generated.tsx,
       cardPrompt,
       currentCard,
       content: verbatim || segment.summary,
-      animationDirection: generated.animationDirection?.trim() || animationDirection?.trim() || undefined,
+      animationDirection: generatedDirection,
+      productionReport: generated.productionReport,
+      assetBindings: generated.assetBindings?.length ? generated.assetBindings : assetResolution?.bindings,
     });
   }
 
@@ -1517,15 +1787,18 @@ export async function analyzeSrt(
     generateStructuredData: requestStructuredData = generateStructuredData,
     generateText: requestText = generateText,
     generateMotionCard,
+    resolveCardAssets,
     validateMotionSource,
     generateCardImage,
     globalPrompt,
     projectStylePresetId,
     defaultStylePresetId,
     planningTemplate,
+    directorTemplate,
     cardTemplate,
     imageTemplate,
     coverTemplate,
+    motionBibleTemplate,
     animationTemplate,
     projectBindings,
     onProgress,
@@ -1553,6 +1826,7 @@ export async function analyzeSrt(
       generateStructuredData: requestStructuredData,
       globalPrompt,
       planningTemplate,
+      directorTemplate,
       projectBindings,
       telemetry,
     });
@@ -1581,6 +1855,23 @@ export async function analyzeSrt(
   } catch {
     // 回调出错不影响卡片生成
   }
+
+  const motionBibleStart = Date.now();
+  telemetry?.emit('stage.start', { stage: 'analyze.motion-bible', totalSegments: planning.segments.length });
+  const motionBible = await generateMotionBible(planning, settings, {
+    generateStructuredData: requestStructuredData,
+    motionBibleTemplate,
+    directorTemplate,
+    projectBindings,
+    telemetry,
+  });
+  telemetry?.emit('stage.end', {
+    stage: 'analyze.motion-bible',
+    durationMs: Date.now() - motionBibleStart,
+    ok: true,
+    fallbackUsed: motionBible.fallbackUsed === true,
+    warnings: motionBible.warnings?.length ?? 0,
+  });
 
   // 作品标题：planning 一完成就并行生成，赶在下方 cover.regeneration 调用前就绪。
   const workTitlePromise: Promise<string | null> = generateWorkTitle
@@ -1686,12 +1977,14 @@ export async function analyzeSrt(
           generateStructuredData: requestStructuredData,
           generateText: requestText,
           generateMotionCard,
+          resolveCardAssets,
           validateMotionSource,
           globalPrompt: planning.globalPrompt,
           stylePresetId: resolvedStylePresetId,
           cardTemplate,
           imageTemplate,
           animationTemplate,
+          motionBible,
           projectBindings,
           segmentIndex: i,
           totalSegments: total,
@@ -1802,6 +2095,10 @@ export async function analyzeSrt(
     totalSegments: total,
   });
   const cards: AICard[] = cardSlots.filter((card): card is AICard => card !== null);
+  const motionBibleWarnings = checkMotionBibleConsistency(cards, motionBible);
+  const finalMotionBible: MotionBible = motionBibleWarnings.length > 0
+    ? { ...motionBible, warnings: [...(motionBible.warnings ?? []), ...motionBibleWarnings] }
+    : motionBible;
 
   // 等待并行启动的 cover.regeneration LLM 调用收尾，
   // 让返回的 AIAnalysisResult.coverPrompts 优先反映 COVER_REGENERATION 产物。
@@ -1825,6 +2122,7 @@ export async function analyzeSrt(
     summary: planning.summary,
     keywords: planning.keywords,
     globalPrompt: planning.globalPrompt,
+    motionBible: finalMotionBible,
     cardErrors: cardErrors.length > 0 ? cardErrors : undefined,
   };
 }
@@ -1840,6 +2138,7 @@ export async function regenerateAICard(
     generateStructuredData: requestStructuredData = generateStructuredData,
     generateText: requestText = generateText,
     generateMotionCard,
+    resolveCardAssets,
     validateMotionSource,
     globalPrompt,
     projectStylePresetId,
@@ -1850,7 +2149,10 @@ export async function regenerateAICard(
     cardTemplate,
     imageTemplate,
     animationTemplate,
+    motionBible,
     animationDirection = card.animationDirection,
+    reuseStoryboardDraft = false,
+    refineExistingMotion = false,
     projectBindings,
   } = options;
 
@@ -1878,6 +2180,7 @@ export async function regenerateAICard(
       generateStructuredData: requestStructuredData,
       generateText: requestText,
       generateMotionCard,
+      resolveCardAssets,
       validateMotionSource,
       globalPrompt,
       stylePresetId: resolvedStylePresetId,
@@ -1886,7 +2189,10 @@ export async function regenerateAICard(
       cardTemplate,
       imageTemplate,
       animationTemplate,
-      animationDirection,
+      motionBible,
+      animationDirection: refineExistingMotion ? animationDirection : undefined,
+      reuseStoryboardDraft,
+      refineExistingMotion,
       projectBindings,
     },
   );
@@ -1938,6 +2244,7 @@ export async function generateSingleCardFromSubtitles(
     imageTemplate?: PromptTemplate;
     /** cards.animation 模板（导演任务书）；缺省回退内置默认。 */
     animationTemplate?: PromptTemplate;
+    motionBible?: MotionBible;
     /** 用户已有的动画指导草案（可选，导演当作约束）。 */
     animationDirection?: string;
     projectBindings?: PromptBindingMap | null;
@@ -1945,8 +2252,9 @@ export async function generateSingleCardFromSubtitles(
     generateText?: typeof generateText;
     /** Motion Card 多 agent 生成器；motion 卡必需，仅主进程注入。 */
     generateMotionCard?: MotionCardAgentProvider;
+    resolveCardAssets?: ResolveCardAssetsFn;
     /** 生成期 Motion Card 冒烟渲染校验；抛错触发重生成。仅主进程注入。 */
-    validateMotionSource?: (tsx: string) => void | Promise<void>;
+    validateMotionSource?: MotionCardValidationFn;
   } = {},
 ): Promise<AICard> {
   const trimmedText = draft.text.trim();
@@ -1972,11 +2280,13 @@ export async function generateSingleCardFromSubtitles(
     cardTemplate,
     imageTemplate,
     animationTemplate,
+    motionBible,
     animationDirection,
     projectBindings,
     generateStructuredData: requestStructuredData,
     generateText: requestText,
     generateMotionCard,
+    resolveCardAssets,
     validateMotionSource,
   } = options;
 
@@ -2012,6 +2322,7 @@ export async function generateSingleCardFromSubtitles(
       generateStructuredData: requestStructuredData,
       generateText: requestText,
       generateMotionCard,
+      resolveCardAssets,
       validateMotionSource,
       globalPrompt,
       // 手动选段是新卡片，无单卡覆盖；按 项目 → 全局 → 内置默认 解析。
@@ -2023,6 +2334,7 @@ export async function generateSingleCardFromSubtitles(
       cardTemplate,
       imageTemplate,
       animationTemplate,
+      motionBible,
       animationDirection,
       projectBindings,
     },

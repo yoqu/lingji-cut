@@ -58,7 +58,7 @@ function PreviewPanelComponent({
   onPreviewPause,
   onPreviewEnded,
 }: PreviewPanelProps) {
-  const { timeline, srtEntries } = useTimelineStore();
+  const { timeline, srtEntries, podcastRevision } = useTimelineStore();
   const projectDir = useAIStore((s) => s.currentProjectDir);
   const fps = timeline.fps || 30;
   const cardRef = useRef<HTMLDivElement>(null);
@@ -439,11 +439,12 @@ function PreviewPanelComponent({
             />
           ) : (
             <RemotionPreviewPlayer
-              key={timeline.podcast.audioPath || 'empty'}
+              key={`${timeline.podcast.audioPath || 'empty'}:${podcastRevision}`}
               ref={playerRef}
               timeline={timeline}
               srtEntries={srtEntries}
               projectDir={projectDir}
+              podcastRevision={podcastRevision}
               currentTimeMs={currentTimeMs}
               isPlaying={isPlaying}
               onTimeUpdate={onPreviewTimeUpdate}

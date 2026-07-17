@@ -54,7 +54,7 @@ class VirtualCursorWidget extends WidgetType {
 
     const label = document.createElement('span');
     label.className = 'cm-virtual-cursor-label';
-    label.textContent = this.mode === 'review' ? '🔍' : '🤖';
+    label.textContent = 'AI';
 
     wrapper.appendChild(label);
     wrapper.appendChild(cursor);
@@ -119,34 +119,33 @@ const virtualCursorTheme = EditorView.baseTheme({
     left: '-4px',
     fontSize: '10px',
     lineHeight: '1',
+    fontWeight: '600',
+    letterSpacing: '0',
+    color: 'var(--color-system-blue, #0A84FF)',
     pointerEvents: 'none',
     userSelect: 'none',
   },
-  // 生成模式：紫色
-  '.cm-virtual-cursor-generate .cm-virtual-cursor-line': {
+  // 生成与审查共用系统蓝，行为差异由阶段文案和内容反馈表达。
+  '.cm-virtual-cursor-generate .cm-virtual-cursor-line, .cm-virtual-cursor-review .cm-virtual-cursor-line': {
     display: 'inline-block',
     width: '2px',
     height: '1.2em',
-    backgroundColor: '#a78bfa',
+    backgroundColor: 'var(--color-system-blue, #0A84FF)',
     verticalAlign: 'text-bottom',
     animation: 'cm-vc-blink 1s step-end infinite',
-  },
-  // 审稿模式：绿色
-  '.cm-virtual-cursor-review .cm-virtual-cursor-line': {
-    display: 'inline-block',
-    width: '2px',
-    height: '1.2em',
-    backgroundColor: '#34d399',
-    verticalAlign: 'text-bottom',
-    animation: 'cm-vc-blink 0.8s step-end infinite',
   },
   '@keyframes cm-vc-blink': {
     '50%': { opacity: '0' },
   },
-  // 审稿扫描行高亮
+  // 审稿定位使用同一系统蓝的低对比行提示。
   '.cm-review-scan-line': {
-    backgroundColor: 'rgba(52, 211, 153, 0.08)',
-    borderLeft: '3px solid rgba(52, 211, 153, 0.5)',
+    backgroundColor: 'color-mix(in srgb, var(--color-system-blue, #0A84FF) 8%, transparent)',
+    borderLeft: '2px solid color-mix(in srgb, var(--color-system-blue, #0A84FF) 55%, transparent)',
+  },
+  '@media (prefers-reduced-motion: reduce)': {
+    '.cm-virtual-cursor-line': {
+      animation: 'none',
+    },
   },
 });
 

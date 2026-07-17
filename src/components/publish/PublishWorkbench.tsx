@@ -11,10 +11,12 @@ import { Spinner } from '../../ui/primitives/Spinner';
 import { usePublishStore, type PublishResult } from '../../store/publish';
 import { loadAISettings, useAIStore } from '../../store/ai';
 import { useTimelineStore } from '../../store/timeline';
+import { useTaskProgressStore } from '../../store/task-progress';
 import type { PublishAccount, PublishShared, PublishTarget } from '../../lib/electron-api';
 import {
   extractMetaSection,
   extractPublishSection,
+  resolvePublishedPlatforms,
   PUBLISH_HISTORY_MAX,
   type ProjectData,
   type ProjectPublishMeta,
@@ -23,6 +25,7 @@ import {
   type PublishHistoryTarget,
 } from '../../lib/project-persistence';
 import { buildMetadataSource } from '../../lib/publish-metadata';
+import { PLATFORM_LABEL } from '../../lib/publish/platform-labels';
 import { PublishCoverPanel } from './PublishCoverPanel';
 import { autoFillCovers, useCoverStudio } from './useCoverStudio';
 import { isInsideDir } from '../../lib/publish/resolve-video-file';
@@ -30,6 +33,21 @@ import { isInsideDir } from '../../lib/publish/resolve-video-file';
 /** 渲染层 basename：避免引入 node:path。 */
 function baseName(p: string): string {
   return p.split(/[\\/]/).pop() || p;
+}
+
+function startPublishAITask(label: string, phase: string): string {
+  const taskId = `publish-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  useTaskProgressStore.getState().startTask({
+    id: taskId,
+    category: 'publish',
+    label,
+    mode: 'indeterminate',
+    progress: 0,
+    phase,
+    level: 1,
+    canCancel: false,
+  });
+  return taskId;
 }
 
 /** 相对时间展示（与 PublishAccountsTab 同口径）。 */
@@ -46,13 +64,6 @@ function formatRelativeTime(ts: number): string {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PLATFORM_LABEL: Record<string, string> = {
-  douyin: '抖音',
-  tencent: '视频号',
-  xiaohongshu: '小红书',
-  kuaishou: '快手',
-  bilibili: 'B站',
-};
 
 function AccountStatusBadge({ status }: { status: PublishAccount['status'] }) {
   const config = {
@@ -378,6 +389,8 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
 
   // 发布历史（随项目持久化，新→旧）
   const [historyEntries, setHistoryEntries] = useState<PublishHistoryEntry[]>([]);
+  // 已成功发布的平台 → 最近成功时间戳（随项目持久化，累积不淘汰）
+  const [publishedPlatforms, setPublishedPlatforms] = useState<Record<string, number>>({});
   // 就地重登：二维码 / 进行中账号 / 提示
   const [qrcodePng, setQrcodePng] = useState<string | null>(null);
   const [reloginBusyId, setReloginBusyId] = useState<string | null>(null);
@@ -468,10 +481,12 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
       }
       // 切项目即重置（resolved 为空则清空输入），不再 `prev ||` 保留旧项目路径。
       if (!cancelled) setFilePath(resolved ?? '');
-      // 封面：默认取编辑器选定的封面候选
+      // 封面：默认取编辑器选定的封面候选（必须属于当前项目，防 AI store 切换时序串项目）
       const selectedCover = useAIStore
         .getState()
-        .coverCandidates.find((c) => c.selected && c.imageUrl);
+        .coverCandidates.find(
+          (c) => c.selected && c.imageUrl && isInsideDir(c.imageUrl, projectDir),
+        );
       if (selectedCover && !cancelled) {
         setThumbnail((prev) => prev || selectedCover.imageUrl);
         // 编辑器选定封面为 16:9 整期封面 → 预填 16:9 槽
@@ -488,6 +503,15 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
     hydratedRef.current = false;
     setHydrated(false);
     setHistoryEntries([]);
+    setPublishedPlatforms({});
+    // 切项目即清空文案/封面本地态：后续回填的 prev|| 合并语义会把上一个项目的值带进新项目并写盘
+    setTitle('');
+    setDesc('');
+    setTagsInput('');
+    setThumbnail('');
+    setCovers({});
+    setBilibiliTid('');
+    setBilibiliParentId(null);
     if (!projectDir) {
       hydratedRef.current = true;
       setHydrated(true);
@@ -512,12 +536,22 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
         if (savedTitle) setTitle((prev) => prev || savedTitle);
         if (saved.desc) setDesc((prev) => prev || saved!.desc);
         if (saved.tagsInput) setTagsInput((prev) => prev || saved!.tagsInput);
-        if (saved.thumbnail) setThumbnail((prev) => prev || saved!.thumbnail);
-        if (saved.covers && Object.keys(saved.covers).length) {
-          setCovers((prev) => ({ ...saved!.covers, ...prev }));
+        // 封面路径必须属于当前项目：治愈历史串项目污染写入 project.json 的外部路径
+        if (saved.thumbnail && isInsideDir(saved.thumbnail, projectDir)) {
+          setThumbnail((prev) => prev || saved!.thumbnail);
+        }
+        const ownCovers = Object.fromEntries(
+          Object.entries(saved.covers ?? {}).filter(
+            ([, p]) => typeof p === 'string' && p && isInsideDir(p, projectDir),
+          ),
+        ) as Record<string, string>;
+        if (Object.keys(ownCovers).length) {
+          setCovers((prev) => ({ ...ownCovers, ...prev }));
         }
         if (saved.bilibiliTid) setBilibiliTid((prev) => prev || saved!.bilibiliTid!);
         if (saved.history?.length) setHistoryEntries(saved.history);
+        // 显式字段 + 旧工程历史回推（含惰性迁移：下次防抖写回即落盘）
+        setPublishedPlatforms(resolvePublishedPlatforms({ publish: saved }));
       }
       hydratedRef.current = true;
       setHydrated(true);
@@ -545,6 +579,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
       covers,
       bilibiliTid,
       history: historyEntries,
+      publishedPlatforms,
     };
     const timer = setTimeout(() => {
       window.electronAPI
@@ -556,7 +591,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
         .catch(() => {});
     }, 600);
     return () => clearTimeout(timer);
-  }, [projectDir, title, desc, tagsInput, thumbnail, covers, bilibiliTid, historyEntries]);
+  }, [projectDir, title, desc, tagsInput, thumbnail, covers, bilibiliTid, historyEntries, publishedPlatforms]);
 
   // ── 后台（工作流/流水线）生成标题后回灌本地态，避免防抖写回用空标题覆盖新值。 ──
   useEffect(() => {
@@ -581,6 +616,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
   }, [projectDir]);
 
   const handleGenerateMeta = async () => {
+    if (isGeneratingMeta) return;
     setMetaError(null);
     const settings = await loadAISettings();
     if (!settings) {
@@ -597,6 +633,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
       setMetaError('暂无内容可供生成，请先完成 AI 分析或导入字幕');
       return;
     }
+    const taskId = startPublishAITask('生成发布文案', '生成标题、描述和标签');
     setIsGeneratingMeta(true);
     try {
       const projectBindings = projectDir
@@ -612,8 +649,11 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
       if (md.title) setTitle(md.title);
       if (md.desc) setDesc(md.desc);
       if (md.tags.length) setTagsInput(md.tags.join(', '));
+      useTaskProgressStore.getState().completeTask(taskId);
     } catch (e) {
-      setMetaError(e instanceof Error ? e.message : 'AI 文案生成失败');
+      const message = e instanceof Error ? e.message : '发布文案生成失败';
+      setMetaError(message);
+      useTaskProgressStore.getState().failTask(taskId, message);
     } finally {
       setIsGeneratingMeta(false);
     }
@@ -627,6 +667,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
   }, [bilibiliTid]);
 
   const handleRecommendPartition = async () => {
+    if (isRecommendingPartition) return;
     setPartitionError(null);
     const settings = await loadAISettings();
     if (!settings) {
@@ -647,6 +688,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
         return;
       }
     }
+    const taskId = startPublishAITask('推荐 B站分区', '分析标题与描述');
     setIsRecommendingPartition(true);
     try {
       const projectBindings = projectDir
@@ -661,8 +703,11 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
         projectBindings,
       });
       setBilibiliTid(String(tid));
+      useTaskProgressStore.getState().completeTask(taskId);
     } catch (e) {
-      setPartitionError(e instanceof Error ? e.message : 'AI 分区推荐失败');
+      const message = e instanceof Error ? e.message : 'B站分区推荐失败';
+      setPartitionError(message);
+      useTaskProgressStore.getState().failTask(taskId, message);
     } finally {
       setIsRecommendingPartition(false);
     }
@@ -672,6 +717,15 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
     setSelectedAccountIds((prev) =>
       prev.includes(accId) ? prev.filter((id) => id !== accId) : [...prev, accId],
     );
+    setValidationError(null);
+  };
+
+  // 全选/取消全选（仅作用于已登录账号）
+  const validAccounts = accounts.filter((a) => a.status === 'valid');
+  const allValidSelected =
+    validAccounts.length > 0 && validAccounts.every((a) => selectedAccountIds.includes(a.id));
+  const toggleAllAccounts = () => {
+    setSelectedAccountIds(allValidSelected ? [] : validAccounts.map((a) => a.id));
     setValidationError(null);
   };
 
@@ -847,6 +901,15 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
       overallState,
     };
     setHistoryEntries((prev) => [entry, ...prev].slice(0, PUBLISH_HISTORY_MAX));
+    // 成功平台打上「已发布」标记（累积，欢迎页 / 账号列表据此展示）
+    const succeeded = historyTargets.filter((t) => resultMap[t.accountId]?.state === 'success');
+    if (succeeded.length > 0) {
+      setPublishedPlatforms((prev) => {
+        const next = { ...prev };
+        for (const t of succeeded) next[t.platform] = entry.publishedAt;
+        return next;
+      });
+    }
   };
 
   // 从历史记录重新发布（沿用当时的文件 / 文案 / 目标）
@@ -1051,7 +1114,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
           )}
         </Field>
 
-        {/* AI 一键生成文案 */}
+        {/* 生成发布文案 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Button
             variant="outline"
@@ -1067,7 +1130,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
             ) : (
               <>
                 <Sparkles size={14} style={{ marginRight: 6 }} />
-                AI 一键生成标题/描述/标签
+                生成发布文案
               </>
             )}
           </Button>
@@ -1144,6 +1207,27 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
                 overflow: 'hidden',
               }}
             >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '8px 14px',
+                  borderBottom: '1px solid var(--color-border-subtle, rgba(0,0,0,0.06))',
+                  background: 'var(--color-bg-elevated)',
+                }}
+              >
+                <Checkbox
+                  checked={allValidSelected}
+                  indeterminate={!allValidSelected && selectedAccountIds.length > 0}
+                  disabled={validAccounts.length === 0}
+                  onChange={toggleAllAccounts}
+                  label={
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
+                      {allValidSelected ? '取消全选' : '全选'}（{validAccounts.length} 个可用账号）
+                    </span>
+                  }
+                />
+              </div>
               {accounts.map((acc, idx) => {
                 const isChecked = selectedAccountIds.includes(acc.id);
                 const isValid = acc.status === 'valid';
@@ -1178,6 +1262,23 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
                         </span>
                       }
                     />
+                    {publishedPlatforms[acc.platform] != null && (
+                      <span
+                        title={`该平台最近发布：${formatRelativeTime(publishedPlatforms[acc.platform])}`}
+                        style={{
+                          fontSize: 11,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          background:
+                            'color-mix(in srgb, var(--color-success, #22c55e) 15%, transparent)',
+                          color: 'var(--color-success, #22c55e)',
+                          fontWeight: 500,
+                          flexShrink: 0,
+                        }}
+                      >
+                        已发布
+                      </span>
+                    )}
                     <AccountStatusBadge status={acc.status} />
                     {!isValid && (
                       <Button
@@ -1213,7 +1314,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
         {selectedAccountIds.some(
           (id) => accounts.find((a) => a.id === id)?.platform === 'bilibili',
         ) && (
-          <Field label="B站分区" required hint="发布到 B站必填；选择最贴合内容的子分区，或用「智能推荐分区」按标题/描述自动选">
+          <Field label="B站分区" required hint="发布到 B站必填；选择最贴合内容的子分区，或根据标题和描述自动推荐">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -1258,7 +1359,7 @@ export function PublishWorkbench({ projectDir }: { projectDir: string | null }) 
                   ) : (
                     <>
                       <Sparkles size={14} style={{ marginRight: 6 }} />
-                      智能推荐分区
+                      推荐分区
                     </>
                   )}
                 </Button>

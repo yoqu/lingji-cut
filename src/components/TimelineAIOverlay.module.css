@@ -1,0 +1,86 @@
+.root {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: min(560px, calc(100% - 24px));
+  min-height: 30px;
+  padding: 5px 8px;
+  overflow: hidden;
+  border: 1px solid var(--color-separator);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-panel-bg) 96%, var(--color-system-blue) 4%);
+  box-shadow: var(--shadow-dropdown);
+  color: var(--color-text-primary);
+  transform: translateX(-50%);
+}
+
+.spinner {
+  color: var(--color-system-blue);
+  animation: spin 0.9s linear infinite;
+}
+
+.title,
+.phase,
+.percent {
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.phase {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.percent {
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.cancelButton {
+  pointer-events: auto;
+}
+
+.progressTrack {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  background: var(--color-border-subtle);
+}
+
+.progressValue {
+  width: 100%;
+  height: 100%;
+  background: var(--color-system-blue);
+  transform-origin: left center;
+  transition: transform var(--motion-fast);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+
+  .progressValue {
+    transition: none;
+  }
+}

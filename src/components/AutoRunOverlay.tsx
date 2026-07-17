@@ -4,8 +4,8 @@ import {
   PenLine,
   AudioLines,
   Sparkles,
-  ImageIcon,
   LayoutTemplate,
+  Clapperboard,
   Check,
   AlertCircle,
   type LucideIcon,
@@ -18,40 +18,45 @@ const STEP_ORDER: WorkflowStep[] = [
   'douyin_importing',
   'script_generating',
   'tts_generating',
-  'ai_analyzing',
-  'cover_generating',
-  'arranging',
+  'director_planning',
+  'production_running',
+  'animatic_review',
 ];
 
 const STEP_LABELS: Record<WorkflowStep, string> = {
   idle: '准备中',
   douyin_importing: '导入素材',
-  script_generating: '撰写口播稿',
-  tts_generating: '合成语音',
-  tts_done: '合成语音',
-  ai_analyzing: '内容分析 / 字幕高亮',
+  script_generating: '生成口播稿',
+  tts_generating: '合成口播',
+  tts_done: '合成口播',
+  director_planning: '制定导演方案',
+  director_review: '导演方案待批准',
+  production_running: '并行制作',
+  production_paused: '制作已暂停',
+  ai_analyzing: '生成画面',
   cover_generating: '生成封面',
   arranging: '时间轴排布',
+  animatic_review: 'Animatic 待确认',
   done: '完成',
   error: '出错',
 };
 
 const STEP_SHORT_LABELS: Partial<Record<WorkflowStep, string>> = {
   douyin_importing: '导入',
-  script_generating: '成稿',
-  tts_generating: '语音',
-  ai_analyzing: '分析',
-  cover_generating: '封面',
-  arranging: '排布',
+  script_generating: '口播稿',
+  tts_generating: '口播',
+  director_planning: '导演',
+  production_running: '制作',
+  animatic_review: '审片',
 };
 
 const STEP_ICONS: Partial<Record<WorkflowStep, LucideIcon>> = {
   douyin_importing: ArrowDownToLine,
   script_generating: PenLine,
   tts_generating: AudioLines,
-  ai_analyzing: Sparkles,
-  cover_generating: ImageIcon,
-  arranging: LayoutTemplate,
+  director_planning: Clapperboard,
+  production_running: Sparkles,
+  animatic_review: LayoutTemplate,
 };
 
 const SCRIPT_WORKBENCH_FAIL_STEPS: WorkflowStep[] = [
@@ -63,21 +68,27 @@ const SCRIPT_WORKBENCH_FAIL_STEPS: WorkflowStep[] = [
 // 把辅助步骤映射到 STEP_ORDER 中的对应桶,用于进度指示器。
 const STEP_ALIAS: Partial<Record<WorkflowStep, WorkflowStep>> = {
   tts_done: 'tts_generating',
+  director_review: 'director_planning',
+  production_paused: 'production_running',
+  ai_analyzing: 'director_planning',
+  cover_generating: 'production_running',
+  arranging: 'production_running',
 };
 
 // 硬编码 macOS system blue,给装饰性 SVG 与连接线用。
 // 之所以不直接用 var(--color-system-blue),是为了让测试计数
 // HTML 中 `--color-system-blue` 的出现次数能精确对应"已达成阶段数"。
 const ACCENT_HEX = '#0a84ff';
-const ACCENT_GLOW = 'rgba(10, 132, 255, 0.35)';
 
 export interface AutoRunOverlayProps {
   step: WorkflowStep;
   stepLabel: string;
   progress: number;
   error: { message: string; failedStep: WorkflowStep } | null;
+  canCancel?: boolean;
   onCancel: () => void;
   onJumpToScriptWorkbench: () => void;
+  onJumpToDirector: () => void;
   onJumpToEditor: () => void;
 }
 
@@ -86,16 +97,30 @@ export function AutoRunOverlay({
   stepLabel,
   progress,
   error,
+  canCancel = true,
   onCancel,
   onJumpToScriptWorkbench,
+  onJumpToDirector,
   onJumpToEditor,
 }: AutoRunOverlayProps) {
   const isError = step === 'error' && error !== null;
+  const isReview = step === 'animatic_review';
+  const isDirectorReview = step === 'director_review';
+  const isPaused = step === 'production_paused';
   const failedStep = error?.failedStep;
   const earlyFailure = failedStep && SCRIPT_WORKBENCH_FAIL_STEPS.includes(failedStep);
+  const directorFailure = failedStep && [
+    'director_planning',
+    'director_review',
+    'production_running',
+    'production_paused',
+    'ai_analyzing',
+    'cover_generating',
+    'arranging',
+  ].includes(failedStep);
   const normalizedStep = STEP_ALIAS[step] ?? step;
   const currentIdx = STEP_ORDER.indexOf(normalizedStep as WorkflowStep);
-  const allReached = step === 'done';
+  const allReached = step === 'done' || isReview;
   const failedIdx = failedStep ? STEP_ORDER.indexOf(failedStep) : -1;
 
   const roundedPercent = Math.round(
@@ -110,9 +135,8 @@ export function AutoRunOverlay({
       : 0;
 
   return (
-    <m.div
-      role="dialog"
-      aria-modal="true"
+    <m.main
+      aria-label="自动剪辑任务"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -120,11 +144,10 @@ export function AutoRunOverlay({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 1200,
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(8px)',
+        zIndex: 1,
+        background: 'var(--color-window-bg)',
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'stretch',
         justifyContent: 'center',
       }}
     >
@@ -133,12 +156,10 @@ export function AutoRunOverlay({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={springs.gentle}
         style={{
-          minWidth: 560,
-          maxWidth: 680,
-          padding: 'var(--space-8)',
-          background: 'var(--color-surface-elevated)',
-          borderRadius: 'var(--radius-lg)',
-          boxShadow: 'var(--shadow-lg)',
+          width: 'min(840px, calc(100% - 64px))',
+          margin: 'auto',
+          padding: 'var(--space-8) 0',
+          background: 'transparent',
           display: 'flex',
           flexDirection: 'column',
           gap: 'var(--space-5)',
@@ -147,9 +168,22 @@ export function AutoRunOverlay({
         {/* 标题 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
           <HeaderIcon isError={isError} />
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>
-            {isError ? '生成失败' : '正在为你一键成稿'}
-          </h2>
+          <div>
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 11, marginBottom: 4 }}>
+              自动剪辑
+            </div>
+            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: 0 }}>
+              {isError
+                ? '任务需要处理'
+                : isDirectorReview
+                  ? '导演方案等待批准'
+                  : isReview
+                    ? 'Animatic 等待确认'
+                    : isPaused
+                      ? '制作已暂停'
+                      : '正在自动剪辑'}
+            </h1>
+          </div>
         </div>
 
         {/* 阶段节点带 */}
@@ -220,9 +254,9 @@ export function AutoRunOverlay({
 
         {/* 底部按钮 */}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-3)' }}>
-          {!isError && (
+          {!isError && canCancel && (
             <Button variant="secondary" onClick={onCancel}>
-              取消
+              停止
             </Button>
           )}
           {isError && earlyFailure && (
@@ -230,14 +264,29 @@ export function AutoRunOverlay({
               查看脚本工作台
             </Button>
           )}
-          {isError && !earlyFailure && (
+          {isError && directorFailure && (
+            <Button variant="primary" onClick={onJumpToDirector}>
+              进入导演台处理
+            </Button>
+          )}
+          {isError && !earlyFailure && !directorFailure && (
             <Button variant="primary" onClick={onJumpToEditor}>
               进入编辑器
             </Button>
           )}
+          {isReview && (
+            <Button variant="primary" onClick={onJumpToEditor}>
+              进入编辑器确认
+            </Button>
+          )}
+          {(isDirectorReview || isPaused) && (
+            <Button variant="primary" onClick={onJumpToDirector}>
+              进入导演台
+            </Button>
+          )}
         </div>
       </m.div>
-    </m.div>
+    </m.main>
   );
 }
 
@@ -245,7 +294,7 @@ export function AutoRunOverlay({
 // 子组件
 // ───────────────────────────────────────────────────────────
 
-/** 标题图标:正常态缓慢旋转 + 呼吸,出错态变成警告图标。 */
+/** 标题图标只表达状态，不承担装饰动画。 */
 function HeaderIcon({ isError }: { isError: boolean }) {
   if (isError) {
     return (
@@ -267,9 +316,7 @@ function HeaderIcon({ isError }: { isError: boolean }) {
     );
   }
   return (
-    <m.div
-      animate={{ rotate: [0, 8, -6, 0], scale: [1, 1.08, 1] }}
-      transition={{ duration: 3.6, ease: easings.apple, repeat: Infinity }}
+    <div
       style={{
         width: 28,
         height: 28,
@@ -280,7 +327,7 @@ function HeaderIcon({ isError }: { isError: boolean }) {
       }}
     >
       <Sparkles size={22} strokeWidth={1.75} />
-    </m.div>
+    </div>
   );
 }
 
@@ -307,15 +354,16 @@ function ConnectingLine({ fillRatio }: { fillRatio: number }) {
     >
       <m.div
         initial={false}
-        animate={{ width: `${fillRatio * 100}%` }}
+        animate={{ scaleX: fillRatio }}
         transition={springs.smooth}
         style={{
           position: 'absolute',
           top: 0,
           left: 0,
+          width: '100%',
           height: '100%',
-          background: `linear-gradient(90deg, ${ACCENT_HEX} 0%, #5ac8fa 100%)`,
-          boxShadow: `0 0 8px ${ACCENT_GLOW}`,
+          background: ACCENT_HEX,
+          transformOrigin: 'left center',
         }}
       />
     </div>
@@ -336,7 +384,7 @@ interface StageNodeProps {
 /**
  * 单个阶段:圆形图标 + 下方文案。
  * - 已达成(reached=true):圆背景填 var(--color-system-blue),图标白色 / 勾选
- * - 当前(isCurrent=true):外圈呼吸光晕
+ * - 当前(isCurrent=true):系统蓝细外圈
  * - 失败(isFailed=true):圆背景填红色,图标 AlertCircle
  * - 未达成:圆描边灰色,图标灰色
  *
@@ -366,6 +414,7 @@ function StageNode({ index, reached, isCurrent, isCompleted, isFailed, label, Ic
 
   return (
     <div
+      data-status={isFailed ? 'error' : isCurrent ? 'active' : isCompleted ? 'completed' : 'pending'}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -385,36 +434,15 @@ function StageNode({ index, reached, isCurrent, isCompleted, isFailed, label, Ic
           justifyContent: 'center',
         }}
       >
-        {/* 呼吸光晕:仅当前阶段显示 */}
-        {isCurrent && (
-          <m.div
-            aria-hidden
-            initial={{ opacity: 0.55, scale: 1 }}
-            animate={{ opacity: [0.55, 0, 0.55], scale: [1, 1.7, 1] }}
-            transition={{ duration: 1.8, ease: easings.apple, repeat: Infinity }}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              borderRadius: '50%',
-              background: ACCENT_HEX,
-              filter: 'blur(2px)',
-            }}
-          />
-        )}
-
         {/* 圆形节点本体 */}
         <m.div
           initial={false}
           animate={{
-            scale: isCurrent ? [1, 1.06, 1] : 1,
+            scale: 1,
             background,
             borderColor,
           }}
-          transition={
-            isCurrent
-              ? { duration: 1.8, ease: easings.apple, repeat: Infinity }
-              : springs.swift
-          }
+          transition={springs.swift}
           style={{
             position: 'relative',
             width: size,
@@ -425,7 +453,7 @@ function StageNode({ index, reached, isCurrent, isCompleted, isFailed, label, Ic
             alignItems: 'center',
             justifyContent: 'center',
             color: iconColor,
-            boxShadow: isCurrent ? `0 0 14px ${ACCENT_GLOW}` : 'none',
+            boxShadow: isCurrent ? '0 0 0 2px color-mix(in srgb, var(--color-system-blue) 28%, transparent)' : 'none',
             overflow: 'hidden',
           }}
         >
@@ -472,7 +500,7 @@ function StageNode({ index, reached, isCurrent, isCompleted, isFailed, label, Ic
       <div
         style={{
           fontSize: 11,
-          letterSpacing: '-0.01em',
+            letterSpacing: 0,
           color: reached || isFailed
             ? 'var(--color-text-primary)'
             : 'var(--color-text-tertiary)',
@@ -486,10 +514,10 @@ function StageNode({ index, reached, isCurrent, isCompleted, isFailed, label, Ic
   );
 }
 
-/** 底部整体进度条:渐变填充 + 进行中时的光带扫动,右侧展示百分比。 */
+/** 底部整体进度条使用单一系统蓝，右侧展示百分比。 */
 function OverallProgress({
   percent,
-  active,
+  active: _active,
   isError,
   done,
 }: {
@@ -499,9 +527,7 @@ function OverallProgress({
   done: boolean;
 }) {
   const trackHeight = 6;
-  const barBackground = isError
-    ? 'var(--color-system-red, #ff3b30)'
-    : `linear-gradient(90deg, ${ACCENT_HEX} 0%, #5ac8fa 100%)`;
+  const barBackground = isError ? 'var(--color-system-red, #ff3b30)' : ACCENT_HEX;
   const barPercent = done ? 100 : isError ? 100 : percent;
 
   return (
@@ -536,24 +562,6 @@ function OverallProgress({
             background: barBackground,
           }}
         />
-        {/* 进行中时的光带扫动 */}
-        {active && (
-          <m.div
-            aria-hidden
-            initial={{ x: '-40%' }}
-            animate={{ x: '140%' }}
-            transition={{ duration: 1.8, ease: easings.easeOutExpo, repeat: Infinity }}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '30%',
-              height: '100%',
-              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent)',
-              pointerEvents: 'none',
-            }}
-          />
-        )}
       </div>
       <div
         style={{

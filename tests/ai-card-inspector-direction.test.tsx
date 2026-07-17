@@ -85,4 +85,60 @@ describe('AICardInspector · 分镜', () => {
     });
     container.remove();
   });
+
+  it('重新生成从空白创作，只有精雕动画会请求参考旧 Motion Card', async () => {
+    const motionCard: AICard = {
+      id: 'card-motion',
+      segmentId: 'segment-1',
+      type: 'summary',
+      title: 'Motion 卡片',
+      content: '旧卡片内容',
+      startMs: 0,
+      endMs: 5_000,
+      displayDurationMs: 5_000,
+      displayMode: 'fullscreen',
+      template: 'summary-default',
+      enabled: true,
+      style: baseCardStyle,
+      renderMode: 'motion-card',
+      motionCard: {
+        tsx: 'export default function Card(){ return null; }',
+        compiledAt: 1,
+        prompt: '',
+        retryCount: 0,
+      },
+    };
+    const onRegenerate = vi.fn().mockResolvedValue(motionCard);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AICardInspector
+          card={motionCard}
+          onRegenerate={onRegenerate}
+          onSave={() => undefined}
+        />,
+      );
+    });
+
+    const findButton = (label: string) => Array.from(container.querySelectorAll('button')).find((el) =>
+      (el.textContent ?? '').includes(label),
+    );
+    await act(async () => {
+      findButton('重新生成动画')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onRegenerate.mock.calls[0]?.[1]).toBeUndefined();
+
+    await act(async () => {
+      findButton('精雕动画')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(onRegenerate.mock.calls[1]?.[1]).toEqual({ refineExistingMotion: true });
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
 });

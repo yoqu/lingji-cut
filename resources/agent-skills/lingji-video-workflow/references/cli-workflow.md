@@ -28,7 +28,8 @@ CLI 自动解析应用控制服务端点（含鉴权 token）：
 - `project` 创建/打开/查询项目；`state` 查项目产物/编辑器/设置/文件。
 - `import <url|file> --wait` 导入抖音链接或本地音视频，转录写入 original.md。
 - `script read|review` 读稿 / 提交审稿批注（写稿走 file-first）。
-- `audio gen` / `subtitle analyze` / `cover gen` / `cards <action>` 生成链路；`run` 一键串行。
+- `director plan|status|approve` 管理人工导演检查点；`subtitle analyze` 保留自动批准兼容行为。
+- `audio gen` / `cover gen` / `cards <action>` 都受导演批准门禁约束；`run` 保持一键自动批准。
 - `export` 导出 MP4；`publish` 发布到平台账号；`settings` 查/改默认设置。
 - `task status|list|cancel|wait` 任务管理；`edit lock|heartbeat|unlock|status` file-first 锁。
 

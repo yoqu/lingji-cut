@@ -42,6 +42,17 @@ export function useAICardInspector(cardId: string | null) {
     () => getAICardSequenceLabel(analysisResult?.cards, cardId),
     [analysisResult?.cards, cardId],
   );
+  const storyboardCueOptions = useMemo(() => {
+    if (!card) return [];
+    return srtEntries
+      .filter((entry) => entry.startMs >= card.startMs && entry.startMs < card.endMs)
+      .sort((a, b) => a.startMs - b.startMs)
+      .map((entry, index) => ({
+        index,
+        startMs: entry.startMs - card.startMs,
+        text: entry.text,
+      }));
+  }, [card, srtEntries]);
 
   // 落盘由 store/ai.ts 订阅自动完成；这里仅返回规范化快照供调用方回灌。
   const persistAIState = useCallback(
@@ -72,7 +83,7 @@ export function useAICardInspector(cardId: string | null) {
               overlay.aiCardData?.sourceCardId === targetCardId,
           )
         ) {
-          addAICardsToTimeline([buildAICardTimelineDraft(updatedCard)]);
+          addAICardsToTimeline([buildAICardTimelineDraft(updatedCard, persistedResult.motionBible)]);
         }
       });
     },
@@ -89,7 +100,10 @@ export function useAICardInspector(cardId: string | null) {
   );
 
   const regenerateCard = useCallback(
-    async (draftUpdates: Partial<AICard>) => {
+    async (
+      draftUpdates: Partial<AICard>,
+      options: { refineExistingMotion?: boolean } = {},
+    ) => {
       if (!card || !analysisResult) {
         return null;
       }
@@ -112,7 +126,7 @@ export function useAICardInspector(cardId: string | null) {
       useTaskProgressStore.getState().startTask({
         id: regenerateTaskId,
         category: 'ai-analyze',
-        label: `重生成卡片：${card.title}`,
+        label: `重新生成 Motion 卡片：${card.title}`,
         mode: 'indeterminate',
         progress: 0,
         phase: '生成 Motion 卡片',
@@ -141,9 +155,11 @@ export function useAICardInspector(cardId: string | null) {
           cardPrompt: draftCard.cardPrompt,
           programSummary: analysisResult.summary,
           keywords: analysisResult.keywords,
+          motionBible: analysisResult.motionBible,
           projectDir: getProjectDir() ?? undefined,
           projectBindings: useAIStore.getState().projectBindings,
           feedId: regenerateTaskId,
+          refineExistingMotion: options.refineExistingMotion === true,
         });
 
         const nextResult = updateCardInResult(analysisResult, card.id, {
@@ -168,7 +184,7 @@ export function useAICardInspector(cardId: string | null) {
               overlay.aiCardData?.sourceCardId === card.id,
           )
         ) {
-          addAICardsToTimeline([buildAICardTimelineDraft(persistedCard)]);
+          addAICardsToTimeline([buildAICardTimelineDraft(persistedCard, persistedResult.motionBible)]);
         }
 
         useTaskProgressStore.getState().completeTask(regenerateTaskId);
@@ -245,6 +261,7 @@ export function useAICardInspector(cardId: string | null) {
           cardPrompt: targetCard.cardPrompt,
           programSummary: analysisResult.summary,
           keywords: analysisResult.keywords,
+          motionBible: analysisResult.motionBible,
           projectDir: getProjectDir() ?? undefined,
           projectBindings: useAIStore.getState().projectBindings,
         });
@@ -301,5 +318,6 @@ export function useAICardInspector(cardId: string | null) {
     isRegeneratingCard,
     regenerateCard,
     saveCard,
+    storyboardCueOptions,
   };
 }

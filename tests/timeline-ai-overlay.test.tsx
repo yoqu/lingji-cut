@@ -18,7 +18,7 @@ describe('TimelineAIOverlay', () => {
     }));
   });
 
-  it('renders only an interaction blocker during active workflow states', () => {
+  it('renders a non-blocking contextual status during active workflow states', () => {
     const html = renderToStaticMarkup(
       <TimelineAIOverlay
         workflow={{
@@ -35,9 +35,10 @@ describe('TimelineAIOverlay', () => {
       />,
     );
 
-    expect(html).toContain('data-editor-region="workflow-blocker"');
-    expect(html).not.toContain('72%');
-    expect(html).not.toContain('正在排布时间轴');
+    expect(html).toContain('data-editor-region="workflow-status"');
+    expect(html).toContain('72%');
+    expect(html).toContain('正在排布时间轴');
+    expect(html).not.toContain('workflow-blocker');
   });
 
   it('does not block the editor when workflow has failed', () => {

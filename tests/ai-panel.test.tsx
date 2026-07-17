@@ -145,9 +145,10 @@ describe('AIPanel', () => {
     expect(html).toContain('data-ai-panel-header="true"');
     expect(html).toContain('内容卡片');
     expect(html).toContain('封面');
+    expect(html).toContain('制作');
     // 视觉编排 tab 已下线
     expect(html).not.toContain('视觉编排');
-    expect(html).toContain('AI 分析');
+    expect(html).toContain('内容生成');
     expect(html).toContain('已选 1/1');
     // HTML 卡片导入入口已随 Web Card 一并下线，不再出现 import-row 按钮
     expect(html).not.toContain('data-ai-import-row="true"');
@@ -168,21 +169,23 @@ describe('AIPanel', () => {
 
     const html = renderToStaticMarkup(<AIPanel compact={false} />);
 
-    expect(html).toContain('分析中...');
-    expect(html).toContain('AI 正在工作');
-    expect(html).toContain('正在拆解字幕与生成卡片');
-    expect(html).toContain('解析字幕');
+    expect(html).toContain('生成中...');
+    expect(html).toContain('生成内容卡片');
+    expect(html).toContain('准备分析字幕内容');
+    expect(html).not.toContain('提炼重点');
+    expect(html).not.toContain('aria-current="step"');
     expect(html).toContain('aria-busy="true"');
   });
 
-  it('shows a visible loading overlay while reanalyzing existing cards', () => {
+  it('keeps existing cards visible with lightweight status while regenerating', () => {
     mockModules.aiStoreState.isAnalyzing = true;
 
     const html = renderToStaticMarkup(<AIPanel compact={false} />);
 
-    expect(html).toContain('AI 正在重新生成当前内容卡片');
-    expect(html).toContain('当前卡片区会暂时锁定');
-    expect(html).toContain('重新分析中');
+    expect(html).toContain('重新生成内容卡片');
+    expect(html).toContain('准备重新生成内容卡片');
+    expect(html).toContain('重新生成中');
+    expect(html).not.toContain('当前卡片区会暂时锁定');
   });
 
   it('keeps a regenerate entry visible after all cards are deleted', () => {
@@ -204,7 +207,7 @@ describe('AIPanel', () => {
     const html = renderToStaticMarkup(<AIPanel compact railHeight={154} />);
 
     expect(html).toContain('data-ai-panel-root="true"');
-    expect(html).toContain('AI 分析');
+    expect(html).toContain('内容生成');
     expect(html).toContain('data-ai-footer-button="true"');
     expect(html).toContain('上轨 1');
     expect(html).toContain('卡片');

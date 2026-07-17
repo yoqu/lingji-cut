@@ -40,10 +40,10 @@ describe('script shell components', () => {
   });
 
   it('renders the file tree empty state before a project is selected', async () => {
-    const { FileTreePanel } = await import('../src/components/script/FileTreePanel');
+    const { ScriptFileTreePanel } = await import('../src/components/script/ScriptFileTreePanel');
 
     const html = renderToStaticMarkup(
-      <FileTreePanel
+      <ScriptFileTreePanel
         projectDir={null}
         fileEntries={[]}
         openedFile={null}
@@ -59,15 +59,14 @@ describe('script shell components', () => {
   });
 
   it('renders collapsed directory rows without showing their children', async () => {
-    const { FileTree } = await import('../src/components/script/FileTreePanel');
+    const { DirectoryTree } = await import('../src/components/directory-tree/DirectoryTree');
 
     const html = renderToStaticMarkup(
-      <FileTree
+      <DirectoryTree
         fileEntries={nestedEntries}
+        projectDir={null}
         expandedDirectories={{ drafts: false }}
         openedFile={null}
-        fileDirtyMap={{}}
-        fileConflictMap={{}}
         onToggleDirectory={() => undefined}
         onOpenFile={() => undefined}
       />,
@@ -79,9 +78,10 @@ describe('script shell components', () => {
   });
 
   it('renders expanded directory rows and keeps nested children on a single tree branch', async () => {
-    const { FileTree, reconcileExpandedDirectories } = await import(
-      '../src/components/script/FileTreePanel'
+    const { reconcileExpandedDirectories } = await import(
+      '../src/components/directory-tree/directory-tree-helpers'
     );
+    const { DirectoryTree } = await import('../src/components/directory-tree/DirectoryTree');
 
     expect(reconcileExpandedDirectories(nestedEntries, {})).toEqual({ drafts: false });
     expect(reconcileExpandedDirectories(nestedEntries, { drafts: true })).toEqual({
@@ -89,12 +89,11 @@ describe('script shell components', () => {
     });
 
     const html = renderToStaticMarkup(
-      <FileTree
+      <DirectoryTree
         fileEntries={nestedEntries}
+        projectDir={null}
         expandedDirectories={{ drafts: true }}
         openedFile="drafts/chapter-1.md"
-        fileDirtyMap={{ 'drafts/chapter-1.md': true }}
-        fileConflictMap={{}}
         onToggleDirectory={() => undefined}
         onOpenFile={() => undefined}
       />,
@@ -106,7 +105,9 @@ describe('script shell components', () => {
   });
 
   it('reveals preview file ancestors when asked to locate a nested douyin import entry', async () => {
-    const { revealPathInExpandedDirectories } = await import('../src/components/script/FileTreePanel');
+    const { revealPathInExpandedDirectories } = await import(
+      '../src/components/directory-tree/directory-tree-helpers'
+    );
 
     expect(
       revealPathInExpandedDirectories(
@@ -180,7 +181,9 @@ describe('script shell components', () => {
     expect(source).toContain('const stageHint = (() => {');
     expect(source).toContain("effectiveWorkbenchStage === 'review_clean'");
     expect(source).toContain("'重新审查'");
-    expect(source).toContain("'AI 审稿'");
+    expect(source).toContain("'审查口播稿'");
+    expect(source).toContain("cancelTask(activeAITask.id, '用户停止')");
+    expect(source).toContain('s.tasks.get(activeStreamId)');
   });
 
   it('derives original availability from readiness instead of raw workspace flags', () => {

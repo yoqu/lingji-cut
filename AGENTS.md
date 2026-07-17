@@ -56,6 +56,12 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 | `run.start` | 每次一键开跑 | `autoMode`, `startFromStep`, `projectDir` |
 | `run.end` | 流程结束（成功 / 失败 / 取消） | `ok`, `failedStage?`, `cancelled?`, `error?` |
 | `stage.start` / `stage.end` | 主进程粗粒度阶段（`tts` / `cover` / `analyze.planning` / `analyze.cards` / `highlights`） | `stage`, `durationMs`, `ok` |
+| `stage.start` / `stage.end`（导演） | 导演方案规划 | `stage:"director.plan"`, `revision`, `segments`, `ok` |
+| `director.approved` | 人工批准导演方案并开始制作 | `taskId`, `directorRevision`, `impact` |
+| `checkpoint.auto-approved` | 一键模式自动批准导演方案或 Animatic | `checkpoint`, `taskId`, `directorRevision` |
+| `checkpoint.waiting` | 导演模式到达人工检查点 | `checkpoint`, `taskId`, `directorRevision` |
+| `production.tracks.start` / `production.tracks.end` | 画面、封面、声音、高亮四轨并行 | `taskId`, `directorRevision`, `impact`, `cardErrors`, `coverError`, `audioOutcome` |
+| `production.resume` | 从持久化输出状态恢复制作 | `taskId`, `mode` |
 | `planning.done.received` | renderer 收到 `analyze-planning-done` 事件，封面轨道启动 | `coverPrompts`, `segments` |
 | `card.start` / `card.end` | 单段卡片生成 | `segmentIndex`, `visualType`, `durationMs`, `ok` |
 | `card.image.start` / `card.image.end` | image 卡片调图像 provider 物化资产 | `segmentIndex`, `durationMs` |
@@ -86,14 +92,11 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 6. **TTS 慢**：MiniMax 服务端问题，本地能做的只有换 model
 7. **cover 慢**：基本是 image provider 慢，看 `stage.end{stage:"cover"}` 的 durationMs 与 candidates count
 
-### 三路并行的预期形态
+### 导演门禁与四轨并行的预期形态
 
-新链路 TTS 之后会同时跑 3 路：
-- Track A：`analyze.planning` → `analyze.cards`
-- Track B：`highlights`
-- Track C：等到 `planning.done.received` 发出后立即启动 `stage.start{stage:"cover"}`
+TTS 之后先单独执行 `director.plan`。导演模式停在 `checkpoint.waiting{checkpoint:"director-review"}`；一键模式记录 `checkpoint.auto-approved`。批准前不得出现卡片 Agent、图像 Provider、封面出图、声音 Provider 或高亮调用。
 
-在 jsonl 时间轴上，B 的 `stage.start{stage:"highlights"}` 应该和 A 的 `analyze.planning` 几乎同时；C 的 `stage.start{stage:"cover"}` 应该出现在 `planning.done.received` 之后、`analyze.cards` 还没结束的时段里。如果发现 B 或 C 是 A 完成之后才启动，说明并行机制坏了，需要排查。
+批准后 `production.tracks.start` 同时启动四路：cards、cover、audio、highlights。全部完成后原子替换时间线；导演模式进入 Animatic 等待，一键模式自动批准 Animatic 并完成。若恢复运行，先出现 `production.resume`，已是 current 且 provenance 匹配的产物不应重复调用。
 
 ### 把发现转成行动
 
@@ -114,7 +117,9 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 - `src/lib/llm/index.ts` — `generateStructuredData` 接 `telemetry`，emits `llm.start / firstChunk / end`
 - `src/lib/ai-analysis.ts` — `analyzeSrt` 接 `telemetry` 与 `onPlanningDone`；emits `stage.start/end{stage:"analyze.planning"|"analyze.cards"}`、`card.start/end`、`card.image.start/end`
 - `src/lib/subtitle-highlight-runner.ts` — `concurrency`、`telemetry`；emits `stage.*` + `highlight.batch.*`
-- `src/hooks/useAIVideoWorkflow.ts` — 生成 `telemetryRunId`、把它透传给所有 IPC、`run.start / run.end`、3 路并行调度（analyze ‖ highlights ‖ cover）
+- `src/hooks/useAIVideoWorkflow.ts` — 写稿 / TTS 后进入导演编排器，维护两个检查点与恢复入口
+- `src/lib/director-production-client.ts` — 批准后四轨并行与 revision/task 隔离
+- `src/lib/director-production-persistence.ts` — 产物状态、原子时间线替换和 Animatic 检查点
 
 新增耗时操作时也按这个套路接入，不要再发明独立日志。
 

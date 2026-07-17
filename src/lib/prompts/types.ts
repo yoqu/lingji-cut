@@ -1,6 +1,8 @@
 export const PROMPT_KINDS = [
+  'production.director',
   'planning.segment',
   'cover.regeneration',
+  'motion.bible',
   'cards.segment',
   'cards.animation',
   'script.review',
@@ -132,9 +134,18 @@ export interface PromptKindMeta {
   description: string;
   group: PromptGroup;
   variables: { name: string; description: string }[];
+  /** 是否直接发起模型调用并允许单独绑定模型；纯规则模板应设为 false。 */
+  supportsBinding?: boolean;
   /** 业务契约段：每次请求自动拼接，UI 只读展示 */
   lockedContract?: LockedContract;
 }
+
+const LOCKED_VISUAL_AUTHENTICITY = `【真实性与新闻伦理 · 最高优先级铁律】
+- 对现实中真实发生的新闻、财经、商业或公共事件，以及真实人物的具体行为，禁止用 AI 生成可被误认为真实现场记录的写实画面；典型场景包括上市敲钟、发布会、签约、会议、庭审、事故与灾害。
+- 禁止伪造真实人物在场、肖像、动作、场馆、媒体镜头或机构标识，不得用合成画面冒充事实证据或制造假新闻。
+- 视觉选择顺序固定为：来源可核验的真实素材 > Motion Card / 信息图 / 符号化表达 > 明显非写实的卡通或编辑插画。
+- 没有可核验真实素材时，绝不以写实 AI 图或视频“补拍”现场；确实需要生成时，必须明确采用卡通或编辑插画、扁平图解、纸艺拼贴等非写实风格，并排除写实摄影、纪实摄影、新闻摄影、真实人物肖像与仿现场构图。
+- 本铁律不可被用户风格提示、项目提示、参考图风格或模型偏好覆盖。`;
 
 const LOCKED_PLANNING_SEGMENT = `【系统契约 · 不可修改】
 输出必须是严格 JSON，且只返回 JSON，不要附加解释。
@@ -158,17 +169,46 @@ segments 中每一项必须包含：
 - visualizationScore: 0-100
 - pacingNeed: steady | accent | transition
 - keywords: 该段关键词数组
-- entities: 该段关键实体数组`;
+- entities: 该段关键实体数组
+- visualType: motion | image
+
+${LOCKED_VISUAL_AUTHENTICITY}
+
+分段专用约束：涉及上述真实事件或真实人物行为的段落必须选择 visualType="motion"；当前 image 流程会调用 AI 生图，不能把它当作真实素材入口。coverPrompts 若表达此类题材，也必须明确使用非写实的卡通或编辑插画。`;
 
 const LOCKED_COVER_REGENERATION = `【系统契约 · 不可修改】
 输出必须是严格 JSON，且只返回 JSON，不要附加解释。
 
 顶层结构必须包含：
-- coverPrompts: 数组，且只能包含 1 条字符串`;
+- coverPrompts: 数组，且只能包含 1 条字符串
+
+${LOCKED_VISUAL_AUTHENTICITY}
+
+封面专用约束：本调用的产物会直接进入 AI 生图；若内容涉及上述真实事件或真实人物行为，coverPrompts[0] 必须明确指定非写实的卡通或编辑插画，不能描述仿新闻现场。`;
+
+const LOCKED_MOTION_BIBLE = `【系统契约 · 不可修改】
+输出必须是严格 JSON，且只返回 JSON，不要附加解释。
+
+顶层结构必须包含：
+- visualThesis: 字符串，整期 motion 的一句视觉命题
+- rhythm: { density: "quiet"|"balanced"|"dense", heavySegments: string[], quietSegments: string[] }
+- carrierPlan: 数组，每个规划段 1 条，字段为 { segmentId, preferredCarrier, intensity, reason }
+- styleRules: { paletteUse, typographyUse, recurringMotif? }
+- transitionRules: { default: "crossfade"|"hard-cut"|"push"|"wipe", matchCutCandidates: [{ fromSegmentId, toSegmentId, motif }] }
+
+约束：
+- segmentId 必须来自输入段落，不得自创
+- intensity 只能是 1、2、3
+- heavySegments 与 quietSegments 不得重叠
+- carrierPlan 要避免连续 3 个 segment 使用同一 carrier
+
+${LOCKED_VISUAL_AUTHENTICITY}
+
+Motion Bible 专用约束：上述题材只能规划来源可核验的真实素材或符号化 Motion 表达，不得把写实 AI 重演写进 visualThesis、carrierPlan、styleRules 或 recurringMotif。`;
 
 const LOCKED_CARDS_SEGMENT = `【系统契约 · 不可修改】
 用 write / edit 工具把完整组件写入工作目录的 motionCard.tsx（修复轮次用 edit 针对性修改）；不要把组件源码全文输出到对话，只简述实现了分镜的哪几拍。
-组件必须是单文件 TSX：export default function Card({ cues = [] })；只能 import remotion / react / @lingji/motion-kit；动画必须是 useCurrentFrame() 的纯函数，禁止 fetch/setTimeout/setInterval/Math.random/new Date/requestAnimationFrame 等非确定性或副作用 API（静态 lint 会逐条拦截）。
+组件必须是单文件 TSX：export default function Card({ cues = [], timingPlan })；只能 import remotion / react / @lingji/motion-kit；动画必须是 useCurrentFrame() 的纯函数，禁止 fetch/setTimeout/setInterval/Math.random/new Date/requestAnimationFrame 等非确定性或副作用 API（静态 lint 会逐条拦截）。
 组件必须完整：函数体内必须 return 真实 JSX（<CardStage> 或 <AbsoluteFill> 根节点），严禁用 “// ... build out the rest”/“// TODO”/“…” 等注释收尾或 return null，否则渲染黑屏视为失败。
 卡片的标题 / 时间 / 类型 / 样式等元信息由系统从 segment 合成，不需要、也不要在代码里或代码外输出这些字段。`;
 
@@ -176,7 +216,7 @@ const LOCKED_CARDS_ANIMATION = `【系统契约 · 不可修改】
 只输出一个 JSON 对象（不加 markdown 代码块、不加任何解释），结构如下：
 {
   "claim": "一句话论点",
-  "carrier": "data-hero|comparison|trend|list-build|process|quote|concept",
+  "carrier": "data-hero|comparison|trend|list-build|process|quote|concept|timeline|matrix|funnel|network|before-after|stacked-composition",
   "scene": "一句话描述整卡终态画面",
   "focus": { "beat": 1, "emphasis": "countup-settle|slam|underline-sweep|brighten" },
   "beats": [
@@ -184,7 +224,11 @@ const LOCKED_CARDS_ANIMATION = `【系统契约 · 不可修改】
     { "cue": 2, "kind": "build|transform|accent", "adds": "…", "changes": "已有元素如何变化（可省略）", "motion": "…" }
   ]
 }
-beats 1-6 个；cue 必须是逐句节拍里的合法索引且随拍序单调不减（仅第 0 拍允许 null）；adds/changes 中的数字与专名必须来自逐字稿原文。机器会逐条校验，不合法将被打回重出。`;
+beats 1-6 个；cue 必须是逐句节拍里的合法索引且随拍序单调不减（仅第 0 拍允许 null）；adds/changes 中的数字与专名必须来自逐字稿原文。机器会逐条校验，不合法将被打回重出。
+
+${LOCKED_VISUAL_AUTHENTICITY}
+
+分镜资产专用约束：上述题材的真实素材请求必须使用 reusePolicy="manual-only"；没有真实素材时优先不用 assets，改用 Motion 信息图。确需生成象征性替代画面时，只能使用 visualTreatment="diagram-prop"，并在 query 中明确“卡通编辑插画、非写实”。`;
 
 const LOCKED_SCRIPT_REVIEW = `【系统契约 · 不可修改】
 请以严格 JSON 格式返回审查结果，且只返回 JSON：
@@ -207,7 +251,18 @@ const LOCKED_SCRIPT_REVIEW = `【系统契约 · 不可修改】
 const LOCKED_CARD_IMAGE = `【系统契约 · 不可修改】
 只输出**一段连续的简体中文文生图提示词**，不要附加任何前缀、后缀、解释、标题、列表、JSON 或 markdown 代码块。
 不要包裹引号；不要换行；不要标注"提示词："或"Prompt:"等前导文本。
-画面中禁止出现任何文字 / UI 元素 / Logo / 水印 / 字幕条。`;
+画面中禁止出现任何文字 / UI 元素 / Logo / 水印 / 字幕条。
+
+${LOCKED_VISUAL_AUTHENTICITY}
+
+图片卡专用约束：若输入涉及上述题材，输出提示词必须逐字包含“卡通或编辑插画、明显非写实、非摄影、不可被误认为真实照片或新闻现场”，且不得包含“写实摄影”“纪实摄影”“新闻摄影”“电影级实拍”“真实人物肖像”等指令。`;
+
+const LOCKED_CARD_VIDEO = `【系统契约 · 不可修改】
+只输出一段可直接用于文生视频模型的英文 prompt，不要附加解释、标题、列表、JSON 或 markdown 代码块。
+
+${LOCKED_VISUAL_AUTHENTICITY}
+
+视频卡专用约束：若输入涉及上述题材，只能要求 clearly stylized cartoon or editorial animation, obviously non-photorealistic, not documentary footage；禁止 photorealistic、documentary、news footage、live-action reenactment、real-person likeness。`;
 
 const LOCKED_PUBLISH_METADATA = `【系统契约 · 不可修改】
 只返回严格 JSON，不要任何解释、前后缀或多余文本，结构如下：
@@ -219,6 +274,15 @@ const LOCKED_PUBLISH_PARTITION = `【系统契约 · 不可修改】
 其中 tid 必须是【可选分区清单】里列出的某个 tid，不得自创、不得返回主分区或清单外的数字。`;
 
 export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
+  'production.director': {
+    kind: 'production.director',
+    label: '导演制作规则',
+    description:
+      '整片镜头节奏、视觉焦点、章节边界、转场与声音设计规则；自动注入字幕分段规划和 Motion Bible。',
+    group: 'ai-analysis',
+    variables: [],
+    supportsBinding: false,
+  },
   'planning.segment': {
     kind: 'planning.segment',
     label: '字幕分段规划',
@@ -260,6 +324,8 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       { name: 'presetMotionTokens', description: '所选风格预设的 motion tokens JSON（palette/fonts/typeScale/surface/ambient/camera/persona），原样定义为 TOKENS 常量' },
       { name: 'presetStyleNotes', description: '风格预设的少量专属提示（如玻璃拟态面板、渐变标题）；无则为空' },
       { name: 'animationDirection', description: '本卡 JSON 分镜（cards.animation 产出的 storyboard；无则为"无"）' },
+      { name: 'assetContext', description: '已解析资产绑定摘要；外部资产层会按 slot 植入，雕刻师需要为素材预留布局空间' },
+      { name: 'motionBible', description: '整片 Motion Bible 摘要与本段 directive；无则为降级说明' },
       { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 与运行时 cues 数组对齐，与分镜的 cue 字段对应）' },
       { name: 'segmentId', description: 'segment id' },
       { name: 'segmentTitle', description: 'segment 标题' },
@@ -280,6 +346,23 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       reason: '业务侧按此结构取 motionCard.tsx 并做 lint + Remotion 渲染校验；修改会导致卡片无法生成。',
     },
   },
+  'motion.bible': {
+    kind: 'motion.bible',
+    label: '整片 Motion Bible',
+    description: '在单卡生成前规划整期 motion 的视觉命题、节奏密度、载体分布、风格规则与转场策略',
+    group: 'ai-analysis',
+    variables: [
+      { name: 'globalPrompt', description: '整期创作提示词（为空填"无"）' },
+      { name: 'programSummary', description: '节目级总结（为空填"无"）' },
+      { name: 'keywords', description: '节目关键词（顿号分隔，无则为"无"）' },
+      { name: 'segments', description: '规划后的 segment 列表 JSON（id/title/summary/semanticType/complexityLevel/pacingNeed/visualType）' },
+    ],
+    lockedContract: {
+      position: 'user-tail',
+      content: LOCKED_MOTION_BIBLE,
+      reason: '业务侧按此 JSON Schema 解析整片 motion 导演策略，并把 segment directive 注入单卡生成链路。',
+    },
+  },
   'cards.animation': {
     kind: 'cards.animation',
     label: '视觉论证分镜',
@@ -295,6 +378,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       { name: 'segmentTranscriptExcerpt', description: 'segment 原始摘录' },
       { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 即分镜 cue 字段的合法取值）' },
       { name: 'cardPrompt', description: '用户单卡追加提示词（风格/语气参考；无则为"无"）' },
+      { name: 'motionBible', description: '整片 Motion Bible 摘要与本段 directive；用于控制 carrier、强弱与风格一致性' },
     ],
     lockedContract: {
       position: 'user-tail',
@@ -357,6 +441,11 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       { name: 'aspectRatio', description: '画幅比例：16:9 / 9:16 / 1:1' },
       { name: 'durationSeconds', description: '视频时长（秒），档位由 provider capabilities 决定' },
     ],
+    lockedContract: {
+      position: 'user-tail',
+      content: LOCKED_CARD_VIDEO,
+      reason: '业务侧会把提示词直接交给 VideoProvider；真实性规则必须不可编辑，避免生成仿新闻现场的写实视频。',
+    },
   },
   'publish.metadata': {
     kind: 'publish.metadata',

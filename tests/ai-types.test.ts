@@ -7,6 +7,7 @@ import type {
 } from '../src/types/ai';
 import { buildAICardOverlayData, buildAICardTimelineDraft } from '../src/types/ai';
 import type { OverlayItem } from '../src/types';
+import { DEFAULT_ASSET_TREATMENT, type CardAssetBinding, type StoryboardAssetRequest } from '../src/types/assets';
 
 describe('AI type definitions', () => {
   it('creates a summary card with the expected fields', () => {
@@ -124,6 +125,7 @@ describe('AI type definitions', () => {
   it('builds reusable timeline draft data from an AI card', () => {
     const card: AICard = {
       id: 'card-helper',
+      segmentId: 'seg-helper',
       type: 'insight',
       title: '关键判断',
       content: '现金流比增速更重要',
@@ -154,9 +156,13 @@ describe('AI type definitions', () => {
       },
       renderMode: 'legacy',
       cardPrompt: undefined,
+      assetRequests: undefined,
+      assetBindings: undefined,
       motionCard: undefined,
       sourceStartMs: 12_000,
       sourceEndMs: 28_000,
+      segmentId: 'seg-helper',
+      stylePresetId: undefined,
     });
 
     expect(buildAICardTimelineDraft(card)).toEqual({
@@ -170,6 +176,7 @@ describe('AI type definitions', () => {
   it('anchors a short timeline card near the end of its source topic window', () => {
     const card: AICard = {
       id: 'card-anchor',
+      segmentId: 'seg-anchor',
       type: 'summary',
       title: '滞后出现的核心观点',
       content: '真正的主题在后半段才说出来',
@@ -192,5 +199,56 @@ describe('AI type definitions', () => {
       durationMs: 5_000,
       aiCardData: buildAICardOverlayData(card),
     });
+  });
+
+  it('passes storyboard asset requests and resolved bindings into overlay data', () => {
+    const assetRequests: StoryboardAssetRequest[] = [
+      {
+        slot: 'chip_prop',
+        query: '芯片样品',
+        role: 'object',
+        importance: 'primary',
+        reusePolicy: 'generate-if-missing',
+        visualTreatment: 'technical-product',
+        placementHint: '右下角前景',
+      },
+    ];
+    const assetBindings: CardAssetBinding[] = [
+      {
+        slot: 'chip_prop',
+        assetId: 'asset-chip',
+        filePath: '/tmp/chip.png',
+        treatment: DEFAULT_ASSET_TREATMENT,
+        placement: {
+          x: 120,
+          y: 240,
+          width: 220,
+          depth: 'foreground',
+        },
+      },
+    ];
+    const card: AICard = {
+      id: 'card-assets',
+      type: 'insight',
+      title: '硬件约束',
+      content: '芯片成为关键变量',
+      startMs: 0,
+      endMs: 10_000,
+      displayDurationMs: 4_000,
+      displayMode: 'fullscreen',
+      template: 'insight-default',
+      enabled: true,
+      style: {
+        primaryColor: '#0A84FF',
+        backgroundColor: '#1C1C1E',
+        fontSize: 48,
+      },
+      assetRequests,
+      assetBindings,
+    };
+
+    const data = buildAICardOverlayData(card);
+    expect(data.assetRequests).toBe(assetRequests);
+    expect(data.assetBindings).toBe(assetBindings);
   });
 });

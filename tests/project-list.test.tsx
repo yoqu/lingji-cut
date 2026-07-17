@@ -20,4 +20,24 @@ describe('ProjectList', () => {
 
     expect(html).toContain('file:///Users/demo/covers/cover%201.png');
   });
+
+  it('renders stage badge with published platforms tooltip', () => {
+    const html = renderToStaticMarkup(
+      <ProjectList
+        projects={[
+          {
+            path: '/tmp/demo-project',
+            name: 'demo-project',
+            lastOpenedAt: Date.now(),
+            stage: 'published',
+            publishedPlatforms: ['douyin', 'bilibili'],
+          },
+        ]}
+        onOpenProject={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('已发布');
+    expect(html).toContain('已发布：抖音、B站');
+  });
 });

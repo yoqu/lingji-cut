@@ -1,5 +1,5 @@
 // src/lib/streaming-editor.ts
-import type { EditorView } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { setVirtualCursor, clearVirtualCursor } from './virtual-cursor';
 
 // Re-export types from diff-to-frames for convenience
@@ -101,8 +101,12 @@ export class StreamingEditor {
 
     this.view.dispatch({
       changes,
-      effects: setVirtualCursor.of(frame.cursorPosition),
-      scrollIntoView: follow,
+      effects: follow
+        ? [
+            setVirtualCursor.of(frame.cursorPosition),
+            EditorView.scrollIntoView(frame.cursorPosition, { y: 'end' }),
+          ]
+        : setVirtualCursor.of(frame.cursorPosition),
     });
   }
 

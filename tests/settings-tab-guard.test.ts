@@ -7,8 +7,8 @@ import {
 
 describe('useSettingsTabGuard', () => {
   it('builds a consistent leave-confirm message for settings tabs', () => {
-    expect(buildUnsavedChangesConfirmMessage('TTS 配置')).toBe(
-      'TTS 配置还有未保存的更改。\n点击“确定”会先保存再离开，点击“取消”将留在当前页面。',
+    expect(buildUnsavedChangesConfirmMessage('口播配置')).toBe(
+      '口播配置还有未保存的更改。\n点击“确定”会先保存再离开，点击“取消”将留在当前页面。',
     );
   });
 
@@ -63,6 +63,23 @@ describe('useSettingsTabGuard', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
+  it('supports the product confirmation dialog through an async confirmation adapter', async () => {
+    const confirm = vi.fn(async () => true);
+    const save = vi.fn(async () => true);
+
+    await expect(
+      runSettingsLeaveGuard({
+        title: '口播配置',
+        hasUnsavedChanges: true,
+        onSave: save,
+        confirm,
+      }),
+    ).resolves.toBe(true);
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   it('wires the generic hook into settings tabs and navigation shell', () => {
     const settingsSource = readFileSync(
       new URL('../src/pages/Settings.tsx', import.meta.url),
@@ -79,6 +96,8 @@ describe('useSettingsTabGuard', () => {
 
     expect(settingsSource).toContain('tabLeaveGuardRef');
     expect(settingsSource).toContain('onRegisterLeaveGuard');
+    expect(settingsSource).toContain('<ConfirmDialog');
+    expect(settingsSource).toContain('confirmLeave={confirmLeave}');
     expect(aiSource).toContain('useSettingsTabGuard');
     expect(ttsSource).toContain('useSettingsTabGuard');
   });

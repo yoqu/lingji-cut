@@ -12,7 +12,7 @@ describe('VideoProviderListSection', () => {
         onChange={() => {}}
       />,
     );
-    expect(html).toMatch(/视频 Provider/);
+    expect(html).toMatch(/视频生成服务/);
     expect(html).toMatch(/添加/);
   });
 

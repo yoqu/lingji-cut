@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Plus, Trash2 } from 'lucide-react';
 import type { VideoProvider, VideoProviderType } from '../../types/ai';
 import {
   Badge,
@@ -97,7 +98,7 @@ function validateVideoProviderDraft(
 ): VideoProviderDraftErrors {
   const normalized = normalizeVideoProviderDraft(provider);
   const errors: VideoProviderDraftErrors = {};
-  if (!normalized.name) errors.name = '请输入 Provider 名称';
+  if (!normalized.name) errors.name = '请输入生成服务名称';
   if (!normalized.baseUrl) errors.baseUrl = '请输入 Base URL';
   if (!normalized.apiKey) errors.apiKey = '请输入 API Key';
   if (normalized.models.length === 0) errors.models = '请至少添加一个模型';
@@ -118,7 +119,7 @@ function VideoProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
   const [setAsDefault, setSetAsDefault] = useState(isDefault);
   const [newModel, setNewModel] = useState('');
   const [errors, setErrors] = useState<VideoProviderDraftErrors>({});
-  const title = initial.name ? '编辑视频 Provider' : '添加视频 Provider';
+  const title = initial.name ? '编辑视频生成服务' : '添加视频生成服务';
 
   const clearFieldError = (key: keyof VideoProviderDraftErrors) =>
     setErrors((prev) => {
@@ -240,6 +241,7 @@ function VideoProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
                       type="button"
                       variant="ghost"
                       size="sm"
+                      leftIcon={<Trash2 size={12} />}
                       className={styles.removeModelButton}
                       onClick={() => removeModel(idx)}
                     >
@@ -266,14 +268,14 @@ function VideoProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
                 wrapperClassName={styles.modelInput}
                 aria-invalid={Boolean(errors.models)}
               />
-              <Button type="button" variant="secondary" size="sm" onClick={addModel}>
+              <Button type="button" variant="secondary" size="sm" leftIcon={<Plus size={12} />} onClick={addModel}>
                 添加
               </Button>
             </div>
           </Field>
 
           <Checkbox
-            label="设为默认视频 Provider"
+            label="设为默认视频生成服务"
             checked={setAsDefault}
             onChange={(checked) => setSetAsDefault(checked)}
             size="sm"
@@ -286,7 +288,7 @@ function VideoProviderDialog({ initial, isDefault, onSave, onCancel }: DialogPro
             confirmLabel="保存"
             extra={
               Object.keys(errors).length > 0 ? (
-                <span className={styles.footerError}>请先补全 Provider 的必填项</span>
+                <span className={styles.footerError}>请先补全生成服务的必填项</span>
               ) : null
             }
           />
@@ -318,11 +320,11 @@ export function VideoProviderListSection({
       getTypeLabel={(p) => getTypeLabel(p.type)}
       getCapsSummary={(p) => buildCapabilitiesSummaryText(p.type)}
       emptyState={{
-        eyebrow: 'Video Provider',
-        title: '暂无视频 Provider',
-        description: '点击下方按钮添加你的第一个视频 Provider（Vidu / Kling / Runway 等）。',
+        eyebrow: '视频生成',
+        title: '暂无视频生成服务',
+        description: '点击下方按钮添加你的第一个视频生成服务（Vidu / Kling / Runway 等）。',
       }}
-      addLabel="+ 添加视频 Provider"
+      addLabel="添加视频生成服务"
       renderDialog={(dialogProps) => <VideoProviderDialog {...dialogProps} />}
     />
   );

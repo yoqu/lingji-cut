@@ -352,7 +352,13 @@ export function PromptsConfigTab() {
     resolved: ResolvedBinding | null;
     bindingError: PromptBindingError | null;
   }>(() => {
-    if (active.type !== 'kind' || !aiSettings) return { resolved: null, bindingError: null };
+    if (
+      active.type !== 'kind' ||
+      !aiSettings ||
+      PROMPT_KIND_META[active.kind].supportsBinding === false
+    ) {
+      return { resolved: null, bindingError: null };
+    }
     try {
       const r = resolvePromptBinding(active.kind, aiSettings, projectBindings);
       return { resolved: r, bindingError: null };
@@ -740,12 +746,9 @@ export function PromptsConfigTab() {
                 {groupedKinds[group].map((item) => {
                   const isActive =
                     active.type === 'kind' && item.kind === active.kind;
-                  const bindingBadge = computeBindingBadge(
-                    item.kind,
-                    scope,
-                    aiSettings,
-                    projectBindings,
-                  );
+                  const bindingBadge = item.meta.supportsBinding === false
+                    ? null
+                    : computeBindingBadge(item.kind, scope, aiSettings, projectBindings);
                   return (
                     <div className={styles.kindRow} key={item.kind}>
                       <Button
@@ -763,9 +766,11 @@ export function PromptsConfigTab() {
                           >
                             {SCOPE_LABEL[item.effectiveScope]}
                           </Badge>
-                          <Badge variant={bindingBadge.variant} size="xs">
-                            {bindingBadge.label}
-                          </Badge>
+                          {bindingBadge ? (
+                            <Badge variant={bindingBadge.variant} size="xs">
+                              {bindingBadge.label}
+                            </Badge>
+                          ) : null}
                         </span>
                       </Button>
                     </div>
@@ -893,38 +898,45 @@ export function PromptsConfigTab() {
                 </div>
               )}
 
-              <PromptBindingBar
-                scope={scope}
-                kind={active.kind}
-                binding={currentScopeBinding}
-                llmProviders={llmProviders}
-                effectiveProviderId={resolved?.provider?.id ?? null}
-                effectiveModel={resolved?.model ?? null}
-                onChange={(next) => {
-                  void handleBindingChange(next);
-                }}
-                showImageBinding={
-                  active.kind === 'cover.regeneration' || active.kind === 'card.image'
-                }
-                imageProviders={imageProviders}
-                effectiveImageProviderId={resolved?.imageProvider?.id ?? null}
-                effectiveImageModel={resolved?.imageModel ?? null}
-                onImageChange={(next) => {
-                  void handleImageBindingChange(next);
-                }}
-                showVideoBinding={active.kind === 'card.video'}
-                videoProviders={videoProviders}
-                effectiveVideoProviderId={resolved?.videoProvider?.id ?? null}
-                effectiveVideoModel={resolved?.videoModel ?? null}
-                onVideoChange={(next) => {
-                  void handleVideoBindingChange(next);
-                }}
-              />
+              {activeMeta.supportsBinding !== false ? (
+                <PromptBindingBar
+                  scope={scope}
+                  kind={active.kind}
+                  binding={currentScopeBinding}
+                  llmProviders={llmProviders}
+                  effectiveProviderId={resolved?.provider?.id ?? null}
+                  effectiveModel={resolved?.model ?? null}
+                  onChange={(next) => {
+                    void handleBindingChange(next);
+                  }}
+                  showImageBinding={
+                    active.kind === 'cover.regeneration' || active.kind === 'card.image'
+                  }
+                  imageProviders={imageProviders}
+                  effectiveImageProviderId={resolved?.imageProvider?.id ?? null}
+                  effectiveImageModel={resolved?.imageModel ?? null}
+                  onImageChange={(next) => {
+                    void handleImageBindingChange(next);
+                  }}
+                  showVideoBinding={active.kind === 'card.video'}
+                  videoProviders={videoProviders}
+                  effectiveVideoProviderId={resolved?.videoProvider?.id ?? null}
+                  effectiveVideoModel={resolved?.videoModel ?? null}
+                  onVideoChange={(next) => {
+                    void handleVideoBindingChange(next);
+                  }}
+                />
+              ) : (
+                <Alert
+                  variant="info"
+                  description="这是跨步骤复用的导演规则，不会单独调用模型。系统会自动注入字幕分段规划与 Motion Bible；音效预算、最小间隔、响度和安全区仍由代码硬门禁保证。"
+                />
+              )}
 
               {active.kind === 'cards.segment' ? (
                 <Field
                   label="段落卡片生成并发数"
-                  hint="同时并发生成多少个段落的卡片；信息图（image 卡）的图像 Provider 调用嵌套在 worker 内，因此该值也决定信息图并行度。必须 ≥ 1，默认 4。云端模型（如 DeepSeek）可适当调高以提速；若频繁出现 429/限流再下调。"
+                  hint="同时并发生成多少个段落的卡片；信息图（image 卡）的图片生成服务调用嵌套在 worker 内，因此该值也决定信息图并行度。必须 ≥ 1，默认 4。云端模型（如 DeepSeek）可适当调高以提速；若频繁出现 429/限流再下调。"
                 >
                   <NumberField
                     value={cardConcurrencyValue}
@@ -1123,7 +1135,7 @@ export function PromptsConfigTab() {
               </Field>
 
               <Field
-                label="TTS 演绎人设（MiMo 朗读语气，可留空用默认）"
+                label="口播演绎人设（MiMo 朗读语气，可留空用默认）"
                 hint="向 MiMo TTS 描述该模板专属的朗读风格与角色人设，留空时使用全局默认"
               >
                 <Textarea

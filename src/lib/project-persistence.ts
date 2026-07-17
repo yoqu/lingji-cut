@@ -2,6 +2,9 @@ import type { WorkbenchStage } from './script-workbench-stage';
 import type { TimelineData } from '../types';
 import type { AIAnalysisResult, CoverCandidate } from '../types/ai';
 import type { AutoWorkflowParams } from '../store/ai';
+import type { MotionProductionPlan } from '../types/production';
+import type { ProjectProductionState } from '../types/director';
+import { createEmptyProductionState, migrateLegacyProductionState } from './director-workflow';
 
 export interface ProjectScriptState {
   templateId: string;
@@ -102,6 +105,8 @@ export interface ProjectPublishMeta {
   bilibiliTid?: string;
   /** 发布历史（新→旧，最多 PUBLISH_HISTORY_MAX 条）；缺省视为空。 */
   history?: PublishHistoryEntry[];
+  /** 已成功发布的平台 → 最近一次成功发布时间戳（毫秒）；累积不淘汰，作为「已发布」标记真源。 */
+  publishedPlatforms?: Record<string, number>;
   /** @deprecated 已移除按账号文案覆盖，仅保留以兼容旧工程读取。 */
   overrides?: Record<string, ProjectPublishOverride>;
 }
@@ -112,7 +117,7 @@ export interface ProjectMetaSection {
 }
 
 export interface ProjectData {
-  version: 1;
+  version: 3;
   createdAt: string;
   updatedAt: string;
   timeline: TimelineData | null;
@@ -125,6 +130,8 @@ export interface ProjectData {
   meta?: ProjectMetaSection;
   /** 项目级默认风格预设 id；缺省继承全局 */
   stylePresetId?: string;
+  /** 导演方案、制作执行与审核状态的单一真源。 */
+  production?: ProjectProductionState;
 }
 
 export type ProjectSection =
@@ -134,7 +141,8 @@ export type ProjectSection =
   | 'workflowMeta'
   | 'publish'
   | 'meta'
-  | 'stylePresetId';
+  | 'stylePresetId'
+  | 'production';
 
 export const DEFAULT_WORKFLOW_META: ProjectWorkflowMeta = {
   lastAutoParams: null,
@@ -170,7 +178,7 @@ function nowIso(): string {
 export function createDefaultProjectData(): ProjectData {
   const now = nowIso();
   return {
-    version: 1,
+    version: 3,
     createdAt: now,
     updatedAt: now,
     timeline: null,
@@ -185,6 +193,59 @@ export function createDefaultProjectData(): ProjectData {
       lastReviewedDocVersion: 0,
     },
     workflowMeta: { ...DEFAULT_WORKFLOW_META },
+  };
+}
+
+/**
+ * V1/V2 -> V3：保留原项目内容，并把旧 production/analysis 恢复为受保护的导演版本。
+ */
+export function migrateProjectData(input: Omit<ProjectData, 'version' | 'production'> & {
+  version?: number;
+  production?: ProjectProductionState | MotionProductionPlan;
+}): {
+  data: ProjectData;
+  migrated: boolean;
+} {
+  const productionVersion = input.production?.version;
+  if (input.version === 3 && (productionVersion == null || productionVersion === 3)) {
+    return { data: input as ProjectData, migrated: false };
+  }
+  const legacyProduction = input.production && input.production.version === 2
+    ? input.production as MotionProductionPlan
+    : null;
+  const existingV3 = input.production && input.production.version === 3
+    ? input.production as ProjectProductionState
+    : null;
+  const production = existingV3 ?? (
+    input.aiAnalysis?.analysisResult?.segments?.length
+      ? migrateLegacyProductionState({
+          analysisResult: input.aiAnalysis.analysisResult,
+          legacyPlan: legacyProduction,
+          timeline: input.timeline ?? null,
+          mode: input.workflowMeta?.lastAutoParams?.productionMode === 'director' ? 'director' : 'auto',
+        })
+      : legacyProduction
+        ? {
+            ...createEmptyProductionState(),
+            execution: legacyProduction,
+            legacyProtected: true,
+          }
+        : undefined
+  );
+  return {
+    data: {
+      ...input,
+      version: 3,
+      aiAnalysis: input.aiAnalysis ?? { analysisResult: null, coverCandidates: [] },
+      script: input.script ?? {
+        templateId: 'news-broadcast',
+        annotations: [],
+        reviewState: 'idle',
+        lastReviewedDocVersion: 0,
+      },
+      ...(production ? { production } : {}),
+    } as ProjectData,
+    migrated: true,
   };
 }
 
@@ -210,6 +271,23 @@ export function extractPublishSection(data: ProjectData): ProjectPublishMeta {
 
 export function extractMetaSection(data: ProjectData): ProjectMetaSection {
   return { ...DEFAULT_PROJECT_META, ...(data.meta ?? {}) };
+}
+
+/**
+ * 已发布平台（平台 id → 最近成功时间戳）。
+ * 真源是 publish.publishedPlatforms；旧工程无此字段时从发布历史的成功结果回推。
+ */
+export function resolvePublishedPlatforms(
+  data: Pick<ProjectData, 'publish'>,
+): Record<string, number> {
+  const resolved: Record<string, number> = {};
+  for (const entry of data.publish?.history ?? []) {
+    for (const target of entry.targets) {
+      if (entry.results[target.accountId]?.state !== 'success') continue;
+      resolved[target.platform] = Math.max(resolved[target.platform] ?? 0, entry.publishedAt);
+    }
+  }
+  return { ...resolved, ...(data.publish?.publishedPlatforms ?? {}) };
 }
 
 /** 作品标题：meta.title 为真源，旧工程回退 publish.title（惰性迁移）。 */

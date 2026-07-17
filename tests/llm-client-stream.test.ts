@@ -135,7 +135,7 @@ describe('streamText', () => {
     } as unknown as AISettings;
 
     await expect(streamText(empty, '系统提示', '用户输入', vi.fn())).rejects.toThrow(
-      '请先在「设置 → AI」中配置 LLM Provider 与模型',
+      '请先在「设置 → AI」中配置文本生成服务与模型',
     );
     expect(chatOpenAIMock).not.toHaveBeenCalled();
   });

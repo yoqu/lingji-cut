@@ -165,7 +165,12 @@ export function createSonarInboxStore(deps: SonarInboxStoreDeps = {}): SonarInbo
 
     async list() {
       const all = await ensureLoaded();
-      return [...all].sort((a, b) => b.receivedAt - a.receivedAt);
+      // 按视频发布时间倒序（缺失回退推送时间，同刻再按推送时间）。
+      return [...all].sort(
+        (a, b) =>
+          (b.publishedAt || b.receivedAt) - (a.publishedAt || a.receivedAt) ||
+          b.receivedAt - a.receivedAt,
+      );
     },
 
     async get(id) {

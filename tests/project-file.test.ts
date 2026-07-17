@@ -2,9 +2,34 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { loadProjectFile, saveProjectSection } from '../electron/project-file';
+import { loadProjectFile, mutateProjectProduction, saveProjectSection } from '../electron/project-file';
+import { createEmptyProductionState } from '../src/lib/director-workflow';
+import type { DirectorPlan } from '../src/types/director';
 
 let tmpDir: string;
+
+function directorPlan(revision: number): DirectorPlan {
+  return {
+    revision,
+    inputFingerprint: `source-${revision}`,
+    summary: '摘要',
+    keywords: [],
+    segments: [],
+    motionBible: {
+      visualThesis: '命题',
+      rhythm: { density: 'balanced', heavySegments: [], quietSegments: [] },
+      carrierPlan: [],
+      styleRules: { paletteUse: '蓝', typographyUse: '短标题' },
+      transitionRules: { default: 'crossfade', matchCutCandidates: [] },
+    },
+    coverDirection: { prompt: '封面', composition: '居中' },
+    audioDirection: { bgmStyle: '克制', energy: 2, soundDensity: 'balanced' },
+    warnings: [],
+    createdAt: 1,
+    updatedAt: 1,
+    approvedAt: 1,
+  };
+}
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'proj-test-'));
@@ -17,7 +42,7 @@ afterEach(async () => {
 describe('loadProjectFile', () => {
   it('空目录返回默认 ProjectData', async () => {
     const data = await loadProjectFile(tmpDir);
-    expect(data.version).toBe(1);
+    expect(data.version).toBe(3);
     expect(data.timeline).toBeNull();
   });
 
@@ -42,7 +67,9 @@ describe('loadProjectFile', () => {
     };
     await fs.writeFile(path.join(tmpDir, 'project.json'), JSON.stringify(existing));
     const data = await loadProjectFile(tmpDir);
+    expect(data.version).toBe(3);
     expect(data.timeline?.podcast?.audioPath).toBe('/test.mp3');
+    expect(await fs.readFile(path.join(tmpDir, 'project.v1.backup.json'), 'utf-8')).toContain('"version":1');
   });
 
   it('读入旧 project.json 时内存态剥离已废弃的 motionCards / storyboardPlan 字段（不回写磁盘）', async () => {
@@ -72,9 +99,11 @@ describe('loadProjectFile', () => {
       analysisResult: null,
       coverCandidates: [],
     });
-    // 不再 rewrite-on-open：磁盘原文保持不变
+    // V1 -> V3 会一次性备份并重写；废弃字段不会进入新文件。
     const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'project.json'), 'utf-8'));
+    expect(raw.version).toBe(3);
     expect(raw.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(raw.aiAnalysis.motionCards).toBeUndefined();
   });
 
   it('不再迁移旧 sidecar 文件：只有 timeline.json 时按空目录处理', async () => {
@@ -96,7 +125,64 @@ describe('loadProjectFile', () => {
   });
 });
 
+describe('mutateProjectProduction', () => {
+  it('serializes concurrent output mutations without losing sibling state', async () => {
+    await loadProjectFile(tmpDir);
+    await Promise.all([
+      mutateProjectProduction(tmpDir, {
+        kind: 'set-output',
+        output: 'cards',
+        state: { status: 'current', directorRevision: 1, updatedAt: 10 },
+      }),
+      mutateProjectProduction(tmpDir, {
+        kind: 'set-output',
+        output: 'cover',
+        state: { status: 'failed', directorRevision: 1, updatedAt: 11, error: 'cover failed' },
+      }),
+    ]);
+    const project = await loadProjectFile(tmpDir);
+    expect(project.production?.outputs.cards.status).toBe('current');
+    expect(project.production?.outputs.cover).toMatchObject({ status: 'failed', error: 'cover failed' });
+  });
+});
+
 describe('saveProjectSection', () => {
+  it('拒绝过期制作任务覆盖当前导演版本的产物', async () => {
+    const production = createEmptyProductionState(1);
+    production.approvedPlan = directorPlan(2);
+    production.workflow = {
+      ...production.workflow,
+      stage: 'production-running',
+      activeTaskId: 'task-current',
+    };
+    await saveProjectSection(tmpDir, 'production', production);
+    await saveProjectSection(tmpDir, 'aiAnalysis', {
+      analysisResult: null,
+      coverCandidates: [{ id: 'current', prompt: '当前封面', imageUrl: '/current.png', selected: true }],
+    });
+
+    await expect(saveProjectSection(tmpDir, 'aiAnalysis', {
+      analysisResult: null,
+      coverCandidates: [{ id: 'stale', prompt: '过期封面', imageUrl: '/stale.png', selected: true }],
+    }, {
+      expectedDirectorRevision: 1,
+      expectedTaskId: 'task-stale',
+    })).rejects.toThrow(/版本已变化|任务已变化/);
+
+    const project = await loadProjectFile(tmpDir);
+    expect(project.aiAnalysis.coverCandidates[0]?.id).toBe('current');
+  });
+
+  it('拒绝把旧 MotionProductionPlan 直接覆盖到 V3 production', async () => {
+    await loadProjectFile(tmpDir);
+    await expect(saveProjectSection(tmpDir, 'production', {
+      version: 2,
+      shots: [],
+    })).rejects.toThrow('production_schema_invalid');
+    const project = await loadProjectFile(tmpDir);
+    expect(project.production).toBeUndefined();
+  });
+
   it('写入 timeline 段并保留其他段', async () => {
     await loadProjectFile(tmpDir);
     const newTimeline = {

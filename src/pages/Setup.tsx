@@ -116,7 +116,7 @@ export function Setup({
         : null;
     return {
       // getAllRoles() 已合并：NONE_ROLE + 内置模板（派生角色）+ 用户自定义角色，
-      // 与 AI 写稿工作台 QuickActionBar 的角色下拉保持一致口径。
+      // 与写稿工作台 QuickActionBar 的角色下拉保持一致口径。
       roles: getAllRoles().map((r) => ({ value: r.id, label: r.name })),
       voices: (aiSettings?.ttsVoices ?? []).map((voice) => ({
         value: voice.providerType === 'minimax' && voice.voiceId ? voice.voiceId : voice.id,
@@ -129,6 +129,7 @@ export function Setup({
         templateId: selectedTemplate || 'news-broadcast',
         roleId: selectedRole || 'none',
         voiceId: voiceIdDefault,
+        productionMode: 'auto',
       } satisfies AutoWorkflowParams,
       defaultModelBinding,
     };

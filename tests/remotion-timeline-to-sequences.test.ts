@@ -5,6 +5,7 @@ import {
   computeCardCues,
 } from '../src/remotion/timeline-to-sequences';
 import type { AICardDisplayMode } from '../src/types/ai';
+import type { MotionBible } from '../src/types/motion';
 
 describe('computeCardCues', () => {
   const srt = [
@@ -86,6 +87,7 @@ function aiCardOverlay(
   startMs: number,
   durationMs: number,
   displayMode: AICardDisplayMode = 'fullscreen',
+  segmentId = id,
 ): OverlayItem {
   return {
     id,
@@ -99,11 +101,22 @@ function aiCardOverlay(
     aiCardData: {
       cardType: 'concept',
       title: id,
+      segmentId,
       content: '',
       template: 'default',
       displayMode,
       style: { primaryColor: '#fff', backgroundColor: '#000', fontSize: 24 },
     },
+  };
+}
+
+function bible(defaultTransition: MotionBible['transitionRules']['default']): MotionBible {
+  return {
+    visualThesis: '统一转场',
+    rhythm: { density: 'balanced', heavySegments: [], quietSegments: [] },
+    carrierPlan: [],
+    styleRules: { paletteUse: 'default', typographyUse: 'default' },
+    transitionRules: { default: defaultTransition, matchCutCandidates: [] },
   };
 }
 
@@ -174,5 +187,80 @@ describe('buildRenderPlan card crossfade', () => {
     );
     expect(plan.visual.find((c) => c.id === 'a')!.cues).toEqual([3]);
     expect(plan.visual.find((c) => c.id === 'b')!.cues).toEqual([3]);
+    expect(plan.visual.find((c) => c.id === 'a')!.timingPlan?.cues).toEqual([3]);
+  });
+
+  it('injects timingPlan for ai cards with storyboard beat roles', () => {
+    const card = aiCardOverlay('timed', 1000, 4000);
+    card.aiCardData!.motionCard = {
+      compiledAt: 1,
+      prompt: '',
+      retryCount: 0,
+      storyboard: {
+        claim: '重点数字落地',
+        carrier: 'data-hero',
+        scene: '大数字收束',
+        focus: { beat: 1 },
+        beats: [
+          { cue: null, kind: 'build', role: 'anticipation', adds: '标题' },
+          { cue: 1, kind: 'accent', role: 'emphasis', adds: '数字' },
+        ],
+      },
+    };
+    const srt: SrtEntry[] = [
+      { index: 0, startMs: 1000, endMs: 1800, text: '先铺垫。' },
+      { index: 1, startMs: 2500, endMs: 3200, text: '关键数字 28842 人！' },
+    ];
+    const plan = buildRenderPlan(timelineWithCards([card]), srt, 30);
+    const clip = plan.visual.find((c) => c.id === 'timed')!;
+    expect(clip.cues).toEqual([0, 45]);
+    expect(clip.timingPlan?.beats.map((beat) => beat.role)).toEqual(['anticipation', 'emphasis']);
+    expect(clip.timingPlan?.beats[1]).toMatchObject({ startFrame: 39, landFrame: 45 });
+  });
+
+  it('merges timeline motionTimingMetadata into ai-card timingPlan accents', () => {
+    const timeline = timelineWithCards([aiCardOverlay('timed-meta', 1000, 4000)]);
+    timeline.motionTimingMetadata = {
+      accents: [
+        { timeMs: 1800, strength: 2, source: 'speech' },
+        { timeMs: 2500, strength: 3, source: 'bgm' },
+      ],
+    };
+    const plan = buildRenderPlan(timeline, [], 30);
+    const clip = plan.visual.find((c) => c.id === 'timed-meta')!;
+    expect(clip.timingPlan?.accents).toEqual([
+      { frame: 24, strength: 2, source: 'speech' },
+      { frame: 45, strength: 3, source: 'bgm' },
+    ]);
+  });
+
+  it('uses Motion Bible hard-cut without extending adjacent cards', () => {
+    const a = aiCardOverlay('a', 0, 4000, 'fullscreen', 'seg-a');
+    const b = aiCardOverlay('b', 4300, 3700, 'fullscreen', 'seg-b');
+    a.aiCardData!.motionBible = bible('hard-cut');
+    const plan = buildRenderPlan(timelineWithCards([a, b]), [], 30);
+    const prev = plan.visual.find((c) => c.id === 'a')!;
+    const next = plan.visual.find((c) => c.id === 'b')!;
+    expect(prev.durationFrames).toBe(120);
+    expect(prev.transitionOut?.kind).toBe('hard-cut');
+    expect(next.transitionIn?.kind).toBe('hard-cut');
+  });
+
+  it('uses Motion Bible match-cut candidates before the default transition', () => {
+    const a = aiCardOverlay('a', 0, 4000, 'fullscreen', 'seg-a');
+    const b = aiCardOverlay('b', 4300, 3700, 'fullscreen', 'seg-b');
+    a.aiCardData!.motionBible = {
+      ...bible('wipe'),
+      transitionRules: {
+        default: 'wipe',
+        matchCutCandidates: [{ fromSegmentId: 'seg-a', toSegmentId: 'seg-b', motif: '同一蓝线' }],
+      },
+    };
+    const plan = buildRenderPlan(timelineWithCards([a, b]), [], 30);
+    const prev = plan.visual.find((c) => c.id === 'a')!;
+    const next = plan.visual.find((c) => c.id === 'b')!;
+    expect(prev.durationFrames).toBe(next.startFrame + CARD_CROSSFADE_FRAMES);
+    expect(prev.transitionOut).toMatchObject({ kind: 'match-cut', motif: '同一蓝线' });
+    expect(next.transitionIn?.kind).toBe('match-cut');
   });
 });

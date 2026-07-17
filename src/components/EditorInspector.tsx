@@ -27,6 +27,7 @@ interface EditorInspectorProps {
   timelineHeight: number;
   timelineFps?: number;
   onClose: () => void;
+  onOpenAssetCenter?: (assetId?: string) => void;
 }
 
 export function EditorInspector({
@@ -40,6 +41,7 @@ export function EditorInspector({
   timelineFps = 30,
   timelineWidth,
   onClose,
+  onOpenAssetCenter,
 }: EditorInspectorProps) {
   const {
     card,
@@ -50,6 +52,7 @@ export function EditorInspector({
     isRegeneratingCard,
     regenerateCard,
     saveCard,
+    storyboardCueOptions,
   } = useAICardInspector(selection.type === 'ai-card' ? selection.cardId : null);
   const timeline = useTimelineStore((state) => state.timeline);
 
@@ -114,6 +117,8 @@ export function EditorInspector({
           onRegenerate={regenerateCard}
           onGenerateAnimationDirection={generateAnimationDirection}
           onSave={saveCard}
+          onOpenAssetCenter={onOpenAssetCenter}
+          storyboardCueOptions={storyboardCueOptions}
         />
       );
     }
