@@ -149,11 +149,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     currentPrompt?: string;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
+    standalone?: boolean;
+    workTitle?: string;
   }) => ipcRenderer.invoke('regenerate-cover-prompt', args),
   generateCoverImages: (args: {
     prompts: string[];
     settings: AISettings;
-    projectDir: string;
+    projectDir?: string;
+    outputDir?: string;
     projectBindings?: PromptBindingMap | null;
     telemetryRunId?: string | null;
     aspectRatio?: '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
@@ -885,6 +888,8 @@ contextBridge.exposeInMainWorld('publishAPI', {
   run: (job: import('../src/lib/electron-api').PublishJobInput, headless?: boolean) =>
     ipcRenderer.invoke('publish:run', job, headless),
   cancel: () => ipcRenderer.invoke('publish:cancel'),
+  loadStandaloneState: () => ipcRenderer.invoke('publish:standalone-load'),
+  saveStandaloneState: (state: unknown) => ipcRenderer.invoke('publish:standalone-save', state),
   onQrcode: (cb: (payload: { platform: string; accountName: string; png: string }) => void) => {
     const handler = (_e: unknown, payload: { platform: string; accountName: string; png: string }) =>
       cb(payload);

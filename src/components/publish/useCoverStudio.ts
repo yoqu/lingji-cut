@@ -113,7 +113,7 @@ const PUBLISH_RATIO_VALUES = PUBLISH_RATIOS.map((r) => r.ratio);
 /** 每个比例一次生成的候选数 */
 const RATIO_BATCH = 2;
 
-function startCoverTask(label: string, phase: string): string {
+export function startCoverTask(label: string, phase: string): string {
   const taskId = `publish-cover-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   useTaskProgressStore.getState().startTask({
     id: taskId,
@@ -128,7 +128,7 @@ function startCoverTask(label: string, phase: string): string {
   return taskId;
 }
 
-function failCoverTask(taskId: string, error: unknown): string {
+export function failCoverTask(taskId: string, error: unknown): string {
   const message = error instanceof Error ? error.message : '封面生成失败';
   useTaskProgressStore.getState().failTask(taskId, message);
   return message;

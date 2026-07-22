@@ -24,6 +24,7 @@ import { DirectorWorkbench } from './pages/DirectorWorkbench';
 import { ScriptWorkbench } from './pages/ScriptWorkbench';
 import { Settings, type SettingsTab } from './pages/Settings';
 import { Setup } from './pages/Setup';
+import { FreePublish } from './pages/FreePublish';
 import { AutoRunController } from './components/AutoRunController';
 import { ImportProjectDialog } from './components/ImportProjectDialog';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
@@ -1080,7 +1081,10 @@ export default function App() {
                   onOpenSettings={() => setPage('settings')}
                   onMediaImport={handleMediaImport}
                   onImportProject={handleOpenImportProject}
+                  onOpenFreePublish={() => setPage('free-publish')}
                 />
+              ) : page === 'free-publish' ? (
+                <FreePublish onBack={() => setPage('welcome')} />
               ) : page === 'settings' ? (
                 <Settings onBack={() => setPage(previousPage)} initialTab={settingsInitialTab} />
               ) : page === 'auto-run' ? (

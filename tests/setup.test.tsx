@@ -13,6 +13,7 @@ describe('Setup', () => {
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
         onImportProject={() => undefined}
+        onOpenFreePublish={() => undefined}
       />,
     );
 
@@ -33,6 +34,7 @@ describe('Setup', () => {
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
         onImportProject={() => undefined}
+        onOpenFreePublish={() => undefined}
       />,
     );
 
@@ -56,6 +58,7 @@ describe('Setup', () => {
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
         onImportProject={() => undefined}
+        onOpenFreePublish={() => undefined}
       />,
     );
 

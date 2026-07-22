@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, FileText, Video, FolderOpen, FolderInput, Heart, MessageCircle } from 'lucide-react';
+import { Plus, FileText, Video, FolderOpen, FolderInput, Heart, MessageCircle, Send } from 'lucide-react';
 import type { RecentProjectEntry } from '../lib/electron-api';
 import type { VideoImportSourceInput } from '../lib/video-import-types';
 import { ProjectList } from '../components/ProjectList';
@@ -52,6 +52,8 @@ interface SetupProps {
   ) => Promise<void>;
   /** 导入项目回调：打开导入项目向导（处理跨机器项目目录识别与路径修复） */
   onImportProject: () => void;
+  /** 自由发布入口：任意视频 + 主题 → AI 文案/封面 → 一键发布全平台 */
+  onOpenFreePublish: () => void;
 }
 
 export function Setup({
@@ -62,6 +64,7 @@ export function Setup({
   onImportScript,
   onMediaImport,
   onImportProject,
+  onOpenFreePublish,
 }: SetupProps) {
   // ── 导入媒体弹窗（抖音 / 本地视频 / 本地音频，统一多 Tab，create 模式）──
   const [mediaImportOpen, setMediaImportOpen] = useState(false);
@@ -262,6 +265,17 @@ export function Setup({
               <FolderInput size={22} strokeWidth={1.5} />
             </div>
             <span className={styles.quickItemLabel}>导入项目</span>
+          </button>
+          {/* 自由发布入口：任意视频 + 主题，AI 生成封面/文案后一键发布全平台 */}
+          <button
+            type="button"
+            className={styles.quickItem}
+            onClick={onOpenFreePublish}
+          >
+            <div className={styles.quickItemIcon}>
+              <Send size={22} strokeWidth={1.5} />
+            </div>
+            <span className={styles.quickItemLabel}>发布视频</span>
           </button>
         </div>
 

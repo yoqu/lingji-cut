@@ -66,7 +66,8 @@ export type AppPage =
   | 'asset-center'
   | 'settings'
   | 'auto-run'
-  | 'publish';
+  | 'publish'
+  | 'free-publish';
 
 /** 控制服务操作事件（agent 经 CLI 驱动应用；驱动全局「AI 正在操作」反馈层） */
 export interface ControlOpEvent {
@@ -233,6 +234,8 @@ export interface GenerateAICardForSegmentArgs {
   qualityMode?: 'auto' | 'director';
   /** 观测面板关联键（渲染端任务 id）；缺省不上报 agent 观测事件。 */
   feedId?: string;
+  /** 可选 auto-run jsonl runId；传入后主进程为该段卡片生成写 llm/stage/compile 事件。 */
+  telemetryRunId?: string | null;
 }
 
 export interface CardMediaProgressPayload {
@@ -399,11 +402,17 @@ export interface ElectronAPI {
     currentPrompt?: string;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
+    /** 自由发布（无项目）：跳过导演审批门禁。 */
+    standalone?: boolean;
+    /** 显式作品标题（standalone 场景传自由发布草稿标题）。 */
+    workTitle?: string;
   }) => Promise<string[]>;
   generateCoverImages: (args: {
     prompts: string[];
     settings: AISettings;
-    projectDir: string;
+    projectDir?: string;
+    /** 显式输出目录（自由发布，无项目）；提供时跳过导演审批门禁。 */
+    outputDir?: string;
     projectBindings?: PromptBindingMap | null;
     telemetryRunId?: string | null;
     aspectRatio?: ImageAspectRatio;
@@ -483,6 +492,7 @@ export interface ElectronAPI {
     projectBindings?: PromptBindingMap | null;
     telemetryRunId?: string | null;
     mode?: 'auto' | 'director';
+    bgmEnabled?: boolean;
   }) => Promise<import('../types/director').ProjectProductionState>;
   approveDirectorPlanAndStartProduction: (
     projectDir: string,
@@ -934,6 +944,9 @@ export interface PublishAPI {
   setSettings(patch: Partial<PublishSettings>): Promise<PublishSettings>;
   run(job: PublishJobInput, headless?: boolean): Promise<void>;
   cancel(): Promise<void>;
+  /** 自由发布（无项目）状态读写：state 结构由渲染层拥有（StandalonePublishState）。 */
+  loadStandaloneState(): Promise<{ root: string; coversDir: string; state: unknown }>;
+  saveStandaloneState(state: unknown): Promise<void>;
   onQrcode(cb: (p: { platform: string; accountName: string; png: string }) => void): () => void;
   onProgress(cb: (payload: PublishProgressPayload) => void): () => void;
   /** 查询 B 站 biliup 二进制是否已安装到用户目录。 */

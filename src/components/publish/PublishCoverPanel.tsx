@@ -144,6 +144,7 @@ export function PublishCoverPanel({
   studio,
   selectedByRatio,
   onSelectRatio,
+  emptyPromptHint = '暂无封面生成描述；可直接选用下方已有封面，或先在编辑器生成内容卡片。',
 }: {
   /** 由父级持有的封面工作台（单一数据源，便于父级按比例自动预填）。 */
   studio: CoverStudio;
@@ -151,6 +152,8 @@ export function PublishCoverPanel({
   selectedByRatio: Partial<Record<ImageAspectRatio, string>>;
   /** 点选某比例的封面：同图再点为取消该比例。 */
   onSelectRatio: (ratio: ImageAspectRatio, path: string) => void;
+  /** 无封面生成描述时的引导文案（项目 / 自由发布场景不同）。 */
+  emptyPromptHint?: string;
 }) {
   const [expandedPrompt, setExpandedPrompt] = useState<Record<string, boolean>>({});
   const anyBusy = studio.busyRatios.length > 0 || studio.busyCandidateIds.length > 0;
@@ -194,7 +197,7 @@ export function PublishCoverPanel({
       {!canGenerate && (
         <div style={{ fontSize: 12, color: 'var(--color-text-tertiary)', display: 'flex', gap: 6, alignItems: 'center' }}>
           <AlertTriangle size={13} style={{ color: 'var(--color-warning, #f59e0b)', flexShrink: 0 }} />
-          暂无封面生成描述；可直接选用下方已有封面，或先在编辑器生成内容卡片。
+          {emptyPromptHint}
         </div>
       )}
 
