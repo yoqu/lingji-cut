@@ -174,6 +174,7 @@ async function resetDirectory(directoryPath) {
 
 async function collectRuntimePackageClosure() {
   const packageNames = new Set();
+  const missingNames = new Set();
   const pendingPackages = [...RUNTIME_ROOT_PACKAGES];
 
   while (pendingPackages.length > 0) {
@@ -185,6 +186,9 @@ async function collectRuntimePackageClosure() {
     const packageDir = getPackageDirectory(packageName);
     const packageJsonFile = path.join(packageDir, 'package.json');
     if (!fs.existsSync(packageJsonFile)) {
+      // 平台专属 optional 包（如 @rspack/binding-win32-*）在 mac 上从不安装，
+      // 记录下来供 stageWindowsPlatformPackages 从 registry 补装。
+      missingNames.add(packageName);
       continue;
     }
 
@@ -209,7 +213,66 @@ async function collectRuntimePackageClosure() {
     });
   }
 
-  return [...packageNames].sort((left, right) => left.localeCompare(right));
+  return {
+    installed: [...packageNames].sort((left, right) => left.localeCompare(right)),
+    missing: [...missingNames].sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+// Windows ffmpeg 已由 stageWindowsFfmpeg 走 vendor/ffmpeg 通道内置，无需重复补装。
+const VENDOR_COVERED_PACKAGE_PREFIXES = ['@ffmpeg-installer/'];
+
+function selectWindowsPlatformPackages(missingNames, lockPackages, arch) {
+  return missingNames
+    .filter((name) => !VENDOR_COVERED_PACKAGE_PREFIXES.some((prefix) => name.startsWith(prefix)))
+    .map((name) => ({ name, entry: lockPackages[`node_modules/${name}`] }))
+    .filter(
+      ({ entry }) =>
+        entry &&
+        entry.optional === true &&
+        Array.isArray(entry.os) &&
+        entry.os.includes('win32') &&
+        (!Array.isArray(entry.cpu) || entry.cpu.includes(arch)),
+    )
+    .map(({ name, entry }) => ({ name, version: entry.version }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function stageWindowsPlatformPackages(stageDir, arch, missingNames) {
+  const lockfile = JSON.parse(
+    await fsp.readFile(path.join(rootDir, 'package-lock.json'), 'utf8'),
+  );
+  const packages = selectWindowsPlatformPackages(missingNames, lockfile.packages || {}, arch);
+  const cacheDir = path.join(rootDir, '.tmp', 'win-platform-packages');
+  await fsp.mkdir(cacheDir, { recursive: true });
+
+  for (const { name, version } of packages) {
+    const tarballName = `${name.replace(/^@/, '').replace(/\//g, '-')}-${version}.tgz`;
+    const tarballPath = path.join(cacheDir, tarballName);
+
+    if (!fs.existsSync(tarballPath)) {
+      console.log(`补装 Windows 平台包：${name}@${version}`);
+      await runCommand('npm', ['pack', `${name}@${version}`, '--pack-destination', cacheDir]);
+      if (!fs.existsSync(tarballPath)) {
+        throw new Error(`Windows 平台包下载失败：${tarballPath}`);
+      }
+    }
+
+    const extractDir = path.join(cacheDir, 'extract', tarballName.replace(/\.tgz$/, ''));
+    await fsp.rm(extractDir, { recursive: true, force: true });
+    await fsp.mkdir(extractDir, { recursive: true });
+    await runCommand('tar', ['-xzf', tarballPath, '-C', extractDir]);
+
+    const extractedPackageDir = path.join(extractDir, 'package');
+    if (!fs.existsSync(path.join(extractedPackageDir, 'package.json'))) {
+      throw new Error(`Windows 平台包解压异常：${tarballPath}`);
+    }
+
+    await copyDirectory(extractedPackageDir, getPackageDirectory(name, stageDir));
+    await fsp.rm(extractDir, { recursive: true, force: true });
+  }
+
+  return packages;
 }
 
 async function stageProjectFiles(stageDir) {
@@ -278,18 +341,23 @@ async function stageWindowsFfmpeg(stageDir, arch) {
   await fsp.copyFile(sourcePath, targetPath);
 }
 
-async function stageNodeModules(stageDir) {
+async function stageNodeModules(stageDir, arch) {
   const stageNodeModulesDir = path.join(stageDir, 'node_modules');
   await fsp.mkdir(stageNodeModulesDir, { recursive: true });
 
-  const packageNames = await collectRuntimePackageClosure();
-  for (const packageName of packageNames) {
+  const { installed, missing } = await collectRuntimePackageClosure();
+  for (const packageName of installed) {
     const sourceDir = getPackageDirectory(packageName);
     if (!fs.existsSync(sourceDir)) {
       continue;
     }
 
     await copyDirectory(sourceDir, getPackageDirectory(packageName, stageDir));
+  }
+
+  const staged = await stageWindowsPlatformPackages(stageDir, arch, missing);
+  if (staged.length > 0) {
+    console.log(`已补装 ${staged.length} 个 Windows 平台包：${staged.map((p) => p.name).join(', ')}`);
   }
 }
 
@@ -307,7 +375,7 @@ async function createStageDirectory(stageDir, arch) {
   await writeStageManifest(stageDir);
   await stageProjectFiles(stageDir);
   await stageWindowsFfmpeg(stageDir, arch);
-  await stageNodeModules(stageDir);
+  await stageNodeModules(stageDir, arch);
 }
 
 function buildWindowsPackagerOptions({
@@ -421,5 +489,6 @@ module.exports = {
   resolvePackageArch,
   resolveSpawnCommand,
   resolveSpawnOptions,
+  selectWindowsPlatformPackages,
   windowsFfmpegPackages,
 };

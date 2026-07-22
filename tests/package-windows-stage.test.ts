@@ -8,6 +8,7 @@ const {
   resolvePackageArch,
   resolveSpawnCommand,
   resolveSpawnOptions,
+  selectWindowsPlatformPackages,
   windowsFfmpegPackages,
 } = require('../scripts/package-windows.cjs');
 
@@ -76,8 +77,72 @@ describe('package windows helpers', () => {
     expect(options.name).toBe('Lingji');
     expect(options.icon).toBe('F:/repo/build/icon.ico');
     expect(options.asar).toEqual({
-      unpackDir: '{dist-cli,dist-remotion,vendor/ffmpeg,node_modules/@earendil-works,node_modules/@mariozechner,node_modules/@remotion,node_modules/esbuild,node_modules/@esbuild,node_modules/@puppeteer,node_modules/puppeteer-core,node_modules/sharp,node_modules/onnxruntime-node,node_modules/ffmpeg-static,node_modules/@ffprobe-installer,node_modules/playwright,node_modules/playwright-core,node_modules/node-pty}',
+      unpackDir: '{dist-cli,dist-remotion,vendor/ffmpeg,node_modules/@earendil-works,node_modules/@mariozechner,node_modules/@remotion,node_modules/@rspack,node_modules/esbuild,node_modules/@esbuild,node_modules/@puppeteer,node_modules/puppeteer-core,node_modules/sharp,node_modules/onnxruntime-node,node_modules/ffmpeg-static,node_modules/@ffprobe-installer,node_modules/playwright,node_modules/playwright-core,node_modules/node-pty}',
     });
+  });
+
+  it('selects missing win32 platform packages from the lockfile by os/cpu', () => {
+    const lockPackages = {
+      'node_modules/@rspack/binding-win32-x64-msvc': {
+        version: '1.7.11',
+        optional: true,
+        os: ['win32'],
+        cpu: ['x64'],
+      },
+      'node_modules/@rspack/binding-win32-ia32-msvc': {
+        version: '1.7.11',
+        optional: true,
+        os: ['win32'],
+        cpu: ['ia32'],
+      },
+      'node_modules/@rspack/binding-darwin-arm64': {
+        version: '1.7.11',
+        optional: true,
+        os: ['darwin'],
+        cpu: ['arm64'],
+      },
+      'node_modules/@ffprobe-installer/win32-x64': {
+        version: '5.1.0',
+        optional: true,
+        os: ['win32'],
+        cpu: ['x64'],
+      },
+      // universal optional 包（无 os 声明）不应被跨平台补装（如 canvas）。
+      'node_modules/canvas': { version: '3.0.0', optional: true },
+    };
+
+    const selected = selectWindowsPlatformPackages(
+      [
+        '@rspack/binding-win32-x64-msvc',
+        '@rspack/binding-win32-ia32-msvc',
+        '@rspack/binding-darwin-arm64',
+        '@ffprobe-installer/win32-x64',
+        'canvas',
+        'not-in-lockfile',
+      ],
+      lockPackages,
+      'x64',
+    );
+
+    expect(selected).toEqual([
+      { name: '@ffprobe-installer/win32-x64', version: '5.1.0' },
+      { name: '@rspack/binding-win32-x64-msvc', version: '1.7.11' },
+    ]);
+  });
+
+  it('excludes ffmpeg-installer packages already staged via the vendor channel', () => {
+    const lockPackages = {
+      'node_modules/@ffmpeg-installer/win32-x64': {
+        version: '4.1.0',
+        optional: true,
+        os: ['win32'],
+        cpu: ['x64'],
+      },
+    };
+
+    expect(
+      selectWindowsPlatformPackages(['@ffmpeg-installer/win32-x64'], lockPackages, 'x64'),
+    ).toEqual([]);
   });
 
   it('wraps a PNG buffer in a valid single-image ICO container', () => {
