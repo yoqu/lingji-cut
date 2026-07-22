@@ -44,6 +44,24 @@ export const MONO_BOLD: VisualStylePreset = {
   },
   motionStyleNotes:
     '超大标题是绝对焦点（字重 800-900、lineHeight 0.95），hero 用重砸式入场（全卡唯一鼓励 overshoot 的场景）；唯一彩色装饰是一条 4px 亮黄短色条，scaleX 揭示到位后 105%→100% 微冲收敛；列表项一律 mono "→" 箭头前缀逐项硬切，底面纯净单色无任何氛围层。',
+  motionSpec: {
+    chartRules: '图表使用黑白高反差与单根亮黄焦点条，标签简短且靠统一基线。',
+    emphasisRules: 'hero 可重砸入场并短暂 overshoot；亮黄色条只在落定时微冲一次。',
+    typographyRules: '标题使用 800-900 超粗无衬线，正文使用 Inter，列表前缀和数据标签使用 mono。',
+    banned: '禁止氛围装饰、圆角卡片、渐变、第二 accent、柔和漂移和长段正文。',
+  },
+  contentTypeRules: {
+    'chapter-transition': {
+      preferredCarriers: ['concept', 'quote'],
+      renderingRules: '只保留一行超大章节标题与一条亮黄色短线，不添加解释文本。',
+      density: 'light',
+    },
+    data: {
+      preferredCarriers: ['data-hero', 'comparison'],
+      renderingRules: '用一个超大数字或双项对决制造冲击，其他数据退为 mono 小标签。',
+      density: 'normal',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;align-content:center;gap:4%;font-family:'Inter Tight','Helvetica Neue',sans-serif;background:#1B1B1F;color:#F5F5F0;box-sizing:border-box;padding:8% 7%;overflow:hidden;}

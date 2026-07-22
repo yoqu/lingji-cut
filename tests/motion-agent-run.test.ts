@@ -97,6 +97,8 @@ function makeCtx(overrides: Partial<MotionCardAgentContext> = {}): MotionCardAge
     segmentTranscript: '今年考研硕士报名28842人，比博士多得多。',
     cueCount: 3,
     qualityMode: 'director',
+    // 存量用例全部钉在 agent 路径；template 路径由专门 describe 覆盖。
+    motionCardMode: 'agent',
     ...overrides,
   };
 }
@@ -185,6 +187,30 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
     expect(sculptPrompt).toContain('28842');
     expect(sculptPrompt).toContain('逐字稿');
     expect(sculptPrompt).toContain('motionCard.tsx');
+  });
+
+  it('审查任务书注入风格与内容类型规则，warn 不触发回炉', async () => {
+    const { provider, prompts, phases } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass":true,"issues":[{"code":"style-fidelity","severity":"warn","rule":"禁用圆角"}]}';
+      },
+    });
+    const result = await provider(makeCtx({
+      reviewStyleBlock: '禁用清单：禁止圆角卡片',
+      reviewContentTypeBlock: '本段内容类型：data｜推荐载体：data-hero > trend',
+    }));
+    const reviewPrompt = prompts.find((prompt) => prompt.role === '审查')!.text;
+    expect(reviewPrompt).toContain('禁止圆角卡片');
+    expect(reviewPrompt).toContain('本段内容类型：data');
+    expect(result.productionReport?.reviewIssues).toEqual([
+      expect.objectContaining({ code: 'style-fidelity', severity: 'warning' }),
+    ]);
+    expect(phases.filter((phase) => phase.startsWith('回炉'))).toHaveLength(0);
   });
 
   it('机械校验返回的 layout warnings 会保留到 productionReport', async () => {
@@ -975,4 +1001,86 @@ describe('production report contact sheet', () => {
     expect(result.productionReport?.contactSheetCached).toBe(false);
     expect(result.productionReport?.contactSheetError).toBeUndefined();
   }, 120_000);
+});
+
+
+describe('template 模式：storyboard 确定性编译，不经 LLM 雕刻/审查', () => {
+  it('默认 template：导演出分镜后直接编译，不创建雕刻/审查会话', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(makeCtx({ motionCardMode: 'template', validate: vi.fn() }));
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.tsx).toContain('<StatHero value={28842}');
+    expect(result.tsx).toContain('@lingji/motion-kit');
+    expect(result.productionReport?.compiled).toBe(true);
+    expect(result.productionReport?.fallbackUsed).toBe(false);
+    expect(result.animationDirection).toContain('"carrier": "data-hero"');
+  });
+
+  it('ctx.motionCardMode 缺省时默认 template', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? STORYBOARD : '不应被调用'),
+    });
+    const ctx = makeCtx({ validate: vi.fn() });
+    delete ctx.motionCardMode;
+    const result = await provider(ctx);
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.compiled).toBe(true);
+  });
+
+  it('复用合法分镜 + template：零 LLM 会话直接编译', async () => {
+    const { provider, sessions, phases } = providerWith({
+      reply: async () => '不应被调用',
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        animationDirectionDraft: STORYBOARD,
+        reuseStoryboardDraft: true,
+        validate: vi.fn(),
+      }),
+    );
+    expect(sessions).toEqual([]);
+    expect(phases).toContain('复用分镜');
+    expect(phases).toContain('模板编译');
+    expect(result.productionReport?.compiled).toBe(true);
+    expect(result.tsx).toContain('<StatHero value={28842}');
+  });
+
+  it('existingTsx（精雕）强制走 agent 路径，忽略 template 设置', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const result = await provider(
+      makeCtx({ motionCardMode: 'template', existingTsx: VALID_TSX, validate: vi.fn() }),
+    );
+    expect(sessions.map((s) => s.role)).toEqual(['导演', '雕刻', '审查']);
+    expect(result.productionReport?.compiled).not.toBe(true);
+  });
+
+  it('模板编译未过机械质检时切换确定性兜底（0 LLM 兜底会话）', async () => {
+    const layoutError = { severity: 'error' as const, code: 'text-clipped', message: '模拟溢出' };
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        validate: vi.fn(async () => ({ issues: [layoutError] })),
+      }),
+    );
+    // 编译产物质检失败 → 兜底卡（fallback 编译无视同一份 validate 的 issues，直接出卡）
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.fallbackUsed).toBe(true);
+    expect(result.productionReport?.compiled).not.toBe(true);
+    expect(result.tsx).toContain('<StatHero value={28842}');
+  });
 });

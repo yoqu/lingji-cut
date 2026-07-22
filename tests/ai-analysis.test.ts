@@ -928,18 +928,19 @@ describe('anchorSegmentsToTranscript', () => {
 });
 
 describe('generateAnimationDirection', () => {
-  const segment = { id: 'seg-1', title: '增长拐点', summary: '讲三组数据', startMs: 0, endMs: 8000, transcriptExcerpt: '今年用户翻倍', visualType: 'motion' } as any;
+  const segment = { id: 'seg-1', title: '增长拐点', summary: '讲三组数据', startMs: 0, endMs: 8000, transcriptExcerpt: '今年用户翻倍', semanticType: 'data', visualType: 'motion' } as any;
   const entries = [
     { index: 1, startMs: 0, endMs: 2000, text: '今年用户翻倍' },
     { index: 2, startMs: 2000, endMs: 4000, text: '硕士28842人' },
   ] as any;
   it('renders cards.animation prompt and returns trimmed model text', async () => {
     const generateText = vi.fn().mockResolvedValue('  视觉母题：折线\n拍1 ｜ 入场 ｜ ...  ');
-    const result = await generateAnimationDirection(entries, { summary: '总结', keywords: ['增长'], globalPrompt: '' }, segment, {} as any, { generateText, projectBindings: undefined });
+    const result = await generateAnimationDirection(entries, { summary: '总结', keywords: ['增长'], globalPrompt: '' }, segment, {} as any, { generateText, stylePresetId: 'nyt-data', projectBindings: undefined });
     expect(result).toBe('视觉母题：折线\n拍1 ｜ 入场 ｜ ...');
     const userMessage = generateText.mock.calls[0][2] as string;
     expect(userMessage).toContain('增长拐点');
     expect(userMessage).toContain('今年用户翻倍');
+    expect(userMessage).toContain('trend > data-hero > comparison');
   });
 });
 
@@ -947,7 +948,7 @@ describe('generateAnimationDirection', () => {
 // 多 agent provider（重试/修复循环见 tests/motion-agent-run.test.ts），这里只测上下文契约。
 describe('generateCardForSegment motion agent context', () => {
   const baseEntries = [{ index: 1, startMs: 0, endMs: 2000, text: '今年用户翻倍' }] as any;
-  const segment = { id: 's1', title: 'T', summary: 'S', startMs: 0, endMs: 2000, transcriptExcerpt: '今年用户翻倍', visualType: 'motion' } as any;
+  const segment = { id: 's1', title: 'T', summary: 'S', startMs: 0, endMs: 2000, transcriptExcerpt: '今年用户翻倍', semanticType: 'data', visualType: 'motion' } as any;
   const planning = { summary: 'S', keywords: [], globalPrompt: '' };
   const MINIMAL_TSX = 'export default function Card(){return null}';
 
@@ -971,6 +972,8 @@ describe('generateCardForSegment motion agent context', () => {
     // cue 越界校验所需的句数与运行时 cues 一致
     expect(ctx.cueCount).toBeGreaterThan(0);
     expect(ctx.animationDirectionDraft).toBeUndefined();
+    expect(ctx.reviewStyleBlock).toContain('禁用清单');
+    expect(ctx.reviewContentTypeBlock).toContain('本段内容类型：data');
     expect(card.animationDirection).toBe('拍1｜入场｜数字翻牌');
   });
 

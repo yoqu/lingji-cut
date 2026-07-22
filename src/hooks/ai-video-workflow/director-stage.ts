@@ -118,6 +118,7 @@ export async function runDirectorStage(options: DirectorStageOptions): Promise<v
       entries: useTimelineStore.getState().srtEntries,
       settings: options.settings, taskId: options.taskId,
       mode: sessionProductionMode(), startAt: options.startAt,
+      bgmEnabled: workflowSession.autoParams?.bgmEnabled,
       telemetryRunId: workflowSession.telemetryRunId,
       shouldCancel: options.isStaleRun,
       onProgress: buildProgressHandler(options),

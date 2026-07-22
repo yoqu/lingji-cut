@@ -58,6 +58,19 @@ export const SOFT_APPLE: VisualStylePreset = {
   },
   motionStyleNotes:
     'squircle 浮起卡是本体：嵌套子卡内圆角按 concentric（外圆角 − 内边距）收敛，双层 hairline 描边（外 rgba(29,29,31,0.08)、内 rgba(255,255,255,0.7)）+ 柔和大范围阴影 0 12px 32px rgba(29,29,31,0.10)；柔弹回弹须落在 scale ≤1.04 内，一次性收敛，不做无限 spring 物理。',
+  motionSpec: {
+    chartRules: '图表使用细轨道、系统蓝焦点和充足留白；面板内只保留一个主数据结构。',
+    emphasisRules: '允许一次柔弹回弹但 scale 不超过 1.04，随后稳定；数字用平滑计数落定。',
+    typographyRules: '标题使用 SF Pro Display，正文使用 SF Pro Text，数据单位与标签保持紧凑。',
+    banned: '禁止无限 spring、重阴影、霓虹、尖锐硬切和多个浮层互相嵌套。',
+  },
+  contentTypeRules: {
+    explanation: {
+      preferredCarriers: ['concept', 'process', 'list-build'],
+      renderingRules: '用一张主 squircle 面板承载术语或步骤，信息分组克制且留白充足。',
+      density: 'normal',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;place-content:center;gap:5%;font-family:'SF Pro Display','PingFang SC',-apple-system,sans-serif;background:#F0F1F4;color:#1D1D1F;box-sizing:border-box;padding:7% 6%;overflow:hidden;}

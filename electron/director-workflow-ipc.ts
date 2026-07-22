@@ -22,6 +22,8 @@ export interface StartDirectorPlanArgs {
   projectBindings?: PromptBindingMap | null;
   telemetryRunId?: string | null;
   mode?: 'auto' | 'director';
+  /** 缺省为 true；false 时方案关闭背景音乐。 */
+  bgmEnabled?: boolean;
 }
 
 function emitProgress(
@@ -60,6 +62,7 @@ export function registerDirectorWorkflowIpc(ctx: DirectorWorkflowIpcContext): vo
         revision: args.directorRevision,
         globalPrompt: args.globalPrompt,
         stylePresetId: project.stylePresetId,
+        bgmEnabled: args.bgmEnabled,
         planningTemplate,
         directorTemplate,
         motionBibleTemplate,

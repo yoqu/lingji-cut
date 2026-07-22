@@ -1,9 +1,11 @@
 import {
   DEFAULT_STYLE_PRESET_ID,
+  type AISegmentSemanticType,
+  type VisualContentTypeRule,
   type VisualStyleFacetKind,
   type VisualStylePreset,
 } from '../types/ai';
-import { VISUAL_STYLE_PRESETS } from './card-style-presets';
+import { DEFAULT_CONTENT_TYPE_RULES, VISUAL_STYLE_PRESETS } from './card-style-presets';
 
 const PRESET_BY_ID = new Map<string, VisualStylePreset>(
   VISUAL_STYLE_PRESETS.map((p) => [p.id, p]),
@@ -60,8 +62,37 @@ export function getMotionTokensBlock(presetId: string | undefined | null): strin
   return JSON.stringify(tokens, null, 2);
 }
 
-/** 取某风格的少量专属提示（注入 {{presetStyleNotes}}）；无则空串。 */
+export function resolveContentTypeRule(
+  presetId: string | undefined | null,
+  type: AISegmentSemanticType,
+): { rule: VisualContentTypeRule; source: 'preset' | 'default' } {
+  const preset = getStylePresetById(presetId);
+  const override = preset.contentTypeRules?.[type];
+  return override
+    ? { rule: override, source: 'preset' }
+    : { rule: DEFAULT_CONTENT_TYPE_RULES[type], source: 'default' };
+}
+
+export function getContentTypeRuleBlock(
+  presetId: string | undefined | null,
+  semanticType: AISegmentSemanticType | undefined,
+): string {
+  if (!semanticType) return '';
+  const { rule } = resolveContentTypeRule(presetId, semanticType);
+  const density = rule.density ? `｜信息密度：${rule.density}` : '';
+  return `本段内容类型：${semanticType}｜推荐载体：${rule.preferredCarriers.join(' > ')}${density}｜生产规则：${rule.renderingRules}`;
+}
+
+/** 合并结构化运动细则与旧版专属提示，注入 {{presetStyleNotes}}。 */
 export function getMotionStyleNotes(presetId: string | undefined | null): string {
-  const notes = getStylePresetById(presetId).motionStyleNotes?.trim();
-  return notes ? `风格专属提示：${notes}` : '';
+  const preset = getStylePresetById(presetId);
+  const spec = preset.motionSpec;
+  const lines = [
+    spec?.chartRules ? `图表工艺：${spec.chartRules}` : '',
+    spec?.emphasisRules ? `强调规则：${spec.emphasisRules}` : '',
+    spec?.typographyRules ? `排版规则：${spec.typographyRules}` : '',
+    spec?.banned ? `禁用清单：${spec.banned}` : '',
+    preset.motionStyleNotes?.trim() ? `补充说明：${preset.motionStyleNotes.trim()}` : '',
+  ].filter(Boolean);
+  return lines.length > 0 ? `风格专属提示：\n${lines.join('\n')}` : '';
 }

@@ -1,4 +1,8 @@
-import type { VisualStylePreset } from '../types/ai';
+import type {
+  AISegmentSemanticType,
+  VisualContentTypeRule,
+  VisualStylePreset,
+} from '../types/ai';
 import { DEFAULT_STYLE_PRESET_ID } from '../types/ai';
 import { SWISS_GRID } from './card-style-presets/swiss-grid';
 import { NYT_DATA } from './card-style-presets/nyt-data';
@@ -9,6 +13,34 @@ import { SOFT_APPLE } from './card-style-presets/soft-apple';
 import { DARK_GRAPH } from './card-style-presets/dark-graph';
 import { XHS_PASTEL } from './card-style-presets/xhs-pastel';
 import { MONO_BOLD } from './card-style-presets/mono-bold';
+
+export const DEFAULT_CONTENT_TYPE_RULES: Record<AISegmentSemanticType, VisualContentTypeRule> = {
+  data: {
+    preferredCarriers: ['data-hero', 'table', 'comparison', 'trend'],
+    renderingRules: '核心数字必须计数或落定强调，单位与配重齐全；禁止把关键数字埋进正文句子；多行结构化数据用数据表，不堆列表。',
+    density: 'normal',
+  },
+  explanation: {
+    preferredCarriers: ['concept', 'process', 'list-build'],
+    renderingRules: '概念先给术语面板再拆解；因果关系用链路或步骤表达，不堆段落文字。',
+    density: 'normal',
+  },
+  quote: {
+    preferredCarriers: ['quote'],
+    renderingRules: '金句用一至两行大字并配落定或扫描下划线；出处使用较小的 mono 字体。',
+    density: 'light',
+  },
+  narration: {
+    preferredCarriers: ['list-build', 'concept'],
+    renderingRules: '保持从简，最多一个主原语；没有明确数字时不得硬塞图表。',
+    density: 'light',
+  },
+  'chapter-transition': {
+    preferredCarriers: ['concept', 'quote'],
+    renderingRules: '只保留标题级单元素表达，不使用图表或列表，给下一章节留足呼吸空间。',
+    density: 'light',
+  },
+};
 
 const EDITORIAL_EINK_COVER = `===== 视觉系统：短视频缩略图 / Thumbnail 风（默认锁定，禁止替换）=====
 美学锚点：B 站知识区头部 UP 主缩略图 × YouTube 解说类频道 thumbnail × 商业短视频封面。
@@ -111,6 +143,19 @@ const EDITORIAL_EINK: VisualStylePreset = {
   },
   motionStyleNotes:
     '克制杂志感：数字与 hero 标题必用衬线（display 字体）；分隔只靠留白与 1px hairline，禁渐变 / 阴影 / 圆角面板 / emoji；accent 蓝整卡只出现在唯一焦点上。',
+  motionSpec: {
+    chartRules: '图表只用细描线、直角柱和单一 accent 焦点；网格与配重线保持 hairline。',
+    emphasisRules: '数字计数后一次落定，强调只提亮唯一焦点，不做持续脉冲。',
+    typographyRules: '标题和大数字使用 display 衬线；标签、出处与单位使用 mono 或克制无衬线。',
+    banned: '禁止渐变、投影、圆角面板、emoji、彩虹数据色和持续循环动画。',
+  },
+  contentTypeRules: {
+    quote: {
+      preferredCarriers: ['quote'],
+      renderingRules: '金句使用社论式衬线大字，出处以 hairline 分隔并缩为 mono 小字。',
+      density: 'light',
+    },
+  },
   preview: {},
 };
 

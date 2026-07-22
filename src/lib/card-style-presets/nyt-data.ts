@@ -58,6 +58,24 @@ export const NYT_DATA: VisualStylePreset = {
   },
   motionStyleNotes:
     '社论证据感：大标题与数据数字必用衬线 display，kicker / 脚注必 mono；图表纯 SVG 描线揭示（折线 strokeDashoffset、柱 height 单调一次到位），焦点线用 accent、对照线用 muted，禁彩虹多色；数字到终值用字色短暂加深强调，不做位移缩放。',
+  motionSpec: {
+    chartRules: '折线纯描线揭示，柱形保持直角；焦点线用新闻红，对照线与网格用 muted hairline。',
+    emphasisRules: '数字到终值只做字色加深或轻微提亮，不做位移、缩放或弹跳。',
+    typographyRules: '标题和数据数字使用衬线 display；kicker、单位、来源和脚注使用 mono。',
+    banned: '禁止彩虹数据色、渐变填充、3D 图表、圆角卡片和循环脉冲。',
+  },
+  contentTypeRules: {
+    data: {
+      preferredCarriers: ['trend', 'data-hero', 'comparison'],
+      renderingRules: '先展示证据图表或核心数字，单位和时间范围必须完整；焦点仅使用新闻红。',
+      density: 'heavy',
+    },
+    quote: {
+      preferredCarriers: ['quote'],
+      renderingRules: '使用报刊引文版式，衬线金句配 mono 来源，不使用装饰卡片。',
+      density: 'light',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{width:100%;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:4%;font-family:'Noto Serif SC','Georgia',serif;background:#F7F5EE;color:#121212;box-sizing:border-box;padding:7% 7%;}

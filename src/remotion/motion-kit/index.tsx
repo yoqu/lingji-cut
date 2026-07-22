@@ -69,28 +69,64 @@ export function normalizeMotionTokens(partial?: Partial<MotionTokens> | null): M
  * WCAG 相对亮度对比不足 3:1 时字色回落 ink；只约束"字"，条 / 面 / 描线仍用 accent。
  * 原语可能坐在页面底（palette.bg）或面板底（surface.bg）上，任一底不达标即回落。 */
 
-function hexLuminance(color: string): number | null {
-  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
-  if (!m) return null;
-  const hex = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
-  const ch = (i: number) => {
-    const v = parseInt(hex.slice(i, i + 2), 16) / 255;
-    return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+type Rgba = [number, number, number, number];
+
+function parseColor(color: string): Rgba | null {
+  const value = color.trim();
+  const hexMatch = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+  if (hexMatch) {
+    const hex = hexMatch[1].length === 3 ? hexMatch[1].replace(/./g, (c) => c + c) : hexMatch[1];
+    return [
+      parseInt(hex.slice(0, 2), 16),
+      parseInt(hex.slice(2, 4), 16),
+      parseInt(hex.slice(4, 6), 16),
+      1,
+    ];
+  }
+  const rgbMatch = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i.exec(value);
+  if (!rgbMatch) return null;
+  return [
+    Math.max(0, Math.min(255, Number(rgbMatch[1]))),
+    Math.max(0, Math.min(255, Number(rgbMatch[2]))),
+    Math.max(0, Math.min(255, Number(rgbMatch[3]))),
+    Math.max(0, Math.min(1, rgbMatch[4] === undefined ? 1 : Number(rgbMatch[4]))),
+  ];
+}
+
+function compositeColor(foreground: Rgba, background: Rgba): Rgba {
+  const alpha = foreground[3] + background[3] * (1 - foreground[3]);
+  if (alpha <= 0) return [0, 0, 0, 0];
+  return [
+    (foreground[0] * foreground[3] + background[0] * background[3] * (1 - foreground[3])) / alpha,
+    (foreground[1] * foreground[3] + background[1] * background[3] * (1 - foreground[3])) / alpha,
+    (foreground[2] * foreground[3] + background[2] * background[3] * (1 - foreground[3])) / alpha,
+    alpha,
+  ];
+}
+
+function colorLuminance(color: Rgba | null): number | null {
+  if (!color) return null;
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   };
-  return 0.2126 * ch(0) + 0.7152 * ch(2) + 0.0722 * ch(4);
+  return 0.2126 * linear(color[0]) + 0.7152 * linear(color[1]) + 0.0722 * linear(color[2]);
 }
 
 /** 导出仅供测试；卡片经 require 垫片只拿到 createMotionKit 的返回值，接触不到本函数。 */
 export function accentTextColor(t: Pick<MotionTokens, 'palette' | 'surface'>): string {
   const { palette, surface } = t;
-  const la = hexLuminance(palette.accent);
+  const page = parseColor(palette.bg);
+  const accent = parseColor(palette.accent);
+  const la = colorLuminance(accent && page ? compositeColor(accent, page) : accent);
   if (la == null) return palette.accent;
   const contrastOk = (bgLum: number | null) => {
     if (bgLum == null) return true; // 不可解析（rgba 等）时不否决
     return (Math.max(la, bgLum) + 0.05) / (Math.min(la, bgLum) + 0.05) >= 3;
   };
-  const surfaceLum = surface && surface.kind !== 'none' && surface.bg ? hexLuminance(surface.bg) : null;
-  return contrastOk(hexLuminance(palette.bg)) && contrastOk(surfaceLum) ? palette.accent : palette.ink;
+  const surfaceColor = surface && surface.kind !== 'none' && surface.bg ? parseColor(surface.bg) : null;
+  const effectiveSurface = surfaceColor && page ? compositeColor(surfaceColor, page) : surfaceColor;
+  return contrastOk(colorLuminance(page)) && contrastOk(colorLuminance(effectiveSurface)) ? palette.accent : palette.ink;
 }
 
 /* ============================== remotion 注入 ============================== */
@@ -208,7 +244,22 @@ export interface MotionKit {
     /** 提供 max 时在数字下方画等比配重条 */
     max?: number;
   }>;
+  RingCounter: React.ComponentType<{
+    value: number;
+    max?: number;
+    unit?: string;
+    label?: string;
+    beat: Beat;
+    decimals?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
   BarChart: React.ComponentType<{
+    items: Array<{ label: string; value: number; display?: string }>;
+    beat: Beat;
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  HorizontalBars: React.ComponentType<{
     items: Array<{ label: string; value: number; display?: string }>;
     beat: Beat;
     focusIndex?: number;
@@ -219,6 +270,8 @@ export interface MotionKit {
     beat: Beat;
     startLabel?: string;
     endLabel?: string;
+    markers?: Array<{ index: number; label?: string }>;
+    fill?: boolean;
     emphasis?: MotionKitEmphasis;
   }>;
   CompareRow: React.ComponentType<{
@@ -236,8 +289,26 @@ export interface MotionKit {
     focusIndex?: number;
     emphasis?: MotionKitEmphasis;
   }>;
+  RankList: React.ComponentType<{
+    items: Array<{ label: string; value?: string }>;
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  ChecklistPop: React.ComponentType<{
+    items: string[];
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
   ProcessFlow: React.ComponentType<{ steps: string[]; beat?: Beat; beats?: Beat[]; focusIndex?: number; emphasis?: MotionKitEmphasis }>;
+  CauseChain: React.ComponentType<{ steps: string[]; beat?: Beat; beats?: Beat[]; focusIndex?: number; emphasis?: MotionKitEmphasis }>;
   QuoteBlock: React.ComponentType<{ text: string; source?: string; beat: Beat; emphasis?: MotionKitEmphasis }>;
+  CitationCard: React.ComponentType<{ text: string; source: string; date?: string; beat: Beat; emphasis?: MotionKitEmphasis }>;
+  KeyPointMarker: React.ComponentType<{ text: string; label?: string; beat: Beat; emphasis?: MotionKitEmphasis }>;
+  ConceptCard: React.ComponentType<{ term: string; definition: string; hint?: string; beat: Beat; emphasis?: MotionKitEmphasis }>;
   TimelineRail: React.ComponentType<{ items: string[]; beat?: Beat; beats?: Beat[]; focusIndex?: number; emphasis?: MotionKitEmphasis }>;
   MatrixQuadrant: React.ComponentType<{
     xLabel?: string;
@@ -249,7 +320,68 @@ export interface MotionKit {
   FunnelStack: React.ComponentType<{ steps: Array<{ label: string; value?: string }>; beat: Beat; focusIndex?: number; emphasis?: MotionKitEmphasis }>;
   NetworkMap: React.ComponentType<{ nodes: string[]; links?: Array<[number, number]>; beat: Beat; focusIndex?: number; emphasis?: MotionKitEmphasis }>;
   BeforeAfter: React.ComponentType<{ before: string; after: string; beat: Beat; mode?: 'split' | 'wipe'; focusSide?: 'before' | 'after'; emphasis?: MotionKitEmphasis }>;
+  MythFactSwap: React.ComponentType<{ myth: string; fact: string; beat: Beat; swapBeat?: Beat; emphasis?: MotionKitEmphasis }>;
   StackedComposition: React.ComponentType<{ items: Array<{ label: string; value: number; display?: string }>; beat: Beat; focusIndex?: number; emphasis?: MotionKitEmphasis }>;
+  /** 垂直柱状图：基线 + hairline 网格，柱弹性逐根生长；items ≤6 */
+  ColumnChart: React.ComponentType<{
+    items: Array<{ label: string; value: number; display?: string }>;
+    beat: Beat;
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 环形饼图：分段接力绘制 + 中心数字 + 图例；segments ≤5 */
+  DonutChart: React.ComponentType<{
+    segments: Array<{ label: string; value: number; display?: string }>;
+    beat: Beat;
+    focusIndex?: number;
+    centerLabel?: string;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 数据脉冲：巨型计数 + 落定后脉冲环扩散 + 可选 delta 徽章 */
+  MetricPulse: React.ComponentType<{
+    value: number;
+    unit?: string;
+    label?: string;
+    delta?: string;
+    beat: Beat;
+    decimals?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 极致刻度：巨型数值 + 同值刻度尺，指示标记滑到 value，可选对照刻度 */
+  ScaleImpact: React.ComponentType<{
+    value: number;
+    max: number;
+    unit?: string;
+    label?: string;
+    reference?: { value: number; label: string };
+    beat: Beat;
+    decimals?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 多指标陈列：2×2 mini stat 网格逐格弹出；items ≤4 */
+  StatGrid: React.ComponentType<{
+    items: Array<{ value: string; label: string }>;
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 数据表：mono 表头 + hairline 分隔，行逐条揭示，focusRow accent；columns ≤4、rows ≤5 */
+  DataTable: React.ComponentType<{
+    columns: string[];
+    rows: string[][];
+    beat: Beat;
+    focusRow?: number;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 章节标题卡：mono 编号 + 大标题 + hairline 展开 + 可选副题 */
+  SectionTitle: React.ComponentType<{
+    index?: string;
+    title: string;
+    subtitle?: string;
+    beat: Beat;
+    emphasis?: MotionKitEmphasis;
+  }>;
   UnderlineSweep: React.ComponentType<{ beat: Beat; width?: string }>;
 }
 
@@ -772,6 +904,70 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     );
   }
 
+  function RingCounter({
+    value,
+    max,
+    unit,
+    label,
+    beat,
+    decimals = 0,
+    emphasis: emphasisOverride,
+  }: {
+    value: number;
+    max?: number;
+    unit?: string;
+    label?: string;
+    beat: Beat;
+    decimals?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const ratio = max && max > 0 ? Math.max(0, Math.min(1, value / max)) : 1;
+    const progress = ratio * eases.glide(beat.p);
+    const circumference = 2 * Math.PI * 42;
+    const pulse = interpolate(frame, [beat.land, beat.land + 14], [0, 1], CLAMP);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: H * 0.055, ...panelStyle(t), ...(t.surface?.kind !== 'none' ? { padding: H * 0.04 } : {}) }}>
+        <div style={{ position: 'relative', width: H * 0.32, height: H * 0.32, flexShrink: 0 }}>
+          <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
+            <circle cx={50} cy={50} r={42} fill="none" stroke={t.palette.track} strokeWidth={7} />
+            <circle
+              cx={50}
+              cy={50}
+              r={42}
+              fill="none"
+              stroke={t.palette.accent}
+              strokeWidth={7}
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={circumference * (1 - progress)}
+            />
+            <circle
+              cx={50}
+              cy={50}
+              r={42 + pulse * 5}
+              fill="none"
+              stroke={t.palette.accent}
+              strokeWidth={1.5}
+              opacity={frame >= beat.land ? 1 - pulse : 0}
+            />
+          </svg>
+        </div>
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: H * 0.018 }}>
+          {label ? <Kicker text={label} beat={beat} /> : null}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: H * 0.014 }}>
+            <span style={{ fontFamily: t.fonts.display, fontSize: H * ((t.typeScale?.dataHero ?? 0.26) * 0.72), lineHeight: 1, fontWeight: 650, color: accentTextColor(t), fontVariantNumeric: 'tabular-nums', display: 'inline-block', ...emphasize(frame, beat.land, fps, emphasis) }}>
+              {countUp(beat.p, value, decimals)}
+            </span>
+            {unit ? <span style={{ fontFamily: t.fonts.body, fontSize: H * (t.typeScale?.body ?? 0.036), color: t.palette.muted }}>{unit}</span> : null}
+          </div>
+          {max && max > 0 ? <span style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025), color: t.palette.muted }}>MAX {max}</span> : null}
+        </div>
+      </div>
+    );
+  }
+
   function BarChart({
     items,
     beat,
@@ -838,26 +1034,66 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     );
   }
 
+  function HorizontalBars({
+    items,
+    beat,
+    focusIndex = 0,
+    emphasis: emphasisOverride,
+  }: {
+    items: Array<{ label: string; value: number; display?: string }>;
+    beat: Beat;
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const safeItems = items.slice(0, 5);
+    const maxValue = Math.max(...safeItems.map((item) => Math.max(0, item.value)), 1);
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.018 }}>
+        {safeItems.map((item, index) => {
+          const start = beat.start + index * 5;
+          const p = interpolate(frame, [start, start + 15], [0, 1], CLAMP);
+          const focus = index === focusIndex;
+          return (
+            <div key={index} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 22%) minmax(0, 1fr) auto', alignItems: 'center', gap: H * 0.018, ...fadeUp(p, 12) }}>
+              <span style={{ minWidth: 0, overflowWrap: 'anywhere', fontFamily: t.fonts.body, fontSize: H * 0.03, color: focus ? t.palette.ink : t.palette.muted }}>{item.label}</span>
+              <div style={{ height: H * 0.034, background: t.palette.track, overflow: 'hidden' }}>
+                <div style={{ width: `${(Math.max(0, item.value) / maxValue) * 100}%`, height: '100%', background: focus ? t.palette.accent : t.palette.muted, ...drawOn(p), ...(focus ? emphasize(frame, start + 15, fps, emphasis) : {}) }} />
+              </div>
+              <span style={{ minWidth: H * 0.07, textAlign: 'right', fontFamily: t.fonts.mono, fontSize: H * 0.028, color: focus ? accentTextColor(t) : t.palette.muted, fontVariantNumeric: 'tabular-nums' }}>{item.display ?? countUp(p, item.value)}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   function TrendLine({
     points,
     beat,
     startLabel,
     endLabel,
+    markers = [],
+    fill = false,
     emphasis: emphasisOverride,
   }: {
     points: number[];
     beat: Beat;
     startLabel?: string;
     endLabel?: string;
+    markers?: Array<{ index: number; label?: string }>;
+    fill?: boolean;
     emphasis?: MotionKitEmphasis;
   }) {
     const { tokens: t, H, frame, fps } = useStage();
     const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
-    const min = Math.min(...points);
-    const max = Math.max(...points);
+    const safePoints = points.length > 0 ? points : [0];
+    const min = Math.min(...safePoints);
+    const max = Math.max(...safePoints);
     const span = max - min || 1;
-    const coords = points.map((v, i) => ({
-      x: (i / Math.max(points.length - 1, 1)) * 100,
+    const coords = safePoints.map((v, i) => ({
+      x: (i / Math.max(safePoints.length - 1, 1)) * 100,
       y: 38 - ((v - min) / span) * 32,
     }));
     const e = eases.glide(beat.p);
@@ -867,6 +1103,14 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     return (
       <div style={{ position: 'relative', width: '100%' }}>
         <svg viewBox="0 0 100 42" style={{ width: '100%', display: 'block', overflow: 'visible' }}>
+          {fill ? (
+            <polygon
+              points={`${line} ${last.x.toFixed(2)},40 ${first.x.toFixed(2)},40`}
+              fill={`color-mix(in srgb, ${t.palette.accent} 18%, transparent)`}
+              clipPath={`inset(0 ${(1 - e) * 100}% 0 0)`}
+              opacity={0.9}
+            />
+          ) : null}
           <polyline
             points={line}
             fill="none"
@@ -878,6 +1122,17 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
           />
           <circle cx={first.x} cy={first.y} r={1.2} fill={t.palette.muted} opacity={e > 0.05 ? 1 : 0} />
           <circle cx={last.x} cy={last.y} r={1.4} fill={t.palette.accent} opacity={beat.done ? 1 : 0} />
+          {markers.slice(0, 4).map((marker, markerIndex) => {
+            const index = Math.max(0, Math.min(coords.length - 1, Math.floor(marker.index)));
+            const point = coords[index];
+            const markerP = interpolate(frame, [beat.land + markerIndex * 4, beat.land + markerIndex * 4 + 10], [0, 1], CLAMP);
+            return (
+              <g key={`${index}-${markerIndex}`} opacity={markerP}>
+                <circle cx={point.x} cy={point.y} r={1.3 + markerP * 0.8} fill={t.palette.bg} stroke={t.palette.accent} strokeWidth={0.8} />
+                {marker.label ? <text x={point.x} y={Math.max(3, point.y - 3)} textAnchor="middle" fill={accentTextColor(t)} fontFamily={t.fonts.mono} fontSize={3}>{marker.label}</text> : null}
+              </g>
+            );
+          })}
         </svg>
         <div
           style={{
@@ -1017,6 +1272,77 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     );
   }
 
+  function RankList({
+    items,
+    beat,
+    beats,
+    focusIndex = 0,
+    emphasis: emphasisOverride,
+  }: {
+    items: Array<{ label: string; value?: string }>;
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.014 }}>
+        {items.slice(0, 5).map((item, index) => {
+          const itemBeat = beats?.[index];
+          const start = itemBeat?.start ?? (beat?.start ?? 0) + index * 5;
+          const p = itemBeat?.p ?? interpolate(frame, [start, start + 13], [0, 1], CLAMP);
+          const focus = index === focusIndex;
+          return (
+            <div key={index} style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto', alignItems: 'center', gap: H * 0.022, padding: `${H * 0.012}px ${H * 0.018}px`, borderLeft: `${Math.max(2, H * 0.004)}px solid ${focus ? t.palette.accent : 'transparent'}`, background: focus ? t.palette.track : 'transparent', ...popIn(p), ...(focus ? emphasize(frame, itemBeat?.land ?? start + 13, fps, emphasis) : {}) }}>
+              <span style={{ fontFamily: t.fonts.mono, fontSize: H * 0.03, color: focus ? accentTextColor(t) : t.palette.muted }}>{String(index + 1).padStart(2, '0')}</span>
+              <span style={{ minWidth: 0, overflowWrap: 'anywhere', fontFamily: t.fonts.body, fontSize: H * 0.034, fontWeight: focus ? 650 : 450 }}>{item.label}</span>
+              {item.value ? <span style={{ fontFamily: t.fonts.mono, fontSize: H * 0.028, color: focus ? accentTextColor(t) : t.palette.muted }}>{item.value}</span> : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function ChecklistPop({
+    items,
+    beat,
+    beats,
+    focusIndex = 0,
+    emphasis: emphasisOverride,
+  }: {
+    items: string[];
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.018 }}>
+        {items.slice(0, 5).map((item, index) => {
+          const itemBeat = beats?.[index];
+          const start = itemBeat?.start ?? (beat?.start ?? 0) + index * 6;
+          const p = itemBeat?.p ?? interpolate(frame, [start, start + 13], [0, 1], CLAMP);
+          const checkP = interpolate(frame, [start + 5, start + 15], [0, 1], CLAMP);
+          const focus = index === focusIndex;
+          return (
+            <div key={index} style={{ display: 'flex', alignItems: 'center', gap: H * 0.024, minHeight: H * 0.065, ...popIn(p), ...(focus ? emphasize(frame, itemBeat?.land ?? start + 13, fps, emphasis) : {}) }}>
+              <svg viewBox="0 0 28 28" style={{ width: H * 0.043, height: H * 0.043, flexShrink: 0 }}>
+                <rect x={2} y={2} width={24} height={24} rx={t.surface?.radius ? 5 : 0} fill={focus ? t.palette.accent : 'none'} stroke={focus ? t.palette.accent : t.palette.muted} strokeWidth={2} />
+                <path d="M7 14.5l4.2 4.2L21 8.8" fill="none" stroke={focus ? t.palette.bg : t.palette.accent} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" pathLength={1} strokeDasharray={1} strokeDashoffset={1 - checkP} />
+              </svg>
+              <span style={{ minWidth: 0, overflowWrap: 'anywhere', fontFamily: t.fonts.body, fontSize: H * 0.036, lineHeight: 1.3, color: focus ? t.palette.ink : t.palette.muted }}>{item}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   function ProcessFlow({
     steps,
     beat,
@@ -1079,6 +1405,50 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     );
   }
 
+  function CauseChain({
+    steps,
+    beat,
+    beats,
+    focusIndex = Math.max(0, steps.length - 1),
+    emphasis: emphasisOverride,
+  }: {
+    steps: string[];
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const safeSteps = steps.slice(0, 4);
+    const resolvedFocusIndex = Math.max(0, Math.min(safeSteps.length - 1, focusIndex));
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, safeSteps.length)}, minmax(0, 1fr))`, alignItems: 'center', gap: H * 0.035 }}>
+        {safeSteps.map((step, index) => {
+          const itemBeat = beats?.[index];
+          const start = itemBeat?.start ?? (beat?.start ?? 0) + index * 7;
+          const p = itemBeat?.p ?? interpolate(frame, [start, start + 14], [0, 1], CLAMP);
+          const arrowP = interpolate(frame, [start - 4, start + 7], [0, 1], CLAMP);
+          const focus = index === resolvedFocusIndex;
+          return (
+            <div key={index} style={{ position: 'relative', minWidth: 0 }}>
+              {index > 0 ? (
+                <div style={{ position: 'absolute', right: 'calc(100% + 2px)', top: '50%', width: H * 0.035, height: 2, background: t.palette.track, transform: 'translateY(-50%)' }}>
+                  <div style={{ height: '100%', background: t.palette.accent, ...drawOn(arrowP) }} />
+                  <span style={{ position: 'absolute', right: -1, top: '50%', color: t.palette.accent, fontSize: H * 0.025, transform: 'translate(50%, -54%)' }}>›</span>
+                </div>
+              ) : null}
+              <div style={{ minHeight: H * 0.15, padding: H * 0.025, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: H * 0.018, ...panelStyle(t), border: `1px solid ${focus ? t.palette.accent : t.palette.track}`, ...riseIn(p), ...(focus ? emphasize(frame, itemBeat?.land ?? start + 14, fps, emphasis) : {}) }}>
+                <span style={{ fontFamily: t.fonts.mono, fontSize: H * 0.022, color: focus ? accentTextColor(t) : t.palette.muted }}>{['CAUSE', 'MECHANISM', 'EFFECT', 'RESULT'][index]}</span>
+                <span style={{ overflowWrap: 'anywhere', fontFamily: t.fonts.body, fontSize: H * 0.032, lineHeight: 1.3 }}>{step}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   function QuoteBlock({
     text,
     source,
@@ -1096,6 +1466,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     return (
       <div style={{ position: 'relative', paddingLeft: H * 0.06 }}>
         <span
+          data-motion-layer="decorative"
           style={{
             position: 'absolute',
             left: 0,
@@ -1134,6 +1505,87 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
             —— {source}
           </div>
         ) : null}
+      </div>
+    );
+  }
+
+  function ConceptCard({
+    term,
+    definition,
+    hint,
+    beat,
+    emphasis: emphasisOverride,
+  }: {
+    term: string;
+    definition: string;
+    hint?: string;
+    beat: Beat;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const detailP = interpolate(frame, [beat.start + 5, beat.start + 17], [0, 1], CLAMP);
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.8fr) minmax(0, 1.2fr)', alignItems: 'center', gap: H * 0.05, padding: H * 0.045, ...panelStyle(t), ...fadeUp(beat.p, 20) }}>
+        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: H * 0.018 }}>
+          <span style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025), color: accentTextColor(t), ...trackIn(beat.p) }}>CONCEPT</span>
+          <span style={{ overflowWrap: 'anywhere', fontFamily: t.fonts.display, fontSize: H * ((t.typeScale?.hero ?? 0.15) * 0.72), lineHeight: 1.1, fontWeight: 650, display: 'inline-block', ...emphasize(frame, beat.land, fps, emphasis) }}>{term}</span>
+        </div>
+        <div style={{ minWidth: 0, paddingLeft: H * 0.04, borderLeft: `1px solid ${t.palette.track}`, ...fadeUp(detailP, 16) }}>
+          <div style={{ overflowWrap: 'anywhere', fontFamily: t.fonts.body, fontSize: H * 0.038, lineHeight: 1.45 }}>{definition}</div>
+          {hint ? <div style={{ marginTop: H * 0.025, fontFamily: t.fonts.mono, fontSize: H * 0.024, color: t.palette.muted, lineHeight: 1.4 }}>{hint}</div> : null}
+        </div>
+      </div>
+    );
+  }
+
+  function CitationCard({
+    text,
+    source,
+    date,
+    beat,
+    emphasis: emphasisOverride,
+  }: {
+    text: string;
+    source: string;
+    date?: string;
+    beat: Beat;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const sourceP = interpolate(frame, [beat.start + 8, beat.start + 20], [0, 1], CLAMP);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: H * 0.035, padding: `${H * 0.035}px ${H * 0.045}px`, borderTop: `1px solid ${t.palette.track}`, borderBottom: `1px solid ${t.palette.track}`, ...fadeUp(beat.p, 22) }}>
+        <div style={{ maxWidth: '94%', overflowWrap: 'anywhere', fontFamily: t.fonts.display, fontSize: H * ((t.typeScale?.hero ?? 0.15) * 0.58), fontWeight: 520, lineHeight: 1.35, ...emphasize(frame, beat.land, fps, emphasis) }}>{text}</div>
+        <div style={{ width: '22%', height: 2, background: t.palette.accent, ...drawOn(sourceP) }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: H * 0.03, fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025), color: t.palette.muted, ...trackIn(sourceP) }}>
+          <span>{source}</span>
+          {date ? <span>{date}</span> : null}
+        </div>
+      </div>
+    );
+  }
+
+  function KeyPointMarker({
+    text,
+    label = 'KEY POINT',
+    beat,
+    emphasis: emphasisOverride,
+  }: {
+    text: string;
+    label?: string;
+    beat: Beat;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'underline-sweep';
+    const underlineP = interpolate(frame, [beat.start + 7, beat.start + 20], [0, 1], CLAMP);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: H * 0.03 }}>
+        <span style={{ padding: `${H * 0.008}px ${H * 0.016}px`, background: t.palette.accent, color: t.palette.bg, fontFamily: t.fonts.mono, fontSize: H * 0.022, ...popIn(beat.p) }}>{label}</span>
+        <span style={{ maxWidth: '100%', overflowWrap: 'anywhere', fontFamily: t.fonts.display, fontSize: H * ((t.typeScale?.hero ?? 0.15) * 0.72), fontWeight: 650, lineHeight: 1.2, ...fadeUp(beat.p, 24), ...emphasize(frame, beat.land, fps, emphasis) }}>{text}</span>
+        <div style={{ width: '62%', height: Math.max(3, H * 0.006), background: t.palette.accent, ...drawOn(underlineP) }} />
       </div>
     );
   }
@@ -1317,6 +1769,42 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     );
   }
 
+  function MythFactSwap({
+    myth,
+    fact,
+    beat,
+    swapBeat,
+    emphasis: emphasisOverride,
+  }: {
+    myth: string;
+    fact: string;
+    beat: Beat;
+    swapBeat?: Beat;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const swapStart = swapBeat?.start ?? beat.start + 14;
+    const swapP = swapBeat?.p ?? interpolate(frame, [swapStart, swapStart + 14], [0, 1], CLAMP);
+    const strikeP = interpolate(frame, [swapStart - 8, swapStart + 3], [0, 1], CLAMP);
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)', alignItems: 'center', gap: H * 0.035 }}>
+        <div style={{ minWidth: 0, opacity: 1 - swapP * 0.72, transform: `translateX(${(-swapP * 14).toFixed(2)}px)` }}>
+          <span style={{ fontFamily: t.fonts.mono, fontSize: H * 0.022, color: t.palette.muted }}>MYTH</span>
+          <div style={{ position: 'relative', marginTop: H * 0.018, overflowWrap: 'anywhere', fontFamily: t.fonts.display, fontSize: H * 0.052, lineHeight: 1.25, ...fadeUp(beat.p, 18) }}>
+            {myth}
+            <div style={{ position: 'absolute', left: 0, right: 0, top: '52%', height: Math.max(2, H * 0.004), background: t.palette.accent, ...drawOn(strikeP) }} />
+          </div>
+        </div>
+        <span style={{ color: t.palette.muted, fontFamily: t.fonts.mono, fontSize: H * 0.035, opacity: swapP }}>→</span>
+        <div style={{ minWidth: 0, ...slideIn(swapP, 'right', 28), ...emphasize(frame, swapBeat?.land ?? swapStart + 14, fps, emphasis) }}>
+          <span style={{ fontFamily: t.fonts.mono, fontSize: H * 0.022, color: accentTextColor(t) }}>FACT</span>
+          <div style={{ marginTop: H * 0.018, overflowWrap: 'anywhere', fontFamily: t.fonts.display, fontSize: H * 0.052, lineHeight: 1.25, color: t.palette.ink }}>{fact}</div>
+        </div>
+      </div>
+    );
+  }
+
   function StackedComposition({
     items,
     beat,
@@ -1358,6 +1846,399 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     );
   }
 
+  /* ---------- 图表精细化原语（数据表 / 垂直柱 / 饼环 / 脉冲 / 刻度 / 指标格 / 章节卡） ---------- */
+
+  function ColumnChart({
+    items,
+    beat,
+    focusIndex = 0,
+    emphasis: emphasisOverride,
+  }: {
+    items: Array<{ label: string; value: number; display?: string }>;
+    beat: Beat;
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const safeItems = items.slice(0, 6);
+    const maxValue = Math.max(...safeItems.map((it) => Math.max(0, it.value)), 1);
+    const chartH = H * 0.32;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.02 }}>
+        <div style={{ position: 'relative', height: chartH, display: 'flex', alignItems: 'flex-end', gap: H * 0.03 }}>
+          {[0.5, 1].map((ratio) => (
+            <div key={ratio} style={{ position: 'absolute', left: 0, right: 0, bottom: ratio * chartH, borderTop: `1px solid ${t.palette.track}`, opacity: eases.snap(beat.p) }}>
+              <span style={{ position: 'absolute', right: 0, top: -H * 0.026, fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025) * 0.85, color: t.palette.muted, fontVariantNumeric: 'tabular-nums' }}>
+                {Math.round(maxValue * ratio)}
+              </span>
+            </div>
+          ))}
+          <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderTop: `1.5px solid ${t.palette.muted}`, opacity: eases.snap(beat.p) }} />
+          {safeItems.map((it, i) => {
+            const start = beat.start + i * 5;
+            const grow = spring({ frame: Math.max(0, frame - start), fps, config: { damping: 15, stiffness: 130, mass: 0.9 } });
+            const p = Math.max(0, Math.min(1, grow));
+            const height = (Math.max(0, it.value) / maxValue) * chartH;
+            const labelP = interpolate(frame, [start + 12, start + 18], [0, 1], CLAMP);
+            const focus = i === focusIndex;
+            return (
+              <div key={i} style={{ position: 'relative', flex: 1, height: '100%', display: 'flex', alignItems: 'flex-end' }}>
+                <div
+                  style={{
+                    width: '100%',
+                    height: height * p,
+                    background: focus ? t.palette.accent : `color-mix(in srgb, ${t.palette.muted} 72%, ${t.palette.track})`,
+                    ...(focus ? emphasize(frame, start + 12, fps, emphasis) : {}),
+                  }}
+                />
+                <span
+                  style={{
+                    position: 'absolute',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    bottom: height + H * 0.008,
+                    fontFamily: t.fonts.display,
+                    fontSize: H * ((t.typeScale?.body ?? 0.036) * 0.92),
+                    fontVariantNumeric: 'tabular-nums',
+                    color: focus ? accentTextColor(t) : t.palette.ink,
+                    whiteSpace: 'nowrap',
+                    ...popIn(labelP),
+                  }}
+                >
+                  {it.display ?? countUp(p, it.value)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: H * 0.03 }}>
+          {safeItems.map((it, i) => (
+            <span key={i} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025), color: i === focusIndex ? t.palette.ink : t.palette.muted, overflowWrap: 'anywhere' }}>
+              {it.label}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function DonutChart({
+    segments,
+    beat,
+    focusIndex = 0,
+    centerLabel,
+    emphasis: emphasisOverride,
+  }: {
+    segments: Array<{ label: string; value: number; display?: string }>;
+    beat: Beat;
+    focusIndex?: number;
+    centerLabel?: string;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const safe = segments.slice(0, 5);
+    const total = Math.max(1, safe.reduce((sum, it) => sum + Math.max(0, it.value), 0));
+    const r = 40;
+    const circumference = 2 * Math.PI * r;
+    const per = 12;
+    let acc = 0;
+    const arcs = safe.map((it, i) => {
+      const ratio = Math.max(0, it.value) / total;
+      const offset = acc;
+      acc += ratio;
+      return { it, i, ratio, offset };
+    });
+    const focusItem = safe[Math.max(0, Math.min(safe.length - 1, focusIndex))];
+    const segColor = (i: number) =>
+      i === focusIndex
+        ? t.palette.accent
+        : `color-mix(in srgb, ${t.palette.accent} ${Math.max(20, 68 - i * 12)}%, ${t.palette.track})`;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: H * 0.06 }}>
+        <div style={{ position: 'relative', width: H * 0.36, height: H * 0.36, flexShrink: 0 }}>
+          <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
+            <circle cx={50} cy={50} r={r} fill="none" stroke={t.palette.track} strokeWidth={12} />
+            {arcs.map(({ i, ratio, offset }) => {
+              const p = interpolate(frame, [beat.start + 6 + i * per, beat.start + 6 + (i + 1) * per], [0, 1], CLAMP);
+              const len = ratio * circumference * eases.glide(p);
+              return (
+                <circle
+                  key={i}
+                  cx={50}
+                  cy={50}
+                  r={r}
+                  fill="none"
+                  stroke={segColor(i)}
+                  strokeWidth={12}
+                  strokeDasharray={`${len} ${circumference}`}
+                  strokeDashoffset={-offset * circumference}
+                />
+              );
+            })}
+          </svg>
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: H * 0.008 }}>
+            <span style={{ fontFamily: t.fonts.display, fontSize: H * ((t.typeScale?.dataHero ?? 0.26) * 0.42), fontWeight: 650, lineHeight: 1, color: accentTextColor(t), fontVariantNumeric: 'tabular-nums', display: 'inline-block', ...emphasize(frame, beat.land, fps, emphasis) }}>
+              {focusItem?.display ?? focusItem?.value ?? ''}
+            </span>
+            {centerLabel ? (
+              <span style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025), color: t.palette.muted }}>{centerLabel}</span>
+            ) : null}
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.02, minWidth: 0 }}>
+          {safe.map((it, i) => {
+            const p = interpolate(frame, [beat.start + 6 + i * per, beat.start + 6 + i * per + 10], [0, 1], CLAMP);
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: H * 0.015, ...fadeUp(p, 12) }}>
+                <span style={{ width: H * 0.02, height: H * 0.02, borderRadius: 2, background: segColor(i), flexShrink: 0 }} />
+                <span style={{ fontFamily: t.fonts.body, fontSize: H * 0.03, color: i === focusIndex ? t.palette.ink : t.palette.muted, overflowWrap: 'anywhere', minWidth: 0 }}>{it.label}</span>
+                <span style={{ marginLeft: 'auto', fontFamily: t.fonts.mono, fontSize: H * 0.028, color: i === focusIndex ? accentTextColor(t) : t.palette.muted, fontVariantNumeric: 'tabular-nums' }}>{it.display ?? it.value}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function MetricPulse({
+    value,
+    unit,
+    label,
+    delta,
+    beat,
+    decimals = 0,
+    emphasis: emphasisOverride,
+  }: {
+    value: number;
+    unit?: string;
+    label?: string;
+    delta?: string;
+    beat: Beat;
+    decimals?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const pulse1 = interpolate(frame, [beat.land, beat.land + 16], [0, 1], CLAMP);
+    const pulse2 = interpolate(frame, [beat.land + 8, beat.land + 24], [0, 1], CLAMP);
+    const deltaP = interpolate(frame, [beat.land + 4, beat.land + 12], [0, 1], CLAMP);
+    const ring = (p: number): CSSProperties => ({
+      position: 'absolute',
+      inset: `-${(p * H * 0.05).toFixed(1)}px`,
+      borderRadius: 9999,
+      border: `2px solid ${t.palette.accent}`,
+      opacity: frame >= beat.land ? (1 - p) * 0.7 : 0,
+      pointerEvents: 'none',
+    });
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.03, ...panelStyle(t), ...(t.surface?.kind !== 'none' ? { padding: H * 0.04 } : {}) }}>
+        {label ? <Kicker text={label} beat={beat} /> : null}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: H * 0.02 }}>
+          <span style={{ position: 'relative', display: 'inline-block' }}>
+            <span style={ring(pulse1)} />
+            <span style={ring(pulse2)} />
+            <span style={{ fontFamily: t.fonts.display, fontSize: H * (t.typeScale?.dataHero ?? 0.26), fontWeight: 650, lineHeight: 1, color: accentTextColor(t), fontVariantNumeric: 'tabular-nums', display: 'inline-block', ...emphasize(frame, beat.land, fps, emphasis) }}>
+              {countUp(beat.p, value, decimals)}
+            </span>
+          </span>
+          {unit ? <span style={{ fontFamily: t.fonts.body, fontSize: H * (t.typeScale?.lead ?? 0.05), color: t.palette.muted }}>{unit}</span> : null}
+          {delta ? (
+            <span style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025) * 1.1, color: accentTextColor(t), border: `1px solid ${t.palette.accent}`, borderRadius: 9999, padding: `${H * 0.006}px ${H * 0.016}px`, ...popIn(deltaP) }}>
+              {delta}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  function ScaleImpact({
+    value,
+    max,
+    unit,
+    label,
+    reference,
+    beat,
+    decimals = 0,
+    emphasis: emphasisOverride,
+  }: {
+    value: number;
+    max: number;
+    unit?: string;
+    label?: string;
+    reference?: { value: number; label: string };
+    beat: Beat;
+    decimals?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const safeMax = max > 0 ? max : Math.max(1, value);
+    const ratio = Math.max(0, Math.min(1, value / safeMax));
+    const refRatio = reference ? Math.max(0, Math.min(1, reference.value / safeMax)) : null;
+    const slide = eases.drive(beat.p);
+    const ticks = [0, 0.25, 0.5, 0.75, 1];
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.035, ...panelStyle(t), ...(t.surface?.kind !== 'none' ? { padding: H * 0.04 } : {}) }}>
+        {label ? <Kicker text={label} beat={beat} /> : null}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: H * 0.02 }}>
+          <span style={{ fontFamily: t.fonts.display, fontSize: H * (t.typeScale?.dataHero ?? 0.26), fontWeight: 650, lineHeight: 1, color: accentTextColor(t), fontVariantNumeric: 'tabular-nums', display: 'inline-block', ...emphasize(frame, beat.land, fps, emphasis) }}>
+            {countUp(beat.p, value, decimals)}
+          </span>
+          {unit ? <span style={{ fontFamily: t.fonts.body, fontSize: H * (t.typeScale?.lead ?? 0.05), color: t.palette.muted }}>{unit}</span> : null}
+        </div>
+        <div style={{ position: 'relative', height: H * 0.1 }}>
+          <div style={{ position: 'absolute', left: 0, right: 0, top: H * 0.045, borderTop: `1.5px solid ${t.palette.muted}` }} />
+          {ticks.map((tick) => (
+            <div key={tick} style={{ position: 'absolute', left: `${tick * 100}%`, top: tick === 0 || tick === 1 ? H * 0.03 : H * 0.038, height: tick === 0 || tick === 1 ? H * 0.03 : H * 0.014, borderLeft: `1px solid ${t.palette.muted}`, opacity: eases.snap(beat.p) }} />
+          ))}
+          <span style={{ position: 'absolute', left: 0, top: H * 0.066, fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025) * 0.9, color: t.palette.muted }}>0</span>
+          <span style={{ position: 'absolute', right: 0, top: H * 0.066, fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025) * 0.9, color: t.palette.muted, fontVariantNumeric: 'tabular-nums' }}>{safeMax}{unit ?? ''}</span>
+          {refRatio != null && reference ? (
+            <div style={{ position: 'absolute', left: `${refRatio * 100}%`, top: 0, transform: 'translateX(-50%)', textAlign: 'center', opacity: beat.done ? 1 : 0 }}>
+              <div style={{ width: 0, height: 0, borderLeft: `${H * 0.007}px solid transparent`, borderRight: `${H * 0.007}px solid transparent`, borderTop: `${H * 0.01}px solid ${t.palette.muted}`, margin: '0 auto' }} />
+              <span style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025) * 0.85, color: t.palette.muted, whiteSpace: 'nowrap' }}>{reference.label}</span>
+            </div>
+          ) : null}
+          <div style={{ position: 'absolute', left: `${ratio * slide * 100}%`, top: H * 0.014, transform: 'translateX(-50%)' }}>
+            <div style={{ width: Math.max(3, H * 0.006), height: H * 0.062, background: t.palette.accent, borderRadius: 2 }} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function StatGrid({
+    items,
+    beat,
+    beats,
+    focusIndex = 0,
+    emphasis: emphasisOverride,
+  }: {
+    items: Array<{ value: string; label: string }>;
+    beat?: Beat;
+    beats?: Beat[];
+    focusIndex?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const safeItems = items.slice(0, 4);
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: H * 0.04 }}>
+        {safeItems.map((it, i) => {
+          const b = beats?.[i];
+          const start = b ? b.start : (beat?.start ?? 0) + i * 6;
+          const p = b ? b.p : interpolate(frame, [start, start + 12], [0, 1], CLAMP);
+          const focus = i === focusIndex;
+          return (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: H * 0.01, borderLeft: `2px solid ${focus ? t.palette.accent : t.palette.track}`, paddingLeft: H * 0.02, ...popIn(p) }}>
+              <span style={{ fontFamily: t.fonts.display, fontSize: H * ((t.typeScale?.dataHero ?? 0.26) * 0.4), fontWeight: 650, lineHeight: 1, color: focus ? accentTextColor(t) : t.palette.ink, fontVariantNumeric: 'tabular-nums', display: 'inline-block', ...(focus ? emphasize(frame, b?.land ?? start + 12, fps, emphasis) : {}) }}>
+                {it.value}
+              </span>
+              <span style={{ fontFamily: t.fonts.body, fontSize: H * (t.typeScale?.label ?? 0.025) * 1.1, color: t.palette.muted, overflowWrap: 'anywhere' }}>{it.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function DataTable({
+    columns,
+    rows,
+    beat,
+    focusRow = 0,
+    emphasis: emphasisOverride,
+  }: {
+    columns: string[];
+    rows: string[][];
+    beat: Beat;
+    focusRow?: number;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const safeCols = columns.slice(0, 4);
+    const safeRows = rows.slice(0, 5).map((row) => safeCols.map((_, ci) => row[ci] ?? ''));
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${safeCols.length}, minmax(0, 1fr))`, gap: H * 0.02, paddingBottom: H * 0.012, borderBottom: `1.5px solid ${t.palette.muted}`, opacity: eases.snap(beat.p) }}>
+          {safeCols.map((col, ci) => (
+            <span key={ci} style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025), color: accentTextColor(t), textAlign: ci === 0 ? 'left' : 'right', overflowWrap: 'anywhere' }}>{col}</span>
+          ))}
+        </div>
+        {safeRows.map((row, ri) => {
+          const start = beat.start + 6 + ri * 6;
+          const p = interpolate(frame, [start, start + 12], [0, 1], CLAMP);
+          const focus = ri === focusRow;
+          return (
+            <div key={ri} style={{ position: 'relative', display: 'grid', gridTemplateColumns: `repeat(${safeCols.length}, minmax(0, 1fr))`, gap: H * 0.02, alignItems: 'center', padding: `${H * 0.014}px 0`, borderBottom: `1px solid ${t.palette.track}`, ...fadeUp(p, 14) }}>
+              {focus ? <div style={{ position: 'absolute', left: -H * 0.02, top: '50%', transform: 'translateY(-50%)', width: Math.max(3, H * 0.006), height: '60%', background: t.palette.accent, borderRadius: 2 }} /> : null}
+              {row.map((cell, ci) => (
+                <span
+                  key={ci}
+                  style={{
+                    fontFamily: ci === 0 ? t.fonts.body : t.fonts.mono,
+                    fontSize: H * (ci === 0 ? 0.032 : 0.03),
+                    color: focus ? (ci === 0 ? t.palette.ink : accentTextColor(t)) : ci === 0 ? t.palette.ink : t.palette.muted,
+                    textAlign: ci === 0 ? 'left' : 'right',
+                    fontVariantNumeric: 'tabular-nums',
+                    overflowWrap: 'anywhere',
+                    minWidth: 0,
+                    display: 'inline-block',
+                    ...(focus && ci === 0 ? emphasize(frame, start + 12, fps, emphasis) : {}),
+                  }}
+                >
+                  {cell}
+                </span>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function SectionTitle({
+    index,
+    title,
+    subtitle,
+    beat,
+    emphasis: emphasisOverride,
+  }: {
+    index?: string;
+    title: string;
+    subtitle?: string;
+    beat: Beat;
+    emphasis?: MotionKitEmphasis;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const ruleP = interpolate(frame, [Math.max(beat.start, beat.land - 6), beat.land + 10], [0, 1], CLAMP);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: H * 0.028 }}>
+        {index ? (
+          <span style={{ fontFamily: t.fonts.mono, fontSize: H * (t.typeScale?.label ?? 0.025) * 1.1, color: accentTextColor(t), ...trackIn(beat.p) }}>
+            {index}
+          </span>
+        ) : null}
+        <span style={{ fontFamily: t.fonts.display, fontSize: H * (t.typeScale?.hero ?? 0.15) * 0.72, fontWeight: 650, lineHeight: 1.15, color: t.palette.ink, display: 'inline-block', ...fadeUp(beat.p, 26), ...emphasize(frame, beat.land, fps, emphasis) }}>
+          {title}
+        </span>
+        <div style={{ height: Math.max(2, H * 0.004), width: `${eases.glide(ruleP) * 38}%`, background: t.palette.accent }} />
+        {subtitle ? (
+          <span style={{ fontFamily: t.fonts.body, fontSize: H * (t.typeScale?.lead ?? 0.05) * 0.9, lineHeight: 1.5, color: t.palette.muted, ...fadeUp(ruleP, 14) }}>
+            {subtitle}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
   return {
     CardStage,
     SafeLayout,
@@ -1377,18 +2258,34 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     emphasize: emphasize as MotionKit['emphasize'],
     Kicker,
     StatHero,
+    RingCounter,
     BarChart,
+    HorizontalBars,
     TrendLine,
     CompareRow,
     ListBuild,
+    RankList,
+    ChecklistPop,
     ProcessFlow,
+    CauseChain,
     QuoteBlock,
+    ConceptCard,
+    CitationCard,
+    KeyPointMarker,
     TimelineRail,
     MatrixQuadrant,
     FunnelStack,
     NetworkMap,
     BeforeAfter,
+    MythFactSwap,
     StackedComposition,
+    ColumnChart,
+    DonutChart,
+    MetricPulse,
+    ScaleImpact,
+    StatGrid,
+    DataTable,
+    SectionTitle,
     UnderlineSweep,
   };
 }
@@ -1416,18 +2313,34 @@ export const MOTION_KIT_EXPORT_NAMES = [
   'emphasize',
   'Kicker',
   'StatHero',
+  'RingCounter',
   'BarChart',
+  'HorizontalBars',
   'TrendLine',
   'CompareRow',
   'ListBuild',
+  'RankList',
+  'ChecklistPop',
   'ProcessFlow',
+  'CauseChain',
   'QuoteBlock',
+  'ConceptCard',
+  'CitationCard',
+  'KeyPointMarker',
   'TimelineRail',
   'MatrixQuadrant',
   'FunnelStack',
   'NetworkMap',
   'BeforeAfter',
+  'MythFactSwap',
   'StackedComposition',
+  'ColumnChart',
+  'DonutChart',
+  'MetricPulse',
+  'ScaleImpact',
+  'StatGrid',
+  'DataTable',
+  'SectionTitle',
   'UnderlineSweep',
 ] as const;
 
@@ -1435,7 +2348,7 @@ export const MOTION_KIT_EXPORT_NAMES = [
  * 注入雕刻提示词的 kit API 摘要——唯一事实来源，与实现同文件维护。
  * 修改 API 时必须同步本摘要。
  */
-export const MOTION_KIT_API_DOC = `import { CardStage, SafeLayout, MotionSlot, useBeats, useTimingPlan, Kicker, StatHero, BarChart, TrendLine, CompareRow, ListBuild, ProcessFlow, QuoteBlock, TimelineRail, MatrixQuadrant, FunnelStack, NetworkMap, BeforeAfter, StackedComposition, UnderlineSweep, fadeUp, slideIn, riseIn, popIn, trackIn, drawOn, countUp, emphasize, useStage } from '@lingji/motion-kit';
+export const MOTION_KIT_API_DOC = `import { CardStage, SafeLayout, MotionSlot, useBeats, useTimingPlan, Kicker, StatHero, RingCounter, BarChart, HorizontalBars, TrendLine, CompareRow, ListBuild, RankList, ChecklistPop, ProcessFlow, CauseChain, QuoteBlock, ConceptCard, CitationCard, KeyPointMarker, TimelineRail, MatrixQuadrant, FunnelStack, NetworkMap, BeforeAfter, MythFactSwap, StackedComposition, ColumnChart, DonutChart, MetricPulse, ScaleImpact, StatGrid, DataTable, SectionTitle, UnderlineSweep, fadeUp, slideIn, riseIn, popIn, trackIn, drawOn, countUp, emphasize, useStage } from '@lingji/motion-kit';
 
 // 舞台（必用做根节点）：底色/安全区(底部20%字幕区)/镜头慢漂/氛围装饰层/退场淡出全部内置
 <CardStage tokens={TOKENS}>{...}</CardStage>   // TOKENS = 系统注入的风格 tokens 常量，原样传入
@@ -1456,18 +2369,34 @@ const beats = useTimingPlan(timingPlan, cues, [null, 2, 5]);
 // 内容原语（自动消费 tokens 的颜色/字体/字号，自带 tabular-nums 与等比配重）
 <Kicker text="标签" beat={beats[0]} />                                   // mono 小标签，字距收拢入场
 <StatHero value={28842} unit="人" label="硕士报名" beat={beats[1]} max={40000} emphasis="countup-settle" />
+<RingCounter value={72} max={100} unit="%" label="完成率" beat={beats[1]} /> // 环形进度+计数；max>0
 <BarChart items={[{label:'硕士', value:28842}, {label:'博士', value:2403}]} beat={beats[1]} focusIndex={0} emphasis="slam" />
-<TrendLine points={[3,5,4,9,14]} beat={beats[1]} startLabel="2020" endLabel="2024" emphasis="countup-settle" />
+<HorizontalBars items={[{label:'今年',value:72,display:'72%'},{label:'去年',value:48,display:'48%'}]} beat={beats[1]} focusIndex={0} /> // ≤5行，CH≈778px
+<TrendLine points={[3,5,4,9,14]} beat={beats[1]} markers={[{index:2,label:'拐点'}]} fill startLabel="2020" endLabel="2024" emphasis="countup-settle" />
 <CompareRow left={{label:'今年', value:'28842'}} right={{label:'去年', value:'19003'}} beat={beats[1]} focusSide="right" emphasis="brighten" />
 <ListBuild items={['要点一','要点二','要点三']} beats={[beats[1], beats[2], beats[3]]} focusIndex={2} emphasis="underline-sweep" />
+<RankList items={[{label:'第一名',value:'92'},{label:'第二名',value:'86'}]} beat={beats[1]} /> // ≤5行，每行约0.07H
+<ChecklistPop items={['已确认','已同步','已交付']} beat={beats[1]} />       // ≤5行，逐条勾选
 <ProcessFlow steps={['报名','初试','复试']} beats={[beats[1], beats[2], beats[3]]} focusIndex={2} emphasis="slam" />
+<CauseChain steps={['原因','机制','结果']} beats={[beats[1],beats[2],beats[3]]} focusIndex={2} /> // ≤4节点
 <QuoteBlock text="金句原文" source="出处" beat={beats[1]} emphasis="slam" />
+<ConceptCard term="概念" definition="一句清晰释义" hint="补充提示" beat={beats[1]} />
+<CitationCard text="引用正文" source="来源名称" date="2026" beat={beats[1]} />
+<KeyPointMarker text="必须记住的重点" label="KEY POINT" beat={beats[1]} />
 <TimelineRail items={['2019 起步','2022 爆发','2024 分化']} beats={[beats[1], beats[2], beats[3]]} focusIndex={2} emphasis="brighten" />
 <MatrixQuadrant xLabel="价值" yLabel="难度" items={[{label:'优先做', x:78, y:72, focus:true}, {label:'暂缓', x:28, y:36}]} beat={beats[1]} />
 <FunnelStack steps={[{label:'触达', value:'10万'}, {label:'转化', value:'1.2万'}]} beat={beats[1]} />
 <NetworkMap nodes={['平台','创作者','观众']} links={[[0,1],[1,2]]} beat={beats[1]} />
 <BeforeAfter before="旧流程慢" after="新流程快" beat={beats[1]} mode="wipe" />
+<MythFactSwap myth="常见误区" fact="真实结论" beat={beats[1]} swapBeat={beats[2]} />
 <StackedComposition items={[{label:'内容', value:55, display:'55%'}, {label:'分发', value:30, display:'30%'}]} beat={beats[1]} />
+<ColumnChart items={[{label:'图文', value:32}, {label:'视频', value:68}]} beat={beats[1]} focusIndex={1} /> // ≤6柱，垂直柱+网格线，弹性生长
+<DonutChart segments={[{label:'内容', value:55, display:'55%'}, {label:'分发', value:30, display:'30%'}]} beat={beats[1]} focusIndex={0} centerLabel="时间占比" /> // ≤5段，环形分段接力绘制
+<MetricPulse value={120} unit="万" label="单月涨粉" delta="+32%" beat={beats[1]} emphasis="countup-settle" /> // 计数落定后脉冲环扩散
+<ScaleImpact value={3} max={100} unit="%" label="付费转化" reference={{value:38, label:'行业均值'}} beat={beats[1]} /> // 极值刻度尺，标记滑到 value
+<StatGrid items={[{value:'120万', label:'曝光'}, {value:'3.1万', label:'完播'}]} beats={[beats[1], beats[2]]} /> // ≤4格 2×2 多指标
+<DataTable columns={['平台','粉丝','单价']} rows={[['抖音','120万','¥18'], ['B站','45万','¥32']]} beat={beats[1]} focusRow={0} /> // ≤5行×≤4列，行逐条揭示
+<SectionTitle index="02" title="章节标题" subtitle="可选副题" beat={beats[1]} />          // 章节过渡卡
 <UnderlineSweep beat={beats[2]} width="38%" />                           // 焦点下划线扫过（accent 小重音）
 
 // 手法（返回 style 片段，自由拼装自己的元素；每种缓动不同，别整卡只用一种）

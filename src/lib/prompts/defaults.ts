@@ -111,7 +111,7 @@ user: |-
 
 const MOTION_BIBLE = `name: motion.bible
 description: 整片 Motion Bible（全片 motion 视觉导演策略）
-version: 2
+version: 3
 user: |-
   你是知识视频的 motion director。请在单卡生成前，为整期视频制定一份 Motion Bible，用来统一风格、节奏、载体分布和卡间转场。
 
@@ -131,14 +131,14 @@ user: |-
 
   ===== 输出要求 =====
   只输出一个 JSON 对象。不要解释，不要 markdown。
-  preferredCarrier 可从 data-hero / comparison / trend / list-build / process / quote / concept / timeline / matrix / funnel / network / before-after / stacked-composition 中选择；拿不准时选择最能证明该段 claim 的 carrier。
+  preferredCarrier 可从 data-hero / comparison / table / trend / list-build / process / quote / concept / timeline / matrix / funnel / network / before-after / stacked-composition 中选择；拿不准时选择最能证明该段 claim 的 carrier。
   intensity: 1=轻信息/过渡，2=常规信息，3=全片重点。
   transitionRules.default 选择 crossfade / hard-cut / push / wipe 之一；matchCutCandidates 只列真的有共同视觉母题的相邻段。
 `;
 
 const CARDS_SEGMENT = `name: cards.segment
 description: Motion Card 组件构建（组合 @lingji/motion-kit 实现 JSON 分镜；file-first 写入 motionCard.tsx）
-version: 23
+version: 25
 user: |-
   任务：把下面的分镜（storyboard）实现为一个 Remotion 单文件组件，用 write 工具写入工作目录的 motionCard.tsx。
 
@@ -156,18 +156,21 @@ user: |-
   const TOKENS = {{presetMotionTokens}};
   {{presetStyleNotes}}
 
+  ===== 本段内容类型规则 =====
+  {{contentTypeRule}}
+
   {{motionBible}}
 
   ===== 实现要领（唯一需要你判断的部分）=====
   1. 节拍：优先 const beats = useTimingPlan(timingPlan, cues, anchors)，anchors 按分镜每拍的 cue 填（第 0 拍填 null）；旧写法 useBeats(cues, anchors) 仍兼容。揭示帧一律由 kit 计算——TimingPlan 会吸收停顿/重音/role，缺失时自动退回 cues；严禁手写帧窗、严禁按比例均摊。
-  2. 载体：按分镜 carrier 选择且只选择 1 个主原语——data-hero→StatHero；comparison→CompareRow；trend→TrendLine；list-build→ListBuild；process→ProcessFlow；quote→QuoteBlock；concept→ListBuild；timeline→TimelineRail；matrix→MatrixQuadrant；funnel→FunnelStack；network→NetworkMap；before-after→BeforeAfter；stacked-composition→StackedComposition。标题只能用 Kicker 放 header 槽位，禁止叠加第二个主原语。
+  2. 载体：按分镜 carrier 选择且只选择 1 个主原语——data-hero→StatHero / RingCounter（环形进度）/ MetricPulse（里程碑脉冲）/ ScaleImpact（极值刻度尺）/ StatGrid（2×2 多指标）；comparison→CompareRow / HorizontalBars / ColumnChart（垂直柱状）；table→DataTable；trend→TrendLine（markers 点亮拐点）；list-build→ListBuild / RankList / ChecklistPop；process→ProcessFlow / CauseChain；quote→QuoteBlock / CitationCard / KeyPointMarker；concept→ConceptCard / SectionTitle（章节标题）/ ListBuild；timeline→TimelineRail；matrix→MatrixQuadrant；funnel→FunnelStack；network→NetworkMap；before-after→BeforeAfter / MythFactSwap；stacked-composition→StackedComposition / DonutChart（环形饼图）。变体必须匹配分镜 motion 意图，拿不准时使用斜杠前的第一个原语。标题只能用 Kicker 放 header 槽位，禁止叠加第二个主原语。
   3. 状态演进：严格执行每拍 lifecycle.enter/update/collapse/exit，并把 elements 的整体生命周期传给对应 MotionSlot.lifecycle。collapse 后的旧元素只能保留为弱背景证据，exit 后必须离场；禁止把每拍 adds 全部永久堆在画面里。focus 拍到来前必须为 focus 元素腾出 main 槽位。list-build / process / timeline 的逐项建立必须传 beats 数组；其他载体不要臆造原语未提供的内部状态接口。
   4. 运动多样：不同元素用不同手法（fadeUp / slideIn / riseIn / popIn / trackIn / drawOn 缓动各不相同），别整卡一招；分镜的 motion 意图优先。
   5. 焦点：分镜 focus 指到的那一拍是唯一语义焦点——视觉上最大最重，主原语显式传 emphasis={分镜 focus.emphasis}（或对自定义元素用同名 kind 的 emphasize()）；禁止用 data 属性或不同的强调手法冒充；其余元素一律让它。
   6. 字大字少、大量留白、严守 storyboard.capacity：每行上屏文字 ≤ 14 个汉字，口播整句绝不上屏（提炼成关键词 / 短语）；正文字号 ≥ H*0.026，内容放不下就删文案而不是缩字号或往下挤。
      CardStage 内容区是 flex 垂直居中、可用 0.72H（底部 20% 字幕区）：
      - 一张卡最多 1 个主原语 + 1 个辅助（标题/kicker），禁止再叠加第二个图表/列表。
-     - 原语参数自觉限项：ListBuild/BarChart items≤4、ProcessFlow steps≤4、TimelineRail items≤4。
+     - 原语参数自觉限项：ListBuild/BarChart items≤4；RankList/ChecklistPop/HorizontalBars items≤5；ProcessFlow/CauseChain steps≤4；TimelineRail items≤4；ColumnChart items≤6；DonutChart segments≤5；DataTable ≤5行×≤4列；StatGrid items≤4。
      - 若分镜 beats 累计元素明显超容量（≥3 个原语 / list≥5 条），主动回退为「标题+单焦点元素」，把多余信息让给口播，并在 productionReport 注明「已按容量预算删减 N 项」。
      焦点在安全区内垂直居中（CardStage 已处理），横向用满内容区宽 CW（useStage 提供，=0.8×W；整行元素 / svg / 横向条宽度一律用 CW，写 W 全宽必溢出画布判失败）。
   7. 文案与数字只能来自分镜和逐字稿，不改写、不编造；不出现 Source / AI Generated / 水印小字。
@@ -193,28 +196,31 @@ user: |-
 
 const CARDS_ANIMATION = `name: cards.animation
 description: 视觉论证分镜（导演产出结构化 JSON storyboard，供 cards.segment 组件构建遵循）
-version: 9
+version: 12
 user: |-
   你是知识类解说视频的动效导演。为下面这段口播设计一张 Motion Card 的分镜。
 
   ===== 设计方法（按序思考）=====
   1. 提炼论点：这段口播到底在证明什么？写成一句 claim。
-  2. 选载体：从这些原型里选最能"证明"这个论点的一种——
-     - data-hero：一个核心数字（大数 + 单位 + 等比配重）
-     - comparison：A vs B 对比（双栏 / 对比条）
-     - trend：随时间变化（折线 / 阶梯）
+  2. 选载体：按"段落的数据形态信号"选最能"证明"这个论点的一种——
+     - data-hero：一个核心数字。里程碑 / KPI 要冲击感用 MetricPulse 变体（写「数字落定后脉冲扩散」）；带进度 / 达成用 RingCounter 变体；强调极值 / 占比（"只有 3%""高达 98%"）用 ScaleImpact 变体（写「刻度尺指示到 X」）；2-4 个 KPI 并列用 StatGrid 变体（写「指标格逐格弹出」）
+     - comparison：A vs B 对比（双栏 / 对比条）；≥3 个类别的数值比较用 ColumnChart 变体（写「柱子从基线弹性生长」）
+     - table：多行多列结构化数据（名单 / 榜单 / 参数对照 / 一览表）；motion 写「表头先入、行逐条揭示、焦点行 accent」。只有 2 行对照时用 comparison，别硬上表
+     - trend：随时间变化（折线 / 阶梯；有拐点写「折线绘制后点亮拐点标注」）
      - list-build：并列要点（逐条列表）
      - process：步骤 / 流程 / 因果链（节点依次点亮）
      - quote：金句定格（大字 + 出处）
-     - concept：术语定义 / 概念拆解（词 + 释义 + 拆解块）
+     - concept：术语定义 / 概念拆解；章节开场 / 收束 / 话题切换用 SectionTitle 变体（写「章节标题展开」），不堆信息
      - timeline：历史阶段 / 版本演进 / 政策事件线
      - matrix：二维象限 / 决策优先级 / 高低组合判断
      - funnel：筛选 / 转化 / 层层收窄
      - network：人物 / 组织 / 概念关系
      - before-after：改版前后 / 问题方案对照
-     - stacked-composition：构成占比 / 层级堆叠
+     - stacked-composition：构成占比 / 层级堆叠；环形饼图变体写「分段依次绘制」
      主画面只能用文字、数字、表格、图表、列表、色块、线条——不在 TSX 里手画实物、人物、场景插画。
      如果段落确实需要一个有辨识度的物品/物件支撑语义，把它写入 assets，由资产系统匹配或生成抠图素材；主画面仍然按信息图/编辑设计组织。
+     变体意图写进 motion：排名/TopN 的 list-build 写“逐条弹出带序号”；核对清单写“逐条勾选”；误区纠正的 before-after 写“先划掉误区再揭示事实”；带来源的 quote 写“引用正文与来源分层入场”；因果解释的 process 写“原因→机制→结果依次连接”。
+     本段内容类型规则：{{contentTypeRule}}
   3. 先定布局与元素预算：layout 从 single-focus / title-hero / split-compare / chart-with-kicker / list-with-kicker / asset-aside 中选择。elements 固定 1 个 focus(main)，可选 1 个 support(header) 和 1 个 asset(asset)，每项给 id/role/slot/content/heightRatio；同一槽位不能放两个语义区块，capacity.maxVisible≤3、maxHeightRatio≤0.72。
   4. 编分镜与状态演进：拆成 1~6 拍，每拍锚到"讲出该内容的那一句"，并给 role。每拍 lifecycle 只操作 elements 中的整体语义区块；旧元素需要让位时必须 collapse 或 exit，不能只写 adds 让内容永久累加。list-build / process / timeline 可逐拍添加条目或节点；comparison / trend / quote / before-after / stacked-composition 不要要求内部子项换位、交替提亮或复杂形变，只规划整个主区块可实现的 enter/update/collapse/exit 与焦点强调。
   5. 标焦点：focus 指出唯一语义焦点在哪一拍，emphasis 四选一：countup-settle / slam / underline-sweep / brighten。
@@ -229,11 +235,12 @@ user: |-
   - 没有数字的段落不硬塞图表：改用 quote / concept / list-build。
   - 容量预算（决定一张卡会不会挤爆，渲染期会校验累计高度）：
     内容盒可用高度约 0.72H（≈778px，底部 20% 是字幕安全区）。各载体满载估算高度：
-    data-hero ≈0.40H｜comparison ≈0.20H｜trend ≈0.20H｜list-build 每条 ≈0.12H
-    ｜process 每步 ≈0.10H｜quote 单行 ≈0.18H/两行 ≈0.33H｜concept ≈0.40H
-    ｜timeline 5 项 ≈0.30H｜matrix/funnel/network/before-after/stacked ≈0.42H
+    data-hero ≈0.40H（含 metric-pulse / scale-impact / stat-grid 变体）｜comparison ≈0.20H（column 变体 ≈0.40H）
+    ｜table ≤5行 ≈0.45H｜trend ≈0.20H｜list-build 每条 ≈0.12H
+    ｜process 每步 ≈0.10H｜quote 单行 ≈0.18H/两行 ≈0.33H｜concept ≈0.40H（章节标题变体 ≈0.28H）
+    ｜timeline 5 项 ≈0.30H｜matrix/funnel/network/before-after/stacked/donut 变体 ≈0.42H
     由此反推上限（硬性，违反打回）：
-    - list-build ≤4 条；process ≤4 步；timeline ≤4 项；quote 金句 ≤2 行。
+    - 普通 list-build ≤4 条；排名/核对清单变体可到 5 条，但必须在 motion 中明确“带序号”或“逐条勾选”；process ≤4 步；timeline ≤4 项；quote 金句 ≤2 行；table ≤5 行×≤4 列；column ≤6 柱；donut ≤5 段；stat-grid ≤4 格。
     - 一张卡最多 1 个主原语 + 1 个辅助（kicker/标题），禁止「标题+数字+列表+说明」四件套。
     - 所有 beats 累计上屏元素的估算总高不得超过 0.72H。
     - 机器会按 lifecycle 逐拍模拟同时驻留元素；任一拍超出 capacity 会直接打回。
@@ -245,7 +252,23 @@ user: |-
   - 若输出 assets，beats 中不要再描述"画出该物件"，只描述信息图层如何为资产让位、压暗或呼应。
 
   ===== 输出结构（只输出严格 JSON，不要解释）=====
-  {"claim":"一句论点","carrier":"data-hero","layout":"title-hero","scene":"终态画面","elements":[{"id":"title","role":"support","slot":"header","content":"短标题","heightRatio":0.12,"priority":2},{"id":"hero","role":"focus","slot":"main","content":"核心数字","heightRatio":0.42,"priority":3}],"capacity":{"maxVisible":2,"maxHeightRatio":0.62},"focus":{"beat":1,"emphasis":"countup-settle"},"beats":[{"cue":null,"kind":"build","role":"anticipation","adds":"短标题","motion":"软落入场","lifecycle":{"enter":["title"]}},{"cue":1,"kind":"accent","role":"emphasis","adds":"核心数字","changes":"标题收为辅助","motion":"数字落定","lifecycle":{"enter":["hero"],"collapse":["title"]}}]}
+  {"claim":"一句论点","carrier":"data-hero","layout":"title-hero","scene":"终态画面","elements":[{"id":"title","role":"support","slot":"header","content":"短标题","heightRatio":0.12,"priority":2},{"id":"hero","role":"focus","slot":"main","content":"核心数字","heightRatio":0.42,"priority":3}],"capacity":{"maxVisible":2,"maxHeightRatio":0.62},"focus":{"beat":1,"emphasis":"countup-settle"},"data":{"value":28842,"unit":"人","label":"硕士报名"},"beats":[{"cue":null,"kind":"build","role":"anticipation","adds":"短标题","motion":"软落入场","lifecycle":{"enter":["title"]}},{"cue":1,"kind":"accent","role":"emphasis","adds":"核心数字","changes":"标题收为辅助","motion":"数字落定","lifecycle":{"enter":["hero"],"collapse":["title"]}}]}
+
+  data（可选但强烈建议）：按所选 carrier 附上结构化上屏内容，系统据此直接编译卡片；有 data 时上屏文案以 data 为准，beats.adds 写口播语义即可。data 里的数字与文案同样必须忠于逐字稿，机器逐条校验条数上限与文本长度（条目 ≤14 字、标题 ≤10 字、金句/释义 ≤28 字），违反直接打回。
+  - data-hero：{"value":28842,"unit":"人","label":"硕士报名","max":40000}；变体 "variant":"metric-pulse|ring-counter|scale-impact"（scale-impact 必须给 max）；多指标 {"variant":"stat-grid","items":[{"value":"120万","label":"曝光"}×2~4]}
+  - comparison：{"left":{"label":"今年","value":"28842"},"right":{"label":"去年","value":"19003"}}；多类对比 {"variant":"column","items":[{"label":"硕士","value":28842}×2~6]}
+  - table：{"columns":["公司","增速"],"rows":[["新易盛","43%"],["天孚","40%"]]}（≤5行×≤4列）
+  - trend：{"points":[12,18,41],"startLabel":"2023","endLabel":"2025","markers":[{"index":2,"label":"拐点"}]}
+  - list-build：{"items":["要点一","要点二"]}；排名/清单加 "variant":"rank|check"（可到 5 条）
+  - process：{"steps":["报名","初试","复试"]}；因果链加 "variant":"cause"
+  - quote：{"text":"金句原文","source":"出处（可省）"}
+  - concept：{"term":"概念","definition":"一句释义","hint":"可省"}；章节标题 {"variant":"section","index":"02","title":"章节标题","subtitle":"可省"}
+  - timeline：{"items":["2019 起步","2022 爆发"]}（≤4 项）
+  - matrix：{"items":[{"label":"优先做","x":78,"y":72,"focus":true}],"xLabel":"价值","yLabel":"难度"}（x/y 为 0-100 布局坐标，非内容数字）
+  - funnel：{"steps":[{"label":"触达","value":"10万"}]}（≤5 级）
+  - network：{"nodes":["平台","创作者","观众"],"links":[[0,1],[1,2]]}（≤5 节点）
+  - before-after：{"before":"旧流程慢","after":"新流程快"}；误区纠正加 "variant":"myth-fact"
+  - stacked-composition：{"items":[{"label":"内容","value":55,"display":"55%"}]}；环形图加 "variant":"donut"
 
   ===== 输入 =====
   - 全局提示：{{globalPrompt}}

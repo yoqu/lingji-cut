@@ -15,6 +15,7 @@ import type { StoryboardAssetRequest } from '../types/assets';
 export const STORYBOARD_CARRIERS = [
   'data-hero',
   'comparison',
+  'table',
   'trend',
   'list-build',
   'process',
@@ -96,7 +97,100 @@ export interface MotionStoryboard {
   assets?: StoryboardAssetRequest[];
   focus?: { beat: number; emphasis?: MotionEmphasisKind };
   beats: StoryboardBeat[];
+  /**
+   * 模板化结构化数据（可选）：有 data 时上屏内容以 data 为准，编译器直接映射为原语 props；
+   * 缺省时编译器回落为从 beats 文本提取。字段按 carrier 解释，见 validateStoryboardData。
+   */
+  data?: StoryboardData;
 }
+
+/* ---------- 模板化结构化数据（per-carrier） ---------- */
+
+export interface StoryboardHeroData {
+  value?: number;
+  unit?: string;
+  label?: string;
+  max?: number;
+  variant?: 'metric-pulse' | 'ring-counter' | 'scale-impact' | 'stat-grid';
+  items?: Array<{ value: string; label: string }>;
+}
+export interface StoryboardComparisonData {
+  left?: { label: string; value: string };
+  right?: { label: string; value: string };
+  items?: Array<{ label: string; value: number; display?: string }>;
+  variant?: 'column';
+}
+export interface StoryboardTableData {
+  columns: string[];
+  rows: string[][];
+}
+export interface StoryboardTrendData {
+  points: number[];
+  startLabel?: string;
+  endLabel?: string;
+  markers?: Array<{ index: number; label?: string }>;
+}
+export interface StoryboardListData {
+  items: string[];
+  variant?: 'rank' | 'check';
+}
+export interface StoryboardProcessData {
+  steps: string[];
+  variant?: 'cause';
+}
+export interface StoryboardQuoteData {
+  text: string;
+  source?: string;
+}
+export interface StoryboardConceptData {
+  term?: string;
+  definition?: string;
+  hint?: string;
+  index?: string;
+  title?: string;
+  subtitle?: string;
+  variant?: 'section';
+}
+export interface StoryboardTimelineData {
+  items: string[];
+}
+export interface StoryboardMatrixData {
+  items: Array<{ label: string; x: number; y: number; focus?: boolean }>;
+  xLabel?: string;
+  yLabel?: string;
+}
+export interface StoryboardFunnelData {
+  steps: Array<{ label: string; value?: string }>;
+}
+export interface StoryboardNetworkData {
+  nodes: string[];
+  links?: Array<[number, number]>;
+}
+export interface StoryboardBeforeAfterData {
+  before: string;
+  after: string;
+  variant?: 'myth-fact';
+}
+export interface StoryboardStackedData {
+  items: Array<{ label: string; value: number; display?: string }>;
+  variant?: 'donut';
+}
+
+export type StoryboardData =
+  | StoryboardHeroData
+  | StoryboardComparisonData
+  | StoryboardTableData
+  | StoryboardTrendData
+  | StoryboardListData
+  | StoryboardProcessData
+  | StoryboardQuoteData
+  | StoryboardConceptData
+  | StoryboardTimelineData
+  | StoryboardMatrixData
+  | StoryboardFunnelData
+  | StoryboardNetworkData
+  | StoryboardBeforeAfterData
+  | StoryboardStackedData;
 
 export interface StoryboardValidation {
   ok: boolean;
@@ -246,9 +340,334 @@ function validateCapacityModel(
   }
 }
 
+/* ---------- data 字段的机器校验（模板化编译的硬约束来源） ---------- */
+
+/** 上屏文本长度上限：条目/标签 ≤14 字、标题 ≤10 字、金句/释义 ≤28 字（与提示词既有约束一致）。 */
+const DATA_TEXT_MAX = 14;
+const DATA_TITLE_MAX = 10;
+const DATA_LONG_TEXT_MAX = 28;
+
+function dataLen(text: unknown): number {
+  return typeof text === 'string' ? text.trim().length : 0;
+}
+
+function checkDataText(value: unknown, max: number, what: string, errors: string[]): void {
+  if (typeof value !== 'string' || !value.trim()) {
+    errors.push(`data.${what} 缺失或不是字符串`);
+    return;
+  }
+  if (value.trim().length > max) {
+    errors.push(`data.${what}「${value.trim().slice(0, max + 4)}…」${value.trim().length} 字超过上限 ${max} 字——上屏文案必须精简`);
+  }
+}
+
+function checkOptionalDataText(value: unknown, max: number, what: string, errors: string[]): void {
+  if (value == null) return;
+  if (typeof value !== 'string') {
+    errors.push(`data.${what} 不是字符串`);
+    return;
+  }
+  if (value.trim().length > max) {
+    errors.push(`data.${what} ${value.trim().length} 字超过上限 ${max} 字`);
+  }
+}
+
+function checkDataNumber(value: unknown, what: string, errors: string[], opts: { min?: number; max?: number } = {}): void {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    errors.push(`data.${what} 缺失或不是数字`);
+    return;
+  }
+  if (opts.min != null && value < opts.min) errors.push(`data.${what}=${value} 小于下限 ${opts.min}`);
+  if (opts.max != null && value > opts.max) errors.push(`data.${what}=${value} 超过上限 ${opts.max}`);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** 数字防编造（data 版）：收集 data 里的内容数字（value/points/条目 value/文本内数字），交给逐字稿匹配。 */
+function collectDataNumbers(data: Record<string, unknown>): string[] {
+  const numbers: string[] = [];
+  const pushNumber = (value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value) && (Math.abs(value) >= 10 || !Number.isInteger(value))) {
+      numbers.push(String(value));
+    }
+  };
+  const walk = (value: unknown, keyPath: string[]) => {
+    if (typeof value === 'number') {
+      // matrix 的 x/y 是布局坐标不是内容数字，跳过。
+      if (keyPath.includes('x') || keyPath.includes('y')) return;
+      pushNumber(value);
+      return;
+    }
+    if (typeof value === 'string') {
+      numbers.push(...extractCheckableNumbers(value));
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => walk(item, [...keyPath, String(i)]));
+      return;
+    }
+    const record = asRecord(value);
+    if (record) {
+      for (const [k, v] of Object.entries(record)) walk(v, [...keyPath, k]);
+    }
+  };
+  walk(data, []);
+  return [...new Set(numbers)];
+}
+
+/**
+ * 逐 carrier 校验可选 data 字段：形状 / 条数上限 / 文本长度 / 数字忠于逐字稿。
+ * data 校验失败的 error 与 cue / 容量 error 一样回喂导演重出。
+ */
+export function validateStoryboardData(
+  sb: MotionStoryboard,
+  ctx: { transcript?: string },
+): { errors: string[] } {
+  const errors: string[] = [];
+  const data = asRecord(sb.data);
+  if (!sb.data) return { errors };
+  if (!data) {
+    errors.push('data 必须是对象');
+    return { errors };
+  }
+
+  switch (sb.carrier) {
+    case 'data-hero': {
+      const variant = data.variant as StoryboardHeroData['variant'];
+      if (variant != null && !['metric-pulse', 'ring-counter', 'scale-impact', 'stat-grid'].includes(variant)) {
+        errors.push(`data.variant "${String(variant)}" 不合法（metric-pulse | ring-counter | scale-impact | stat-grid）`);
+      }
+      if (variant === 'stat-grid') {
+        const items = asArray(data.items);
+        if (items.length < 2 || items.length > 4) {
+          errors.push(`stat-grid 需要 2~4 个指标格，当前 ${items.length}`);
+        }
+        items.forEach((item, i) => {
+          const record = asRecord(item);
+          checkDataText(record?.value, DATA_TEXT_MAX, `items[${i}].value`, errors);
+          checkDataText(record?.label, DATA_TITLE_MAX, `items[${i}].label`, errors);
+        });
+      } else {
+        checkDataNumber(data.value, 'value', errors);
+        if (data.max != null) checkDataNumber(data.max, 'max', errors, { min: 0.0001 });
+        if (variant === 'scale-impact' && data.max == null) {
+          errors.push('scale-impact 变体必须提供 data.max（刻度尺上限）');
+        }
+        checkOptionalDataText(data.unit, 4, 'unit', errors);
+        checkOptionalDataText(data.label, DATA_TITLE_MAX, 'label', errors);
+      }
+      break;
+    }
+    case 'comparison': {
+      const variant = data.variant as StoryboardComparisonData['variant'];
+      if (variant != null && variant !== 'column') {
+        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 column）`);
+      }
+      if (variant === 'column' || Array.isArray(data.items)) {
+        const items = asArray(data.items);
+        if (items.length < 2 || items.length > 6) {
+          errors.push(`comparison items 需要 2~6 项，当前 ${items.length}`);
+        }
+        items.forEach((item, i) => {
+          const record = asRecord(item);
+          checkDataText(record?.label, DATA_TEXT_MAX, `items[${i}].label`, errors);
+          checkDataNumber(record?.value, `items[${i}].value`, errors);
+          checkOptionalDataText(record?.display, DATA_TEXT_MAX, `items[${i}].display`, errors);
+        });
+      } else {
+        for (const side of ['left', 'right'] as const) {
+          const record = asRecord(data[side]);
+          if (!record) {
+            errors.push(`data.${side} 缺失（comparison 需要 left / right 或 items）`);
+            continue;
+          }
+          checkDataText(record.label, DATA_TEXT_MAX, `${side}.label`, errors);
+          checkDataText(record.value, DATA_TEXT_MAX, `${side}.value`, errors);
+        }
+      }
+      break;
+    }
+    case 'table': {
+      const columns = asArray(data.columns);
+      const rows = asArray(data.rows);
+      if (columns.length < 1 || columns.length > 4) {
+        errors.push(`table columns 需要 1~4 列，当前 ${columns.length}`);
+      }
+      columns.forEach((col, i) => checkDataText(col, DATA_TITLE_MAX, `columns[${i}]`, errors));
+      if (rows.length < 1 || rows.length > 5) {
+        errors.push(`table rows 需要 1~5 行，当前 ${rows.length}`);
+      }
+      rows.forEach((row, i) => {
+        const cells = asArray(row);
+        if (columns.length > 0 && cells.length !== columns.length) {
+          errors.push(`table 第 ${i + 1} 行有 ${cells.length} 格，与表头 ${columns.length} 列不一致`);
+        }
+        cells.forEach((cell, j) => checkDataText(cell, DATA_TEXT_MAX, `rows[${i}][${j}]`, errors));
+      });
+      break;
+    }
+    case 'trend': {
+      const points = asArray(data.points);
+      if (points.length < 2 || points.length > 8) {
+        errors.push(`trend points 需要 2~8 个点，当前 ${points.length}`);
+      }
+      points.forEach((point, i) => checkDataNumber(point, `points[${i}]`, errors));
+      checkOptionalDataText(data.startLabel, DATA_TITLE_MAX, 'startLabel', errors);
+      checkOptionalDataText(data.endLabel, DATA_TITLE_MAX, 'endLabel', errors);
+      asArray(data.markers).forEach((marker, i) => {
+        const record = asRecord(marker);
+        checkDataNumber(record?.index, `markers[${i}].index`, errors, { min: 0, max: Math.max(0, points.length - 1) });
+        checkOptionalDataText(record?.label, DATA_TEXT_MAX, `markers[${i}].label`, errors);
+      });
+      break;
+    }
+    case 'list-build': {
+      const variant = data.variant as StoryboardListData['variant'];
+      if (variant != null && !['rank', 'check'].includes(variant)) {
+        errors.push(`data.variant "${String(variant)}" 不合法（rank | check）`);
+      }
+      const limit = variant ? 5 : 4;
+      const items = asArray(data.items);
+      if (items.length < 1 || items.length > limit) {
+        errors.push(`list-build items 需要 1~${limit} 条${variant ? '' : '（rank/check 变体可到 5）'}，当前 ${items.length}`);
+      }
+      items.forEach((item, i) => checkDataText(item, DATA_TEXT_MAX, `items[${i}]`, errors));
+      break;
+    }
+    case 'process': {
+      const variant = data.variant as StoryboardProcessData['variant'];
+      if (variant != null && variant !== 'cause') {
+        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 cause）`);
+      }
+      const steps = asArray(data.steps);
+      if (steps.length < 2 || steps.length > 4) {
+        errors.push(`process steps 需要 2~4 步，当前 ${steps.length}`);
+      }
+      steps.forEach((step, i) => checkDataText(step, DATA_TEXT_MAX, `steps[${i}]`, errors));
+      break;
+    }
+    case 'quote': {
+      checkDataText(data.text, DATA_LONG_TEXT_MAX, 'text', errors);
+      checkOptionalDataText(data.source, DATA_TEXT_MAX, 'source', errors);
+      break;
+    }
+    case 'concept': {
+      const variant = data.variant as StoryboardConceptData['variant'];
+      if (variant != null && variant !== 'section') {
+        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 section）`);
+      }
+      if (variant === 'section') {
+        checkDataText(data.title, DATA_TITLE_MAX, 'title', errors);
+        checkOptionalDataText(data.subtitle, DATA_TEXT_MAX, 'subtitle', errors);
+        checkOptionalDataText(data.index, 4, 'index', errors);
+      } else {
+        checkDataText(data.term, DATA_TITLE_MAX, 'term', errors);
+        checkDataText(data.definition, DATA_LONG_TEXT_MAX, 'definition', errors);
+        checkOptionalDataText(data.hint, DATA_TEXT_MAX, 'hint', errors);
+      }
+      break;
+    }
+    case 'timeline': {
+      const items = asArray(data.items);
+      if (items.length < 2 || items.length > 4) {
+        errors.push(`timeline items 需要 2~4 项，当前 ${items.length}`);
+      }
+      items.forEach((item, i) => checkDataText(item, DATA_TEXT_MAX, `items[${i}]`, errors));
+      break;
+    }
+    case 'matrix': {
+      const items = asArray(data.items);
+      if (items.length < 2 || items.length > 5) {
+        errors.push(`matrix items 需要 2~5 项，当前 ${items.length}`);
+      }
+      items.forEach((item, i) => {
+        const record = asRecord(item);
+        checkDataText(record?.label, DATA_TEXT_MAX, `items[${i}].label`, errors);
+        checkDataNumber(record?.x, `items[${i}].x`, errors, { min: 0, max: 100 });
+        checkDataNumber(record?.y, `items[${i}].y`, errors, { min: 0, max: 100 });
+      });
+      checkOptionalDataText(data.xLabel, 8, 'xLabel', errors);
+      checkOptionalDataText(data.yLabel, 8, 'yLabel', errors);
+      break;
+    }
+    case 'funnel': {
+      const steps = asArray(data.steps);
+      if (steps.length < 2 || steps.length > 5) {
+        errors.push(`funnel steps 需要 2~5 级，当前 ${steps.length}`);
+      }
+      steps.forEach((step, i) => {
+        const record = asRecord(step);
+        checkDataText(record?.label, DATA_TEXT_MAX, `steps[${i}].label`, errors);
+        checkOptionalDataText(record?.value, 8, `steps[${i}].value`, errors);
+      });
+      break;
+    }
+    case 'network': {
+      const nodes = asArray(data.nodes);
+      if (nodes.length < 2 || nodes.length > 5) {
+        errors.push(`network nodes 需要 2~5 个节点，当前 ${nodes.length}`);
+      }
+      nodes.forEach((node, i) => checkDataText(node, 8, `nodes[${i}]`, errors));
+      asArray(data.links).forEach((link, i) => {
+        const pair = asArray(link);
+        if (pair.length !== 2 || pair.some((p) => typeof p !== 'number' || !Number.isInteger(p) || p < 0 || p >= nodes.length)) {
+          errors.push(`network links[${i}] 不是合法的节点下标对（0-${Math.max(0, nodes.length - 1)}）`);
+        }
+      });
+      break;
+    }
+    case 'before-after': {
+      const variant = data.variant as StoryboardBeforeAfterData['variant'];
+      if (variant != null && variant !== 'myth-fact') {
+        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 myth-fact）`);
+      }
+      checkDataText(data.before, DATA_TEXT_MAX, 'before', errors);
+      checkDataText(data.after, DATA_TEXT_MAX, 'after', errors);
+      break;
+    }
+    case 'stacked-composition': {
+      const variant = data.variant as StoryboardStackedData['variant'];
+      if (variant != null && variant !== 'donut') {
+        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 donut）`);
+      }
+      const items = asArray(data.items);
+      if (items.length < 2 || items.length > 5) {
+        errors.push(`stacked-composition items 需要 2~5 项，当前 ${items.length}`);
+      }
+      items.forEach((item, i) => {
+        const record = asRecord(item);
+        checkDataText(record?.label, DATA_TEXT_MAX, `items[${i}].label`, errors);
+        checkDataNumber(record?.value, `items[${i}].value`, errors);
+        checkOptionalDataText(record?.display, 8, `items[${i}].display`, errors);
+      });
+      break;
+    }
+    default:
+      break;
+  }
+
+  // 数字防编造：data 里的内容数字必须能在逐字稿中找到（matrix x/y 坐标除外）。
+  const transcript = normalizeForNumbers(ctx.transcript ?? '');
+  if (transcript) {
+    const fabricated = collectDataNumbers(data).filter((num) => !transcript.includes(num));
+    if (fabricated.length > 0) {
+      errors.push(
+        `data 中的数字 [${fabricated.join(', ')}] 在本段逐字稿中不存在；数据必须忠于口播原文，不得编造 / 换算 / 四舍五入`,
+      );
+    }
+  }
+
+  return { errors };
+}
+
 /** 模型常见的字段变体归一化：adds/changes/motion 的近义键收敛到契约键名。 */
-function normalizeStoryboard(raw: MotionStoryboard): MotionStoryboard {
-  if (!raw || !Array.isArray(raw.beats)) return raw;
+function normalizeStoryboard(raw: MotionStoryboard): MotionStoryboard {  if (!raw || !Array.isArray(raw.beats)) return raw;
   const pick = (obj: Record<string, unknown>, keys: string[]): string | undefined => {
     for (const k of keys) {
       const v = obj[k];
@@ -389,6 +808,7 @@ export function validateStoryboard(
   }
   if (!sb.scene || typeof sb.scene !== 'string') warnings.push('缺少 scene（终态画面描述）');
   validateCapacityModel(sb, ctx.requireCapacityModel === true, errors, warnings);
+  errors.push(...validateStoryboardData(sb, { transcript: ctx.transcript }).errors);
   if (sb.assets != null) {
     if (!Array.isArray(sb.assets)) {
       errors.push('assets 必须是数组');

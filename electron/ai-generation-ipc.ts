@@ -649,6 +649,10 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           userDataPath,
           projectDir: args.projectDir,
         });
+        const stylePresetId = resolveStylePresetId({
+          project: await loadProjectStylePresetId(args.projectDir),
+          global: args.settings.defaultStylePresetId,
+        });
         return await generateAnimationDirection(
           args.entries,
           {
@@ -662,6 +666,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             cardPrompt: args.cardPrompt,
             animationTemplate,
             motionBible: args.motionBible,
+            stylePresetId,
             projectBindings: args.projectBindings ?? null,
           },
         );
@@ -694,6 +699,8 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         visualType?: AISegmentVisualType;
         qualityMode?: 'auto' | 'director';
         feedId?: string;
+        /** 可选 auto-run jsonl runId；传入后为该段卡片生成写遥测事件。 */
+        telemetryRunId?: string | null;
       },
     ) => {
       await requireApprovedDirector(args.projectDir);
@@ -706,6 +713,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
 
       try {
         const userDataPath = app.getPath('userData');
+        const telemetry = makeMainTelemetry(args.telemetryRunId);
         const { cardTemplate, imageTemplate, animationTemplate } = await loadCardTemplates({
           userDataPath,
           projectDir: args.projectDir,
@@ -753,6 +761,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             nextSegment: args.nextSegment,
             visualType: args.visualType ?? 'motion',
             qualityMode: args.qualityMode ?? 'auto',
+            telemetry,
           },
         );
 
@@ -867,9 +876,13 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         currentPrompt?: string;
         projectDir?: string;
         projectBindings?: PromptBindingMap | null;
+        /** 自由发布（无项目）：跳过导演审批门禁，模板走全局覆盖。 */
+        standalone?: boolean;
+        /** 显式作品标题（standalone 场景无 project.json 可读时传入）。 */
+        workTitle?: string;
       },
     ) => {
-      await requireApprovedDirector(args.projectDir);
+      if (!args.standalone) await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -892,7 +905,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           currentPrompt: args.currentPrompt,
           coverTemplate,
           projectBindings: args.projectBindings ?? null,
-          workTitle: await loadProjectWorkTitle(args.projectDir),
+          workTitle: args.workTitle ?? (await loadProjectWorkTitle(args.projectDir)),
         });
       } catch (error) {
         logAiError('封面提示词重生成失败', error);
@@ -908,7 +921,9 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
       args: {
         prompts: string[];
         settings: AISettings;
-        projectDir: string;
+        projectDir?: string;
+        /** 显式输出目录（欢迎页自由发布，无项目）；提供时跳过导演审批门禁。 */
+        outputDir?: string;
         projectBindings?: PromptBindingMap | null;
         telemetryRunId?: string | null;
         /** 画幅比例（发布选项卡按 16:9 / 4:3 / 3:4 生成）；缺省 16:9。 */
@@ -917,11 +932,11 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         n?: number;
       },
     ) => {
-      await requireApprovedDirector(args.projectDir);
+      if (!args.outputDir) await requireApprovedDirector(args.projectDir);
       const telemetry = makeMainTelemetry(args.telemetryRunId);
       const coverStart = Date.now();
       telemetry.emit('stage.start', { stage: 'cover', prompts: args.prompts.length });
-      const coversDir = path.join(args.projectDir, 'covers');
+      const coversDir = args.outputDir ?? path.join(args.projectDir!, 'covers');
       const binding = resolvePromptBinding(
         'cover.regeneration',
         args.settings,

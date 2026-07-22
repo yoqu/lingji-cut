@@ -105,6 +105,21 @@ export interface VisualMotionTokens {
   persona?: { easing?: 'crisp' | 'calm' | 'bouncy'; emphasis?: 'settle' | 'brighten' | 'underline' | 'none' };
 }
 
+export interface VisualContentTypeRule {
+  /** 推荐载体，按优先级排列；内置值由测试约束为 StoryboardCarrier。 */
+  preferredCarriers: string[];
+  /** 注入导演与雕刻提示词的内容生产规则。 */
+  renderingRules: string;
+  density?: 'light' | 'normal' | 'heavy';
+}
+
+export interface VisualMotionSpec {
+  chartRules?: string;
+  emphasisRules?: string;
+  typographyRules?: string;
+  banned?: string;
+}
+
 export interface VisualStylePreset {
   id: string;
   name: string;
@@ -119,6 +134,10 @@ export interface VisualStylePreset {
   motionTokens?: VisualMotionTokens;
   /** 少量预设专属提示（如玻璃拟态面板、渐变标题），注入 {{presetStyleNotes}}；≤3 行 */
   motionStyleNotes?: string;
+  /** 按段落语义类型约束载体、密度与表达方式；缺省回退共享规则。 */
+  contentTypeRules?: Partial<Record<AISegmentSemanticType, VisualContentTypeRule>>;
+  /** 供 Motion Card 生成与只读详情面板消费的结构化运动细则。 */
+  motionSpec?: VisualMotionSpec;
   preview: VisualStylePreview;
 }
 
@@ -132,6 +151,8 @@ export interface AISegment {
   startMs: number;
   endMs: number;
   transcriptExcerpt?: string;
+  /** 旧项目可缺失；AI 分析与导演方案中的 AISegmentAnalysis 会收紧为必填。 */
+  semanticType?: AISegmentSemanticType;
 }
 
 export type AISegmentSemanticType =
@@ -474,6 +495,11 @@ export interface AISettings {
   cardGenerationConcurrency?: number;
   /** 出卡前是否自动为 motion 卡生成动画指导（cards.animation）。缺省视为 true。 */
   autoAnimationDirection?: boolean;
+  /**
+   * Motion Card 出卡路径：template = storyboard 确定性模板编译（默认，不经 LLM 雕刻/审查，
+   * 单卡仅 1 次导演 LLM 调用）；agent = 旧的 LLM 雕刻+审查多轮链路（精雕强制 agent）。
+   */
+  motionCardMode?: 'template' | 'agent';
 }
 
 export const DEFAULT_JIMENG_MODEL = 'jimeng-5.0';

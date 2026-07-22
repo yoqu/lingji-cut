@@ -44,6 +44,19 @@ export const CYBER_GLITCH: VisualStylePreset = {
   },
   motionStyleNotes:
     '标题用青/品红固定色差双影（text-shadow: -2px 0 #00D4FF, 2px 0 #FF2EC4，写死不逐帧抖动）；焦点元素落地帧做一次性色差 offset snap（偏移瞬间加大再回固定值，不循环）；品红仅作色差偏移色，不当第二 accent 铺色块；底层铺静态 CRT 扫描线（repeating-linear-gradient 细横纹）。',
+  motionSpec: {
+    chartRules: '图表使用硬边细线与终端式标签，青色标主数据，品红只作固定色差偏移。',
+    emphasisRules: '焦点落定时允许一次性色差 offset snap，随后回到固定双影。',
+    typographyRules: '标题使用 Space Grotesk，正文与数据标签使用 JetBrains Mono，保持终端节奏。',
+    banned: '禁止逐帧抖动、持续闪烁、双 accent 大面积铺色、柔和圆角和高斯模糊正文。',
+  },
+  contentTypeRules: {
+    data: {
+      preferredCarriers: ['data-hero', 'comparison', 'trend'],
+      renderingRules: '数字与标签采用终端式短字段，主数据青色落定，禁止用品红制造第二焦点。',
+      density: 'normal',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;place-items:center;align-content:center;gap:4%;font-family:'Space Grotesk','JetBrains Mono',monospace;background:#070708;color:#E8E8E8;box-sizing:border-box;padding:7% 7%;overflow:hidden;}

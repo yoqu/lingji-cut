@@ -35,6 +35,9 @@ import {
   resolveStylePresetId,
   getStylePresetById,
   getStyleFacetBlock,
+  getContentTypeRuleBlock,
+  getMotionStyleNotes,
+  resolveContentTypeRule,
 } from '../src/lib/card-style';
 import { DEFAULT_STYLE_PRESET_ID } from '../src/types/ai';
 
@@ -73,8 +76,44 @@ describe('AISettings 默认风格', () => {
   });
 });
 
-import { VISUAL_STYLE_PRESETS } from '../src/lib/card-style-presets';
+import { DEFAULT_CONTENT_TYPE_RULES, VISUAL_STYLE_PRESETS } from '../src/lib/card-style-presets';
 import { accentTextColor } from '../src/remotion/motion-kit';
+import { STORYBOARD_CARRIERS } from '../src/lib/motion-storyboard';
+
+describe('内容类型规则', () => {
+  it('预设覆盖优先，其他类型回退共享默认', () => {
+    expect(resolveContentTypeRule('nyt-data', 'data').source).toBe('preset');
+    expect(resolveContentTypeRule('nyt-data', 'narration')).toEqual({
+      rule: DEFAULT_CONTENT_TYPE_RULES.narration,
+      source: 'default',
+    });
+  });
+
+  it('无 semanticType 不注入，有值时包含载体与密度', () => {
+    expect(getContentTypeRuleBlock('nyt-data', undefined)).toBe('');
+    expect(getContentTypeRuleBlock('nyt-data', 'data')).toContain('trend > data-hero > comparison');
+    expect(getContentTypeRuleBlock('nyt-data', 'data')).toContain('信息密度：heavy');
+  });
+
+  it('全部默认与预设 carrier 都属于 storyboard 枚举', () => {
+    const allowed = new Set<string>(STORYBOARD_CARRIERS);
+    for (const rule of Object.values(DEFAULT_CONTENT_TYPE_RULES)) {
+      expect(rule.preferredCarriers.every((carrier) => allowed.has(carrier))).toBe(true);
+    }
+    for (const preset of VISUAL_STYLE_PRESETS) {
+      for (const rule of Object.values(preset.contentTypeRules ?? {})) {
+        expect(rule!.preferredCarriers.every((carrier) => allowed.has(carrier)), preset.id).toBe(true);
+      }
+    }
+  });
+
+  it('结构化运动细则与旧提示合并输出', () => {
+    const notes = getMotionStyleNotes('nyt-data');
+    expect(notes).toContain('图表工艺');
+    expect(notes).toContain('禁用清单');
+    expect(notes).toContain('补充说明');
+  });
+});
 
 describe('预设调色板撞色防回归', () => {
   it('任何预设的 motion accent 不得与 surface 面色同色（面内 accent 元素会隐形）', () => {
@@ -95,5 +134,12 @@ describe('预设调色板撞色防回归', () => {
       const color = accentTextColor(t);
       expect([t.palette.accent, t.palette.ink], preset.id).toContain(color);
     }
+  });
+
+  it('rgba 半透明 surface 会先与页面底合成再判断对比度', () => {
+    expect(accentTextColor({
+      palette: { bg: '#000000', ink: '#777777', muted: '#888888', accent: '#00CC00' },
+      surface: { kind: 'panel', bg: 'rgba(255,255,255,0.92)' },
+    })).toBe('#777777');
   });
 });

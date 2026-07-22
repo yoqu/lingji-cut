@@ -11,6 +11,7 @@ import { parseStoryboard } from './motion-storyboard';
 const CARRIERS = [
   'data-hero',
   'comparison',
+  'table',
   'trend',
   'list-build',
   'process',
@@ -54,6 +55,7 @@ function pickCarrier(segment: AISegment, index: number): string {
   if (/关系|网络|组织|连接|生态|链路/.test(haystack)) return 'network';
   if (/前后|改版|之前|之后|before|after/.test(haystack)) return 'before-after';
   if (/构成|占比|组成|层级|堆叠/.test(haystack)) return 'stacked-composition';
+  if (/表格|名单|榜单|一览|对照表|排行/.test(haystack)) return 'table';
   if (/对比|相比|区别| versus |VS|vs/.test(haystack)) return 'comparison';
   if (/流程|步骤|原因|路径|阶段/.test(haystack)) return 'process';
   if (/趋势|变化|增长|下降|时间|历史|版本/.test(haystack)) return 'trend';

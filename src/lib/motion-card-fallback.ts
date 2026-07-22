@@ -9,7 +9,7 @@
 import type { MotionStoryboard, StoryboardBeat } from './motion-storyboard';
 
 /** 清洗上屏文本：去引号装饰、取首个子句、截断到卡片友好长度。 */
-function cleanScreenText(text: string, maxLen = 16): string {
+export function cleanScreenText(text: string, maxLen = 16): string {
   const cleaned = (text ?? '')
     .replace(/[「」『』“”"']/g, '')
     .replace(/\s+/g, ' ')
@@ -20,7 +20,7 @@ function cleanScreenText(text: string, maxLen = 16): string {
 }
 
 /** 从一拍文本中提取首个可展示数字（≥2 位或带小数）与其后紧跟的中文单位。 */
-function extractHeroNumber(text: string): { value: number; unit: string } | null {
+export function extractHeroNumber(text: string): { value: number; unit: string } | null {
   const m = (text ?? '').replace(/[,，]/g, '').match(/(\d{2,}(?:\.\d+)?|\d\.\d+)\s*([一-龥%]{0,2})/);
   if (!m) return null;
   const value = Number(m[1]);

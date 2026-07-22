@@ -44,6 +44,19 @@ export const SWISS_GRID: VisualStylePreset = {
   },
   motionStyleNotes:
     '一切元素吸附 16 栏隐形网格的列基线（左对齐、上对齐，禁 flex 居中堆叠），最大与最小字号比 ≥6:1；borderRadius 恒为 0，克莱因蓝整卡只出现 1 次；accent 色条 scaleX 揭示到位后做一次 2-3px overshoot 微冲。',
+  motionSpec: {
+    chartRules: '图表按 16 栏网格对齐，直角柱和细基线优先，克莱因蓝只标唯一焦点。',
+    emphasisRules: '色条或主元素到位后允许一次 2-3px 微冲，随后立即稳定。',
+    typographyRules: '标题与正文严格左对齐，字号层级至少形成 6:1 对比；标签使用 mono。',
+    banned: '禁止居中堆叠、圆角、阴影、渐变、多 accent 和松散的自由定位。',
+  },
+  contentTypeRules: {
+    'chapter-transition': {
+      preferredCarriers: ['concept', 'quote'],
+      renderingRules: '用超大左对齐章节标题和单条蓝色色条完成转场，不追加列表或说明。',
+      density: 'light',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{width:100%;height:100%;display:grid;grid-template-columns:repeat(16,1fr);grid-template-rows:1fr auto auto;gap:4%;font-family:'Inter Tight','Helvetica Neue',Arial,sans-serif;background:#FAF8F2;color:#111111;box-sizing:border-box;padding:7% 6%;align-content:end;}

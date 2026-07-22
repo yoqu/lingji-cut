@@ -23,6 +23,7 @@ import {
   Field,
   Input,
   NumberField,
+  Select,
   SettingsPageHeader,
   Tabs,
   TabsList,
@@ -61,6 +62,8 @@ import type {
 } from '../../types/ai';
 import { PromptBindingBar } from './PromptBindingBar';
 import { StyleLibraryPanel } from '../StyleLibraryPanel';
+import { StylePresetDetail } from '../StylePresetDetail';
+import { MotionSystemPreviewPanel } from './MotionSystemPreviewPanel';
 import { resolveStylePresetId } from '../../lib/card-style';
 import styles from './PromptsConfigTab.module.css';
 
@@ -72,7 +75,8 @@ type EditableScope = 'global' | 'project';
 type ActiveSelection =
   | { type: 'kind'; kind: PromptKind }
   | { type: 'user-entry'; category: PromptCategory; entryId: string }
-  | { type: 'style' };
+  | { type: 'style' }
+  | { type: 'motion-preview' };
 
 interface OverviewItem {
   kind: PromptKind;
@@ -490,6 +494,22 @@ export function PromptsConfigTab() {
     [aiSettings, refreshAISettings, showToast],
   );
 
+  /** Motion Card 出卡路径：template 确定性编译（省 token）/ agent 旧 LLM 雕刻链路 */
+  const motionCardModeValue = aiSettings?.motionCardMode === 'agent' ? 'agent' : 'template';
+  const handleMotionCardModeChange = useCallback(
+    async (next: 'template' | 'agent') => {
+      if (!aiSettings) return;
+      try {
+        await saveAISettings({ ...aiSettings, motionCardMode: next });
+        await refreshAISettings();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast(message, { title: '保存出卡模式失败', type: 'error', duration: 4000 });
+      }
+    },
+    [aiSettings, refreshAISettings, showToast],
+  );
+
   /** card.video 视频段变更：合并到同一 binding 中 */
   const handleVideoBindingChange = useCallback(
     async (next: { videoProviderId: string | null; videoModel: string | null }) => {
@@ -719,6 +739,13 @@ export function PromptsConfigTab() {
     );
   }, [templateDraft, userPromptEntries]);
 
+  const effectiveStylePresetId = scope === 'project'
+    ? resolveStylePresetId({
+        project: projectStylePresetId,
+        global: aiSettings?.defaultStylePresetId,
+      })
+    : resolveStylePresetId({ global: aiSettings?.defaultStylePresetId });
+
   return (
     <div className={styles.root}>
       <SettingsPageHeader
@@ -804,6 +831,26 @@ export function PromptsConfigTab() {
                               ? '项目'
                               : '继承'
                             : '全局'}
+                        </Badge>
+                      </span>
+                    </Button>
+                  </div>
+                )}
+
+                {/* 动效系统预览：合成条目，跟随风格 scope 实时渲染 */}
+                {group === 'project' && (
+                  <div className={styles.kindRow}>
+                    <Button
+                      type="button"
+                      variant={active.type === 'motion-preview' ? 'secondary' : 'ghost'}
+                      size="sm"
+                      className={styles.kindButton}
+                      onClick={() => setActive({ type: 'motion-preview' })}
+                    >
+                      <span>动效系统预览</span>
+                      <span className={styles.kindBadges}>
+                        <Badge variant="info" size="xs">
+                          内置
                         </Badge>
                       </span>
                     </Button>
@@ -934,20 +981,38 @@ export function PromptsConfigTab() {
               )}
 
               {active.kind === 'cards.segment' ? (
-                <Field
-                  label="段落卡片生成并发数"
-                  hint="同时并发生成多少个段落的卡片；信息图（image 卡）的图片生成服务调用嵌套在 worker 内，因此该值也决定信息图并行度。必须 ≥ 1，默认 4。云端模型（如 DeepSeek）可适当调高以提速；若频繁出现 429/限流再下调。"
-                >
-                  <NumberField
-                    value={cardConcurrencyValue}
-                    min={1}
-                    step={1}
-                    disabled={!aiSettings}
-                    onChange={(next) => {
-                      void handleCardConcurrencyChange(next);
-                    }}
-                  />
-                </Field>
+                <>
+                  <Field
+                    label="段落卡片生成并发数"
+                    hint="同时并发生成多少个段落的卡片；信息图（image 卡）的图片生成服务调用嵌套在 worker 内，因此该值也决定信息图并行度。必须 ≥ 1，默认 4。云端模型（如 DeepSeek）可适当调高以提速；若频繁出现 429/限流再下调。"
+                  >
+                    <NumberField
+                      value={cardConcurrencyValue}
+                      min={1}
+                      step={1}
+                      disabled={!aiSettings}
+                      onChange={(next) => {
+                        void handleCardConcurrencyChange(next);
+                      }}
+                    />
+                  </Field>
+                  <Field
+                    label="Motion Card 出卡模式"
+                    hint="模板编译（默认）：导演出结构化分镜后由确定性模板直接出卡，每张卡只需 1 次导演 LLM 调用，无雕刻/审查多轮循环，token 消耗最低；Agent 多轮：旧的 LLM 雕刻+审查链路，视觉自由度更高但更慢更贵。精雕（详情页针对性修改）始终走 Agent。"
+                  >
+                    <Select
+                      options={[
+                        { value: 'template', label: '模板编译（推荐，省 token）' },
+                        { value: 'agent', label: 'Agent 多轮雕刻（旧链路）' },
+                      ]}
+                      value={motionCardModeValue}
+                      disabled={!aiSettings}
+                      onChange={(e) => {
+                        void handleMotionCardModeChange(e.target.value as 'template' | 'agent');
+                      }}
+                    />
+                  </Field>
+                </>
               ) : null}
 
               {error && <Alert variant="error" description={error} />}
@@ -1249,7 +1314,7 @@ export function PromptsConfigTab() {
               <div className={styles.editorHeaderText}>
                 <CardTitle>项目统一风格</CardTitle>
                 <CardDescription>
-                  选择项目统一视觉风格；全局为默认，当前项目可覆盖。
+                  选择项目统一视觉风格；全局为默认，当前项目可覆盖，下方展示完整规格。
                 </CardDescription>
               </div>
               <Tabs
@@ -1304,8 +1369,31 @@ export function PromptsConfigTab() {
                       else void persistGlobalStyle(id);
                     }}
                   />
+                  <StylePresetDetail presetId={effectiveStylePresetId} />
                 </>
               )}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {active.type === 'motion-preview' ? (
+          <Card className={styles.editorCard}>
+            <CardHeader className={styles.editorHeader}>
+              <div className={styles.editorHeaderText}>
+                <CardTitle>动效系统预览</CardTitle>
+                <CardDescription>
+                  内置动效系统的全部载体与原语变体，按当前生效的项目统一风格实时渲染。
+                </CardDescription>
+              </div>
+            </CardHeader>
+
+            <CardContent className={styles.editorBody}>
+              <MotionSystemPreviewPanel
+                presetId={effectiveStylePresetId}
+                scope={scope}
+                onScopeChange={(next) => setScope(next)}
+                hasProject={hasProject}
+              />
             </CardContent>
           </Card>
         ) : null}

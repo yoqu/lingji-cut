@@ -58,6 +58,24 @@ export const FILM_LEAK: VisualStylePreset = {
   },
   motionStyleNotes:
     '上下各压约 12% 纯黑 letterbox 信箱黑边（固定背景层，不参与动画）；hero 用奶油色衬线 italic 电影片名字卡 + 角落 mono 时间码；整卡入场做一次性"放映机点亮"（opacity 0→1 + brightness 0.3→1，只一次不循环），底层另铺约 14% 静态胶片颗粒，禁任何冷色。',
+  motionSpec: {
+    chartRules: '图表只用奶油色和暖橙单色线条，降低网格存在感，避免产品仪表盘观感。',
+    emphasisRules: '整卡只允许一次放映机点亮；焦点以暖橙提亮或缓慢落定完成。',
+    typographyRules: 'hero 使用奶油色斜体衬线，时间、出处和单位使用角落 mono 字幕。',
+    banned: '禁止冷色、霓虹、循环漏光、现代 UI 卡片、持续颗粒位移。',
+  },
+  contentTypeRules: {
+    quote: {
+      preferredCarriers: ['quote'],
+      renderingRules: '金句按电影片名字卡处理，出处或时间码置于角落，保持一至两行。',
+      density: 'light',
+    },
+    'chapter-transition': {
+      preferredCarriers: ['quote', 'concept'],
+      renderingRules: '仅用片名式章节标题与一次放映机点亮完成过场。',
+      density: 'light',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;align-content:end;gap:3%;font-family:'Noto Serif SC','Georgia',serif;background:#1A0F0A;color:#F3EAD6;box-sizing:border-box;padding:12% 7%;overflow:hidden;}

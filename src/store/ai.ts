@@ -68,6 +68,8 @@ export interface AutoWorkflowParams {
   voiceId: string;
   /** 旧项目缺省为 auto。director 会在时间轴草稿生成后停下供人工确认。 */
   productionMode?: 'auto' | 'director';
+  /** 缺省为 true；false 时导演方案关闭背景音乐，不生成 BGM。 */
+  bgmEnabled?: boolean;
 }
 
 export interface WorkflowState {
@@ -221,6 +223,7 @@ export function buildDefaultAISettings(): AISettings {
     defaultVideoModel: null,
     promptBindings: {},
     cardGenerationConcurrency: normalizeCardGenerationConcurrency(undefined),
+    motionCardMode: 'template',
     defaultStylePresetId: DEFAULT_STYLE_PRESET_ID,
   };
 }
@@ -1214,6 +1217,7 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
     defaultVideoModel: raw.defaultVideoModel ?? null,
     promptBindings: raw.promptBindings ?? {},
     cardGenerationConcurrency: normalizeCardGenerationConcurrency(raw.cardGenerationConcurrency),
+    motionCardMode: raw.motionCardMode === 'agent' ? 'agent' : 'template',
     defaultStylePresetId:
       typeof raw.defaultStylePresetId === 'string' && raw.defaultStylePresetId.trim()
         ? raw.defaultStylePresetId

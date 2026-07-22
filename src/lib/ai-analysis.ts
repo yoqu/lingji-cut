@@ -38,7 +38,13 @@ import {
   renderUserPromptWithLock,
   type PromptTemplate,
 } from './prompts';
-import { getMotionStyleNotes, getMotionTokensBlock, getStyleFacetBlock, resolveStylePresetId } from './card-style';
+import {
+  getContentTypeRuleBlock,
+  getMotionStyleNotes,
+  getMotionTokensBlock,
+  getStyleFacetBlock,
+  resolveStylePresetId,
+} from './card-style';
 import { MOTION_KIT_API_DOC } from '../remotion/motion-kit';
 import { compileMotionSource } from './motion-compiler';
 import {
@@ -125,6 +131,10 @@ export interface MotionCardAgentContext {
   cueCount?: number;
   /** 风格 tokens JSON 块；供编排器的确定性兜底渲染直接复用。 */
   presetMotionTokens?: string;
+  /** 审查端只读的结构化风格细则（含禁用清单）。 */
+  reviewStyleBlock?: string;
+  /** 审查端只读的本段内容类型生产规则。 */
+  reviewContentTypeBlock?: string;
   /** 用户已有的动画指导草案；导演须把它当作创作约束。 */
   animationDirectionDraft?: string;
   /** 为 true 时，合法 animationDirectionDraft 可直接复用并跳过导演；默认走导演重出。 */
@@ -135,6 +145,11 @@ export interface MotionCardAgentContext {
   motionBible?: string;
   /** 自动模式只接受安全布局；导演模式在质量错误未解决时阻断工作流。 */
   qualityMode?: 'auto' | 'director';
+  /**
+   * 出卡路径：template = storyboard 确定性模板编译（默认，不经 LLM 雕刻/审查）；
+   * agent = LLM 雕刻 + 修复 + 审查。精雕（existingTsx 存在）时强制走 agent。
+   */
+  motionCardMode?: 'template' | 'agent';
   /** 真实字幕窗口与时长；编排器据此构造 TimingPlan 和逐拍探针帧。 */
   timingInput?: {
     srt: SrtEntry[];
@@ -1144,8 +1159,9 @@ export async function generateMotionBible(
     const binding = maybeResolveBinding('motion.bible', settings, projectBindings);
     const payload = await requestStructuredData(
       settings,
+      '你是「灵机剪影」的 Motion Bible 导演，只输出合法 JSON。',
+      // 渲染结果必须进 userMessage：部分 provider（如 Kimi Coding）拒绝空 user 消息。
       buildMotionBiblePrompt(planning, motionBibleTemplate, directorTemplate),
-      '',
       binding,
       { label: 'motion.bible', telemetry },
     );
@@ -1262,6 +1278,7 @@ export function buildSegmentCardPrompt(
     motionKitApi: MOTION_KIT_API_DOC,
     presetMotionTokens: getMotionTokensBlock(stylePresetId),
     presetStyleNotes: getMotionStyleNotes(stylePresetId),
+    contentTypeRule: getContentTypeRuleBlock(stylePresetId, segment.semanticType),
     styleSystemBlock: getStyleFacetBlock(stylePresetId, 'motion'),
     // 旧版自定义模板可能仍在使用 {{fullTranscript}}；这里给它注入与 programContext
     // 同值的浓缩上下文，避免破坏存量模板，同时不再发送整篇全文。
@@ -1281,10 +1298,20 @@ export function buildAnimationDirectionPrompt(
     cardPrompt?: string;
     segmentCues?: string;
     motionBible?: MotionBible;
+    stylePresetId?: string;
   },
   template?: PromptTemplate,
 ): string {
-  const { segment, globalPrompt, programSummary, keywords = [], cardPrompt, segmentCues, motionBible } = params;
+  const {
+    segment,
+    globalPrompt,
+    programSummary,
+    keywords = [],
+    cardPrompt,
+    segmentCues,
+    motionBible,
+    stylePresetId,
+  } = params;
   const tpl = template ?? getBuiltinPromptTemplate('cards.animation');
   return renderUserPromptWithLock('cards.animation', tpl, {
     globalPrompt: truncatePromptValue(globalPrompt ?? '', 240) || '无',
@@ -1298,6 +1325,7 @@ export function buildAnimationDirectionPrompt(
     segmentTranscriptExcerpt: truncatePromptValue(segment.transcriptExcerpt ?? '', 260) || '无',
     segmentCues: segmentCues?.trim() ? segmentCues : '  （无逐句字幕节拍可用）',
     cardPrompt: truncatePromptValue(cardPrompt ?? '', 240) || '无',
+    contentTypeRule: getContentTypeRuleBlock(stylePresetId, segment.semanticType),
     motionBible: buildMotionBibleDirectiveBlock(motionBible, segment.id),
   });
 }
@@ -1316,10 +1344,18 @@ export async function generateAnimationDirection(
     cardPrompt?: string;
     animationTemplate?: PromptTemplate;
     motionBible?: MotionBible;
+    stylePresetId?: string;
     projectBindings?: PromptBindingMap | null;
   } = {},
 ): Promise<string> {
-  const { generateText: requestText = generateText, cardPrompt, animationTemplate, motionBible, projectBindings } = options;
+  const {
+    generateText: requestText = generateText,
+    cardPrompt,
+    animationTemplate,
+    motionBible,
+    stylePresetId,
+    projectBindings,
+  } = options;
   const binding = maybeResolveBinding('cards.animation', settings, projectBindings);
   const userMessage = buildAnimationDirectionPrompt(
     {
@@ -1330,6 +1366,7 @@ export async function generateAnimationDirection(
       cardPrompt,
       segmentCues: buildSegmentCuesBlock(entries, segment.startMs, segment.endMs),
       motionBible,
+      stylePresetId,
     },
     animationTemplate,
   );
@@ -1654,6 +1691,7 @@ export async function generateCardForSegment(
             cardPrompt,
             segmentCues,
             motionBible,
+            stylePresetId,
           },
           animationTemplate,
         ),
@@ -1679,11 +1717,15 @@ export async function generateCardForSegment(
       segmentTranscript,
       cueCount: entries.filter((e) => e.startMs >= segment.startMs && e.startMs < segment.endMs).length,
       presetMotionTokens: getMotionTokensBlock(stylePresetId),
+      reviewStyleBlock: getMotionStyleNotes(stylePresetId),
+      reviewContentTypeBlock: getContentTypeRuleBlock(stylePresetId, segment.semanticType),
       animationDirectionDraft: animationDirection?.trim() || undefined,
       reuseStoryboardDraft,
       existingTsx: refineExistingMotion ? currentCard?.motionCard?.tsx || undefined : undefined,
       motionBible: buildMotionBibleDirectiveBlock(motionBible, segment.id),
       qualityMode,
+      // 精雕（existingTsx）由编排器内部强制 agent；此处只透传用户设置。
+      motionCardMode: settings.motionCardMode ?? 'template',
       timingInput: {
         srt: entries,
         startMs: segment.startMs,
@@ -2307,6 +2349,7 @@ export async function generateSingleCardFromSubtitles(
     startMs: draft.startMs,
     endMs: draft.endMs,
     transcriptExcerpt: trimmedText,
+    semanticType: 'narration',
   };
 
   const card = await generateCardForSegment(

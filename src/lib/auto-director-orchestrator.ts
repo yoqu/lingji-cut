@@ -21,6 +21,8 @@ export interface AutoDirectorOrchestratorOptions {
   taskId: string;
   mode: 'auto' | 'director';
   startAt: 'director' | 'production';
+  /** 缺省为 true；false 时新生成的导演方案关闭背景音乐。 */
+  bgmEnabled?: boolean;
   telemetryRunId?: string;
   onProgress?: (progress: AutoDirectorProgress) => void;
   shouldCancel?: () => boolean;
@@ -64,6 +66,7 @@ async function createPlan(
       projectBindings: useAIStore.getState().projectBindings,
       telemetryRunId: options.telemetryRunId,
       mode: options.mode,
+      bgmEnabled: options.bgmEnabled,
     });
   } finally {
     off();

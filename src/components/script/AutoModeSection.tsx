@@ -180,6 +180,14 @@ export function AutoModeSection({
               onChange={(productionMode) => update({ productionMode })}
             />
           </Field>
+          <div style={headerStyle}>
+            <Checkbox
+              checked={params.bgmEnabled !== false}
+              onChange={(bgmEnabled) => update({ bgmEnabled })}
+              aria-label="生成背景音乐"
+            />
+            <span style={{ fontSize: 13, color: 'var(--color-label-primary)' }}>生成背景音乐</span>
+          </div>
           <div
             style={{
               display: 'grid',

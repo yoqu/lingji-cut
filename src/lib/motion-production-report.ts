@@ -27,6 +27,8 @@ export interface BuildMotionCardProductionReportInput {
   reviewIssues?: RawProductionIssue[];
   assetIssues?: RawProductionIssue[];
   fallbackUsed?: boolean;
+  /** true = storyboard 确定性模板编译产物（template 模式主路径）。 */
+  compiled?: boolean;
   fixRounds?: number;
   reviewRounds?: number;
   renderOk?: boolean;
@@ -112,6 +114,7 @@ export function buildMotionCardProductionReport(
     reviewIssues,
     assetIssues,
     fallbackUsed,
+    ...(input.compiled ? { compiled: true } : {}),
     fixRounds: Math.max(0, Math.round(input.fixRounds ?? 0)),
     reviewRounds: Math.max(0, Math.round(input.reviewRounds ?? 0)),
     renderOk,

@@ -42,6 +42,7 @@ import {
 } from '../../src/lib/motion-storyboard';
 import { lintMotionCardTsx, formatLintIssues } from '../../src/lib/motion-card-lint';
 import { buildFallbackCardTsx } from '../../src/lib/motion-card-fallback';
+import { compileMotionCardFromStoryboard } from '../../src/lib/motion-card-templates';
 import { buildMotionCardProductionReport } from '../../src/lib/motion-production-report';
 import { inspectResolvedCardAssets } from '../../src/lib/asset-resolution';
 import { motionAssetSignature } from '../../src/lib/motion-asset-layer';
@@ -382,7 +383,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             `===== 现有组件源码（精雕模式：先诊断其设计问题——载体选错 / 状态演进缺失 / 焦点不明 / 节拍脱节，分镜须针对性修正）=====\n\`\`\`tsx\n${ctx.existingTsx}\n\`\`\``,
           );
         }
-        const FIELD_EXAMPLE = `{"claim":"...","carrier":"data-hero","layout":"title-hero","scene":"...","elements":[{"id":"title","role":"support","slot":"header","content":"考研报名","heightRatio":0.12},{"id":"hero","role":"focus","slot":"main","content":"28842人","heightRatio":0.42}],"capacity":{"maxVisible":2,"maxHeightRatio":0.62},"focus":{"beat":1,"emphasis":"countup-settle"},"beats":[{"cue":null,"kind":"build","adds":"标题「考研报名」","motion":"软落入场","lifecycle":{"enter":["title"]}},{"cue":2,"kind":"build","adds":"数字 28842","changes":"标题收为辅助，数字成为焦点","motion":"计数到 28842","lifecycle":{"enter":["hero"],"collapse":["title"]}}]}`;
+        const FIELD_EXAMPLE = `{"claim":"...","carrier":"data-hero","layout":"title-hero","scene":"...","data":{"value":28842,"unit":"人","label":"考研报名"},"elements":[{"id":"title","role":"support","slot":"header","content":"考研报名","heightRatio":0.12},{"id":"hero","role":"focus","slot":"main","content":"28842人","heightRatio":0.42}],"capacity":{"maxVisible":2,"maxHeightRatio":0.62},"focus":{"beat":1,"emphasis":"countup-settle"},"beats":[{"cue":null,"kind":"build","adds":"标题「考研报名」","motion":"软落入场","lifecycle":{"enter":["title"]}},{"cue":2,"kind":"build","adds":"数字 28842","changes":"标题收为辅助，数字成为焦点","motion":"计数到 28842","lifecycle":{"enter":["hero"],"collapse":["title"]}}]}`;
         let reply = (await promptWithRetry(director, parts.join('\n\n'))).trim();
         // 解析失败与语义失败分开计预算：解析重试只需"重新输出 JSON"，
         // 不该消耗针对 cue/数字等设计错误的语义回喂轮（弱导演常先散文/截断再给对 JSON）。
@@ -544,28 +545,12 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         checkRenderedLayout: true,
       };
 
-      // ── 2. 雕刻 ────────────────────────────────────────────────────────────────
-      setPhase('雕刻', 'sculpt');
-      const sculptorRole = await loadRole('card-sculptor');
-      sculptor = await createSession({
-        systemPrompt: sculptorRole.systemPrompt,
-        tools: ['read', 'write', 'edit'],
-        cwd: workDir,
-        writeWithinDir: workDir,
-        signal,
-        model: sculptorModel,
-        ...roleStream('sculptor', sculptorModel),
-      });
-      const sculptParts = [
-        ctx.buildCardPrompt(direction, resolvedAssetBindings),
-        `===== 本段口播逐字稿（内容忠实的唯一来源）=====\n${ctx.segmentTranscript}`,
-        ctx.existingTsx
-          ? `===== 执行 =====\n工作目录已有 motionCard.tsx（现有实现）。按任务书与分镜用 edit 工具针对性改造它；改造完成即停止。`
-          : `===== 执行 =====\n用 write 工具把完整组件写入 ./motionCard.tsx；写完即停止。`,
-      ];
-      await promptWithRetry(sculptor, sculptParts.join('\n\n'));
+      // ── 2. 出卡路径分支 ─────────────────────────────────────────────────────────
+      // template（默认）：storyboard 确定性编译 → 机械质检一次，不经 LLM 雕刻/审查；
+      // agent：LLM 雕刻 → 修复循环 → 审查（精雕 existingTsx 或显式 agent 模式）。
+      const templateMode = (ctx.motionCardMode ?? 'template') === 'template' && !ctx.existingTsx;
 
-      // ── 3/4. 验证 + 审查循环 ──────────────────────────────────────────────────
+      // 两条路径共享的状态。
       const readTsx = async (): Promise<string> => {
         try {
           return (await fs.readFile(tsxPath, 'utf-8')).trim();
@@ -579,6 +564,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
       let reviewIter = 0;
       let rescueTried = false;
       let fallbackUsed = false;
+      let compiledTemplate = false;
       let latestLintIssues: ReturnType<typeof lintMotionCardTsx>['issues'] = [];
       let latestLayoutIssues: Array<{
         severity: 'error' | 'warning';
@@ -589,7 +575,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
       }> = [];
       let finalReviewIssues: ReviewVerdict['issues'] = [];
 
-      // 终极兜底：LLM 雕刻彻底失败时，由分镜确定性编译一张纯原语简版卡（不经 LLM）。
+      // 终极兜底：LLM 雕刻或模板编译彻底失败时，由分镜确定性编译一张纯原语简版卡（不经 LLM）。
       const tryDeterministicFallback = async (lastProblem: string): Promise<boolean> => {
         try {
           const storyboard = parseStoryboard(direction);
@@ -614,6 +600,178 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         }
       };
 
+      let contactSheetCacheKey: string | undefined;
+      let contactSheetPath: string | undefined;
+      let contactSheetCached: boolean | undefined;
+      let contactSheetError: string | undefined;
+      let preparedContactSheetKey: string | undefined;
+      let reviewUnavailableReason: string | undefined;
+      const contactSheetAssets = await prepareContactSheetAssets(resolvedAssetBindings, opts.projectPath);
+      const assetIssues = [
+        ...inspectResolvedCardAssets(assetResolution),
+        ...contactSheetAssets.issues,
+      ];
+
+      const updateContactSheet = async (): Promise<void> => {
+        const nextKey = contactSheetCacheDir
+          ? motionCardContactSheetCacheKey({
+              tsx,
+              frames: framesChecked,
+              storyboard: direction,
+              assetSignature: motionAssetSignature(contactSheetAssets.bindings),
+            })
+          : undefined;
+        if (preparedContactSheetKey === nextKey) return;
+        preparedContactSheetKey = nextKey;
+        contactSheetCacheKey = nextKey;
+        contactSheetPath = undefined;
+        contactSheetCached = undefined;
+        contactSheetError = undefined;
+        if (!contactSheetCacheDir || !nextKey) return;
+        try {
+          const sheet = await renderMotionCardContactSheet(tsx, {
+            frames: framesChecked,
+            cacheDir: contactSheetCacheDir,
+            cacheKey: nextKey,
+            cues: timingPlan?.cues,
+            timingPlan,
+            durationInFrames,
+            assetBindings: contactSheetAssets.bindings,
+          });
+          contactSheetPath = sheet.cachePath;
+          contactSheetCached = sheet.cached;
+        } catch (err) {
+          contactSheetError = err instanceof Error ? err.message : String(err);
+          milestone(`关键帧 contact sheet 生成失败：${contactSheetError}`);
+        }
+      };
+
+      const visualReviewUnavailableReason = (): string => {
+        if (contactSheetError) return `关键帧 contact sheet 生成失败：${contactSheetError}`;
+        if (contactSheetPath) {
+          return '关键帧 contact sheet 已生成，但当前 pi headless 审查会话未提供可靠的图片多模态输入；本轮按 storyboard + TSX 文本审查降级。';
+        }
+        return '未配置关键帧 contact sheet 缓存目录；本轮按 storyboard + TSX 文本审查降级。';
+      };
+
+      const finish = async (): Promise<MotionCardAgentResult> => {
+        feedEmit?.({
+          role: 'orchestrator',
+          kind: 'done',
+          text: fallbackUsed ? '完成（兜底出卡）' : compiledTemplate ? '完成（模板编译）' : '生成完成',
+        });
+        await updateContactSheet();
+        return {
+          tsx,
+          animationDirection: direction,
+          assetBindings: resolvedAssetBindings,
+          productionReport: buildMotionCardProductionReport({
+            fallbackUsed,
+            compiled: compiledTemplate,
+            fixRounds: fixIter,
+            reviewRounds: reviewIter,
+            framesChecked,
+            lintIssues: latestLintIssues,
+            layoutIssues: latestLayoutIssues,
+            reviewIssues: finalReviewIssues,
+            assetIssues,
+            renderOk: true,
+            visualReviewAvailable: false,
+            unavailableReason:
+              reviewUnavailableReason ??
+              (compiledTemplate && !fallbackUsed
+                ? '模板编译路径：设计约束由分镜机器校验与模板确定性保证，未做 LLM 审查。'
+                : visualReviewUnavailableReason()),
+            contactSheetPath,
+            contactSheetCacheKey,
+            contactSheetCached,
+            contactSheetError,
+          }),
+        };
+      };
+
+      if (templateMode) {
+        // ── 模板编译主路径：storyboard → 确定性 TSX，不创建雕刻/审查会话 ──
+        setPhase('模板编译', 'sculpt');
+        const compileStartedAt = Date.now();
+        ctx.telemetry?.emit('card.compile.start', { segmentId: ctx.segmentId, carrier: storyboard?.carrier });
+        let compileProblem: string | null = null;
+        if (!storyboard) {
+          compileProblem = '分镜解析失败，无法模板编译';
+        } else {
+          try {
+            tsx = compileMotionCardFromStoryboard(storyboard, ctx.presetMotionTokens ?? '{}');
+            const lint = lintMotionCardTsx(tsx, { requireSafeLayout: ctx.qualityMode !== 'director' });
+            latestLintIssues = lint.issues;
+            if (!lint.ok) {
+              compileProblem = `模板产物静态 lint 未通过：\n${formatLintIssues(lint.issues.filter((i) => i.severity === 'error'))}`;
+            } else {
+              setPhase('验证', 'mechqa');
+              try {
+                const validation = await ctx.validate?.(tsx, validationInput);
+                latestLayoutIssues = validation?.issues ?? [];
+                const layoutErrors = latestLayoutIssues.filter((issue) => issue.severity === 'error');
+                if (layoutErrors.length > 0) {
+                  compileProblem = `布局探针未通过：\n${layoutErrors.map((issue) => `[${issue.code}] ${issue.message}`).join('\n')}`;
+                }
+              } catch (err) {
+                const validationIssues = validationIssuesFromError(err);
+                if (validationIssues) latestLayoutIssues = validationIssues;
+                compileProblem = `渲染校验失败：${err instanceof Error ? err.message : String(err)}`;
+              }
+            }
+          } catch (err) {
+            compileProblem = `模板编译异常：${err instanceof Error ? err.message : String(err)}`;
+          }
+        }
+        if (compileProblem) {
+          ctx.telemetry?.emit('card.compile.end', {
+            segmentId: ctx.segmentId,
+            carrier: storyboard?.carrier,
+            durationMs: Date.now() - compileStartedAt,
+            ok: false,
+            error: compileProblem.slice(0, 300),
+          });
+          milestone(`模板编译未通过（${storyboard?.carrier ?? 'unknown'}），切换确定性兜底`);
+          setPhase('兜底出卡', 'sculpt');
+          if (!(await tryDeterministicFallback(compileProblem))) {
+            throw new Error(`Motion 卡模板编译失败且确定性兜底未通过校验：${compileProblem}`);
+          }
+        } else {
+          compiledTemplate = true;
+          ctx.telemetry?.emit('card.compile.end', {
+            segmentId: ctx.segmentId,
+            carrier: storyboard?.carrier,
+            durationMs: Date.now() - compileStartedAt,
+            ok: true,
+          });
+          milestone(`已由分镜确定性编译（${storyboard?.carrier}），跳过雕刻与审查`);
+        }
+        return await finish();
+      }
+
+      // ── agent 路径：雕刻 → 机械质检修复 → 审查 ──────────────────────────────────
+      setPhase('雕刻', 'sculpt');
+      const sculptorRole = await loadRole('card-sculptor');
+      sculptor = await createSession({
+        systemPrompt: sculptorRole.systemPrompt,
+        tools: ['read', 'write', 'edit'],
+        cwd: workDir,
+        writeWithinDir: workDir,
+        signal,
+        model: sculptorModel,
+        ...roleStream('sculptor', sculptorModel),
+      });
+      const sculptParts = [
+        ctx.buildCardPrompt(direction, resolvedAssetBindings),
+        `===== 本段口播逐字稿（内容忠实的唯一来源）=====\n${ctx.segmentTranscript}`,
+        ctx.existingTsx
+          ? `===== 执行 =====\n工作目录已有 motionCard.tsx（现有实现）。按任务书与分镜用 edit 工具针对性改造它；改造完成即停止。`
+          : `===== 执行 =====\n用 write 工具把完整组件写入 ./motionCard.tsx；写完即停止。`,
+      ];
+      await promptWithRetry(sculptor, sculptParts.join('\n\n'));
+
+      // ── 3/4. 验证 + 审查循环（agent 路径）──────────────────────────────────────
       // 单轮"取件+机械质检"：lint error / 结构缺失 / validate 抛错时回喂雕刻修复；耗尽即失败。
       const validateWithFixes = async (): Promise<void> => {
         for (;;) {
@@ -680,60 +838,6 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
 
       await validateWithFixes();
 
-      let contactSheetCacheKey: string | undefined;
-      let contactSheetPath: string | undefined;
-      let contactSheetCached: boolean | undefined;
-      let contactSheetError: string | undefined;
-      let preparedContactSheetKey: string | undefined;
-      let reviewUnavailableReason: string | undefined;
-      const contactSheetAssets = await prepareContactSheetAssets(resolvedAssetBindings, opts.projectPath);
-      const assetIssues = [
-        ...inspectResolvedCardAssets(assetResolution),
-        ...contactSheetAssets.issues,
-      ];
-
-      const updateContactSheet = async (): Promise<void> => {
-        const nextKey = contactSheetCacheDir
-          ? motionCardContactSheetCacheKey({
-              tsx,
-              frames: framesChecked,
-              storyboard: direction,
-              assetSignature: motionAssetSignature(contactSheetAssets.bindings),
-            })
-          : undefined;
-        if (preparedContactSheetKey === nextKey) return;
-        preparedContactSheetKey = nextKey;
-        contactSheetCacheKey = nextKey;
-        contactSheetPath = undefined;
-        contactSheetCached = undefined;
-        contactSheetError = undefined;
-        if (!contactSheetCacheDir || !nextKey) return;
-        try {
-          const sheet = await renderMotionCardContactSheet(tsx, {
-            frames: framesChecked,
-            cacheDir: contactSheetCacheDir,
-            cacheKey: nextKey,
-            cues: timingPlan?.cues,
-            timingPlan,
-            durationInFrames,
-            assetBindings: contactSheetAssets.bindings,
-          });
-          contactSheetPath = sheet.cachePath;
-          contactSheetCached = sheet.cached;
-        } catch (err) {
-          contactSheetError = err instanceof Error ? err.message : String(err);
-          milestone(`关键帧 contact sheet 生成失败：${contactSheetError}`);
-        }
-      };
-
-      const visualReviewUnavailableReason = (): string => {
-        if (contactSheetError) return `关键帧 contact sheet 生成失败：${contactSheetError}`;
-        if (contactSheetPath) {
-          return '关键帧 contact sheet 已生成，但当前 pi headless 审查会话未提供可靠的图片多模态输入；本轮按 storyboard + TSX 文本审查降级。';
-        }
-        return '未配置关键帧 contact sheet 缓存目录；本轮按 storyboard + TSX 文本审查降级。';
-      };
-
       const buildVisualEvidencePrompt = async (): Promise<string> => {
         await updateContactSheet();
         return [
@@ -768,6 +872,12 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
               [
                 `===== 导演的 JSON 分镜（storyboard，设计蓝图）=====\n${direction}`,
                 ctx.motionBible ? ctx.motionBible : `Motion Bible：无（按单卡分镜独立审查）。`,
+                ctx.reviewStyleBlock
+                  ? `===== 风格生产细则（偏差记 style-fidelity warn）=====\n${ctx.reviewStyleBlock}`
+                  : `风格生产细则：无。`,
+                ctx.reviewContentTypeBlock
+                  ? `===== 内容类型生产规则（偏差记 carrier-fidelity/style-fidelity warn）=====\n${ctx.reviewContentTypeBlock}`
+                  : `内容类型生产规则：无。`,
                 `===== 机械校验结论 =====\n已通过（静态 lint + 编译 + 冒烟渲染 + 布局探针含字幕安全区）；机械规则不必复查，只判设计兑现度。`,
                 visualEvidencePrompt,
                 `===== motionCard.tsx =====\n\`\`\`tsx\n${tsx}\n\`\`\``,
@@ -813,34 +923,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         await validateWithFixes();
       }
 
-      feedEmit?.({
-        role: 'orchestrator',
-        kind: 'done',
-        text: fallbackUsed ? '完成（兜底出卡）' : '生成完成',
-      });
-      await updateContactSheet();
-      return {
-        tsx,
-        animationDirection: direction,
-        assetBindings: resolvedAssetBindings,
-        productionReport: buildMotionCardProductionReport({
-          fallbackUsed,
-          fixRounds: fixIter,
-          reviewRounds: reviewIter,
-          framesChecked,
-          lintIssues: latestLintIssues,
-          layoutIssues: latestLayoutIssues,
-          reviewIssues: finalReviewIssues,
-          assetIssues,
-          renderOk: true,
-          visualReviewAvailable: false,
-          unavailableReason: reviewUnavailableReason ?? visualReviewUnavailableReason(),
-          contactSheetPath,
-          contactSheetCacheKey,
-          contactSheetCached,
-          contactSheetError,
-        }),
-      };
+      return await finish();
     } catch (err) {
       feedEmit?.({
         role: 'orchestrator',

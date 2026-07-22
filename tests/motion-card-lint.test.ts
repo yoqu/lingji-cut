@@ -34,6 +34,19 @@ export default function Card({ cues = [] }) {
       .toContain('too-many-main-primitives');
   });
 
+  it('任意两个新主原语同卡触发 too-many-main-primitives', () => {
+    const source = `import { CardStage, SafeLayout, MotionSlot, useBeats, RankList, ConceptCard } from '@lingji/motion-kit';
+const TOKENS = { palette: { bg: '#111', ink: '#fff', muted: '#999', accent: '#08f' } };
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 1]);
+  return <CardStage tokens={TOKENS}><SafeLayout variant="title-hero">
+    <MotionSlot name="main"><RankList items={[{label:'A'}]} beat={beats[0]} /><ConceptCard term="B" definition="C" beat={beats[1]} /></MotionSlot>
+  </SafeLayout></CardStage>;
+}`;
+    expect(lintMotionCardTsx(source, { requireSafeLayout: true }).issues.map((issue) => issue.code))
+      .toContain('too-many-main-primitives');
+  });
+
   it('空源码 / 缺 export default 报错', () => {
     expect(lintMotionCardTsx('').ok).toBe(false);
     const r = lintMotionCardTsx('function Card() { return null; }');

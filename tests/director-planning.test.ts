@@ -40,8 +40,14 @@ describe('createDirectorPlan', () => {
       globalPrompt: '保持克制',
       segments: [{ id: 'seg-1', carrier: 'process', intensity: 2, purpose: 'explain' }],
       coverDirection: { prompt: '知识视频封面' },
+      audioDirection: { bgmEnabled: true },
       createdAt: 100,
     });
+
+    const noBgm = await createDirectorPlan(entries, settings, {
+      planSegments, generateBible, bgmEnabled: false, now: 100,
+    });
+    expect(noBgm.audioDirection.bgmEnabled).toBe(false);
   });
 });
 

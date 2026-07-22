@@ -19,6 +19,8 @@ export interface CreateDirectorPlanOptions {
   revision?: number;
   globalPrompt?: string;
   stylePresetId?: string;
+  /** 缺省为 true；false 时方案关闭背景音乐。 */
+  bgmEnabled?: boolean;
   planningTemplate?: PromptTemplate;
   directorTemplate?: PromptTemplate;
   motionBibleTemplate?: PromptTemplate;
@@ -49,11 +51,15 @@ function segmentPlan(segment: AISegmentAnalysis, bible: MotionBible): DirectorSe
   };
 }
 
-function audioDirection(planning: SegmentPlanningResult, bible: MotionBible): DirectorPlan['audioDirection'] {
+function audioDirection(
+  planning: SegmentPlanningResult,
+  bible: MotionBible,
+  bgmEnabled: boolean,
+): DirectorPlan['audioDirection'] {
   const high = bible.rhythm.heavySegments.length;
   const energy: 1 | 2 | 3 = high > Math.max(2, planning.segments.length / 3) ? 3 : high === 0 ? 1 : 2;
   return {
-    bgmEnabled: true,
+    bgmEnabled,
     soundEffectsEnabled: true,
     bgmStyle: `克制、现代、为连续口播留出中频空间；围绕${planning.keywords.slice(0, 3).join('、') || '节目主题'}建立轻量氛围`,
     energy,
@@ -103,7 +109,7 @@ export async function createDirectorPlan(
       prompt: planning.coverPrompts[0] ?? '',
       composition: '16:9 横版，主体突出，标题避开主体并保持安全区',
     },
-    audioDirection: audioDirection(planning, bible),
+    audioDirection: audioDirection(planning, bible, options.bgmEnabled !== false),
     warnings: (bible.warnings ?? []).map((warning) => warning.message),
     createdAt: now,
     updatedAt: now,

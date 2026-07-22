@@ -64,6 +64,7 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 | `production.resume` | 从持久化输出状态恢复制作 | `taskId`, `mode` |
 | `planning.done.received` | renderer 收到 `analyze-planning-done` 事件，封面轨道启动 | `coverPrompts`, `segments` |
 | `card.start` / `card.end` | 单段卡片生成 | `segmentIndex`, `visualType`, `durationMs`, `ok` |
+| `card.compile.start` / `card.compile.end` | motion 卡 template 模式确定性编译（storyboard → TSX，不经 LLM） | `segmentId`, `carrier`, `durationMs`, `ok`, `error?` |
 | `card.image.start` / `card.image.end` | image 卡片调图像 provider 物化资产 | `segmentIndex`, `durationMs` |
 | `highlight.batch.start` / `highlight.batch.end` | 字幕高亮单 batch | `batchIndex`, `batchTotal`, `durationMs` |
 | `llm.start` / `llm.firstChunk` / `llm.end` | 每次结构化 / 文本 LLM 调用 | `label`, `attempt`, `thinking`, `latencyMs`, `durationMs`, `outputChars`, `retry`, `willRetry`, `error` |
@@ -116,6 +117,7 @@ TTS 之后先单独执行 `director.plan`。导演模式停在 `checkpoint.waiti
 - `src/lib/telemetry/auto-run.ts` — `createAutoRunTelemetry(runId)` 包装 + `TelemetryHook` 类型，被 lib 层共用
 - `src/lib/llm/index.ts` — `generateStructuredData` 接 `telemetry`，emits `llm.start / firstChunk / end`
 - `src/lib/ai-analysis.ts` — `analyzeSrt` 接 `telemetry` 与 `onPlanningDone`；emits `stage.start/end{stage:"analyze.planning"|"analyze.cards"}`、`card.start/end`、`card.image.start/end`
+- `electron/pipeline/motion-agent-run.ts` — motion 卡编排器；template 模式（默认）emits `card.compile.start/end`（确定性编译，不经 LLM），agent 模式经 `emit()` emits `llm.end{label:"<seg>:director|storyboard|validate|review|fallback"}`；`AISettings.motionCardMode` 切换两条路径
 - `src/lib/subtitle-highlight-runner.ts` — `concurrency`、`telemetry`；emits `stage.*` + `highlight.batch.*`
 - `src/hooks/useAIVideoWorkflow.ts` — 写稿 / TTS 后进入导演编排器，维护两个检查点与恢复入口
 - `src/lib/director-production-client.ts` — 批准后四轨并行与 revision/task 隔离
@@ -128,6 +130,7 @@ TTS 之后先单独执行 `director.plan`。导演模式停在 `checkpoint.waiti
 ## 性能调优默认值（2026-05-25 改）
 
 - `cardGenerationConcurrency`：默认 2，目标值 4-6（在 `src/store/ai.ts` / `src/types/ai.ts`）
+- `motionCardMode`：默认 `'template'`（storyboard → `src/lib/motion-card-templates.ts` 确定性编译，单卡仅 1 次导演 LLM 调用）；`'agent'` 为旧 LLM 雕刻+审查链路（精雕强制 agent）。分镜可选 `data` 字段由 `validateStoryboardData` 机器校验（`src/lib/motion-storyboard.ts`）
 - `subtitle-highlight-runner.concurrency`：默认 3，workflow 内传入 4
 - `STRUCTURED_IDLE_TIMEOUT_MS` / `STRUCTURED_THINKING_IDLE_TIMEOUT_MS` / `STRUCTURED_HARD_TIMEOUT_MS` 在 `src/lib/llm/index.ts`
 - `STRUCTURED_MAX_RETRIES = 1`（首次 JSON 解析失败会再跑一次完整请求；从日志 `llm.end{retry:true}` 可观察到）

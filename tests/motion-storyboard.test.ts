@@ -4,6 +4,7 @@ import {
   storyboardParseHint,
   validateStoryboard,
   formatStoryboardIssues,
+  STORYBOARD_CARRIERS,
   type MotionStoryboard,
 } from '../src/lib/motion-storyboard';
 
@@ -176,6 +177,12 @@ describe('validateStoryboard', () => {
       const v = validateStoryboard({ ...VALID, carrier }, CTX);
       expect(v.ok).toBe(true);
     }
+  });
+
+  it('table 是合法 carrier（数据表载体）', () => {
+    const v = validateStoryboard({ ...VALID, carrier: 'table' }, CTX);
+    expect(v.ok).toBe(true);
+    expect(STORYBOARD_CARRIERS).toContain('table');
   });
 
   it('非法 role 只警告，便于旧分镜或模型小错降级', () => {

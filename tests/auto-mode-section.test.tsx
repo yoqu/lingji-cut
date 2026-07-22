@@ -116,17 +116,30 @@ describe('AutoModeSection', () => {
     expect(html).toMatch(/aria-pressed="true"[^>]*>一键成片/u);
   });
 
-  it("mode='always' 时不渲染 checkbox，字段始终展开", () => {
+  it("mode='always' 时不渲染启用勾选框，字段始终展开", () => {
     const html = renderToStaticMarkup(
       <AutoModeSection
         {...makeBaseProps({ mode: 'always', enabled: false })}
       />,
     );
-    // always 模式不再渲染 Checkbox（也就没有隐藏 input type=checkbox）
-    expect(html).not.toContain('type="checkbox"');
+    expect(html).not.toContain('启用自动剪辑');
     // 字段区始终展开
     expect(html).toContain('不指定角色');
     expect(html).toContain('少女音');
+  });
+
+  it('渲染背景音乐开关，缺省勾选，bgmEnabled=false 时不勾选', () => {
+    const bgm = findByAriaLabel(
+      AutoModeSection(makeBaseProps({ mode: 'always' })),
+      '生成背景音乐',
+    );
+    expect(bgm).not.toBeNull();
+    expect((bgm!.props as { checked: boolean }).checked).toBe(true);
+
+    const props = makeBaseProps({ mode: 'always' });
+    props.params = { ...props.params, bgmEnabled: false };
+    const off = findByAriaLabel(AutoModeSection(props), '生成背景音乐');
+    expect((off!.props as { checked: boolean }).checked).toBe(false);
   });
 
   it('传入 modelOptions 时渲染写稿模型字段，并通过 onChangeModelBinding 回传解码后的绑定', () => {

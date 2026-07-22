@@ -58,6 +58,24 @@ export const XHS_PASTEL: VisualStylePreset = {
   },
   motionStyleNotes:
     'hero 用 Playfair italic 斜体衬线；要点用 01 / 02 / 03 mono 编号（accent 粉）引导，像清单笔记；辅助薄荷 #9EE6C8 / 天蓝 #A9D7F5 只作角落柔焦氛围色块，不当语义 accent；圆角卡落地回弹 scale ≤1.03（比"温柔苹果"更轻），8-12 帧收敛。',
+  motionSpec: {
+    chartRules: '数据结构保持轻量，马卡龙粉只标主项，薄荷与天蓝仅作低权重氛围或轨道。',
+    emphasisRules: '面板以轻弹进入并在 scale 1.03 内收敛；重点用粉色编号或下划线。',
+    typographyRules: 'hero 使用 Playfair 斜体衬线，编号与来源使用 mono，正文保持柔和无衬线。',
+    banned: '禁止暗黑底、霓虹、厚重投影、强烈抖动和多种马卡龙色争抢焦点。',
+  },
+  contentTypeRules: {
+    quote: {
+      preferredCarriers: ['quote', 'concept'],
+      renderingRules: '金句使用斜体衬线大字与粉色轻强调，可置于单张柔白面板内。',
+      density: 'light',
+    },
+    narration: {
+      preferredCarriers: ['list-build', 'concept'],
+      renderingRules: '使用 01-03 编号的短清单或单个概念面板，避免高密度数据图。',
+      density: 'light',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;place-content:center;gap:5%;font-family:'Playfair Display','Noto Serif SC',serif;background:#FEF8F1;color:#3A3A3A;box-sizing:border-box;padding:7% 6%;overflow:hidden;}

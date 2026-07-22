@@ -8,7 +8,7 @@ import {
 import styles from './DirectorPlanEditor.module.css';
 
 const CARRIERS = [
-  'data-hero', 'comparison', 'trend', 'list-build', 'process', 'quote', 'concept',
+  'data-hero', 'comparison', 'table', 'trend', 'list-build', 'process', 'quote', 'concept',
   'timeline', 'matrix', 'funnel', 'network', 'before-after', 'stacked-composition', 'image',
 ].map((value) => ({ value, label: value }));
 

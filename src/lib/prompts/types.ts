@@ -216,7 +216,7 @@ const LOCKED_CARDS_ANIMATION = `【系统契约 · 不可修改】
 只输出一个 JSON 对象（不加 markdown 代码块、不加任何解释），结构如下：
 {
   "claim": "一句话论点",
-  "carrier": "data-hero|comparison|trend|list-build|process|quote|concept|timeline|matrix|funnel|network|before-after|stacked-composition",
+  "carrier": "data-hero|comparison|table|trend|list-build|process|quote|concept|timeline|matrix|funnel|network|before-after|stacked-composition",
   "scene": "一句话描述整卡终态画面",
   "focus": { "beat": 1, "emphasis": "countup-settle|slam|underline-sweep|brighten" },
   "beats": [
@@ -322,7 +322,8 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
     variables: [
       { name: 'motionKitApi', description: '@lingji/motion-kit 的 API 摘要（CardStage/useBeats/内容原语/手法函数；与 kit 实现同源维护）' },
       { name: 'presetMotionTokens', description: '所选风格预设的 motion tokens JSON（palette/fonts/typeScale/surface/ambient/camera/persona），原样定义为 TOKENS 常量' },
-      { name: 'presetStyleNotes', description: '风格预设的少量专属提示（如玻璃拟态面板、渐变标题）；无则为空' },
+      { name: 'presetStyleNotes', description: '风格预设的结构化运动细则与兼容补充提示；无则为空' },
+      { name: 'contentTypeRule', description: '本段 semanticType 对应的推荐载体、信息密度与生产规则；旧段缺 semanticType 时为空' },
       { name: 'animationDirection', description: '本卡 JSON 分镜（cards.animation 产出的 storyboard；无则为"无"）' },
       { name: 'assetContext', description: '已解析资产绑定摘要；外部资产层会按 slot 植入，雕刻师需要为素材预留布局空间' },
       { name: 'motionBible', description: '整片 Motion Bible 摘要与本段 directive；无则为降级说明' },
@@ -378,6 +379,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       { name: 'segmentTranscriptExcerpt', description: 'segment 原始摘录' },
       { name: 'segmentCues', description: '本段逐句字幕节拍列表（[k] +秒数 文本；索引 k 即分镜 cue 字段的合法取值）' },
       { name: 'cardPrompt', description: '用户单卡追加提示词（风格/语气参考；无则为"无"）' },
+      { name: 'contentTypeRule', description: '本段 semanticType 对应的推荐载体、信息密度与生产规则；旧段缺 semanticType 时为空' },
       { name: 'motionBible', description: '整片 Motion Bible 摘要与本段 directive；用于控制 carrier、强弱与风格一致性' },
     ],
     lockedContract: {

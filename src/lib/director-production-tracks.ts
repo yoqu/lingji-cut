@@ -126,6 +126,7 @@ export async function generateCardsTrack(
         visualType: cardOptions?.visualType,
         qualityMode: 'director',
         feedId: options.taskId,
+        telemetryRunId: options.telemetryRunId,
       }),
     onProgress: (progress) => options.onProgress?.({
       track: 'cards',

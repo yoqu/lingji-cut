@@ -173,6 +173,7 @@ export function AutoRunLauncher({
       roleId: persisted?.roleId || selectedRole || 'none',
       voiceId: persisted?.voiceId || voiceIdDefault,
       productionMode: resumeProductionMode,
+      bgmEnabled: persisted?.bgmEnabled,
     });
     const projectBinding = projectBindings?.[userPromptBindingKey('script-template', templateId)] ?? null;
     setModelBinding(resolveInitialModelBinding(aiSettings, projectBinding));

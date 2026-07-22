@@ -99,7 +99,10 @@ export function lintMotionCardTsx(
     const mainPrimitives = [
       'StatHero', 'BarChart', 'TrendLine', 'CompareRow', 'ListBuild', 'ProcessFlow',
       'QuoteBlock', 'TimelineRail', 'MatrixQuadrant', 'FunnelStack', 'NetworkMap',
-      'BeforeAfter', 'StackedComposition',
+      'BeforeAfter', 'StackedComposition', 'RingCounter', 'HorizontalBars', 'RankList',
+      'ChecklistPop', 'CauseChain', 'ConceptCard', 'CitationCard', 'KeyPointMarker',
+      'MythFactSwap', 'ColumnChart', 'DonutChart', 'MetricPulse', 'ScaleImpact',
+      'StatGrid', 'DataTable', 'SectionTitle',
     ];
     const primitiveCount = mainPrimitives.reduce(
       (count, name) => count + (source.match(new RegExp(`<${name}\\b`, 'g'))?.length ?? 0),

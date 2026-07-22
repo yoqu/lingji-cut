@@ -44,6 +44,24 @@ export const DARK_GRAPH: VisualStylePreset = {
   },
   motionStyleNotes:
     '深空科技 deck：关键内容放玻璃拟态卡（surface tokens 已定义）；hero 标题可用静态渐变文字（linear-gradient 90deg #A855F7→#60A5FA→#34D399 + backgroundClip:text，不做逐帧色相循环）；图谱类内容用纯 SVG circle/line 一次性揭示。',
+  motionSpec: {
+    chartRules: '关系与趋势使用细 SVG 线和低亮轨道，紫蓝 accent 只点亮主节点或主线。',
+    emphasisRules: '节点、折线和数字一次揭示并短暂提亮，不做持续发光或自动游走。',
+    typographyRules: '标题使用 Inter Bold，标签与数值使用 JetBrains Mono；正文保持高对比浅色。',
+    banned: '禁止暖橙大色块、逐帧色相循环、重霓虹描边、密集玻璃卡套卡。',
+  },
+  contentTypeRules: {
+    explanation: {
+      preferredCarriers: ['process', 'network', 'concept'],
+      renderingRules: '关系优先用节点链路或图谱表达，主节点单独提亮，避免把解释拆成多张玻璃小卡。',
+      density: 'normal',
+    },
+    data: {
+      preferredCarriers: ['trend', 'data-hero', 'network'],
+      renderingRules: '用紫蓝主线或主节点承载数据焦点，辅助线降低亮度并保持可追踪关系。',
+      density: 'heavy',
+    },
+  },
   preview: {
     motionHtml: `<style>
   .sp-root{position:relative;width:100%;height:100%;display:grid;place-content:center;gap:5%;font-family:'Inter','Noto Sans SC',sans-serif;background:linear-gradient(135deg,#0A0A12,#12121F);color:#E6E8F0;box-sizing:border-box;padding:7% 6%;overflow:hidden;}

@@ -12,17 +12,34 @@ import {
   buildSegmentCuesBlock,
   buildSrtTextRange,
 } from '../../src/lib/ai-analysis';
-import { getStyleFacetBlock, getStylePresetById, resolveStylePresetId } from '../../src/lib/card-style';
+import {
+  getStyleFacetBlock,
+  getStylePresetById,
+  resolveContentTypeRule,
+  resolveStylePresetId,
+} from '../../src/lib/card-style';
 import { loadEffectivePromptTemplate } from '../prompts-io';
 import { loadFullHeadlessAISettings, loadHeadlessProjectBindings } from './headless-settings';
 import { computeCardCues } from '../../src/remotion/timeline-to-sequences';
 import { validateMotionCardTsx } from '../remotion/smoke-render';
-import type { AICard, AISegment, AISegmentVisualType } from '../../src/types/ai';
+import type {
+  AICard,
+  AISegment,
+  AISegmentSemanticType,
+  AISegmentVisualType,
+} from '../../src/types/ai';
 
 const UPDATABLE: ReadonlyArray<keyof AICard> = [
   'title', 'enabled', 'displayMode', 'startMs', 'endMs', 'displayDurationMs', 'template', 'stylePresetId', 'cardPrompt',
 ];
 const CARD_PROMPT_KINDS = ['cards.segment', 'cards.animation', 'card.image', 'card.video'] as const;
+const SEGMENT_SEMANTIC_TYPES: AISegmentSemanticType[] = [
+  'data',
+  'explanation',
+  'quote',
+  'narration',
+  'chapter-transition',
+];
 
 export interface CardSummary {
   id: string; segmentId: string; type: string; title: string;
@@ -192,6 +209,10 @@ export async function getCardContext(
       description: stylePreset.description,
       palette: stylePreset.palette,
       fonts: stylePreset.fonts,
+      motionSpec: stylePreset.motionSpec ?? null,
+      contentTypeRules: Object.fromEntries(
+        SEGMENT_SEMANTIC_TYPES.map((type) => [type, resolveContentTypeRule(resolvedStylePresetId, type)]),
+      ),
       motionFacet: getStyleFacetBlock(resolvedStylePresetId, 'motion'),
       imageFacet: getStyleFacetBlock(resolvedStylePresetId, 'image'),
       coverFacet: getStyleFacetBlock(resolvedStylePresetId, 'cover'),

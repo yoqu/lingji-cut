@@ -4,6 +4,7 @@ import { getStyleFacetBlock, getMotionTokensBlock, getMotionStyleNotes } from '.
 import { listStylePresets } from '../src/lib/card-style-presets';
 import {
   buildSegmentCardPrompt,
+  buildAnimationDirectionPrompt,
   buildCoverPromptRegenerationPrompt,
 } from '../src/lib/ai-analysis';
 import type { AISegment } from '../src/types/ai';
@@ -25,6 +26,8 @@ describe('提示词风格占位符', () => {
   it('cards.segment 含 tokens 占位符（motion 散文已结构化）', () => {
     expect(DEFAULT_PROMPT_YAML['cards.segment']).toContain('{{presetMotionTokens}}');
     expect(DEFAULT_PROMPT_YAML['cards.segment']).toContain('{{presetStyleNotes}}');
+    expect(DEFAULT_PROMPT_YAML['cards.segment']).toContain('{{contentTypeRule}}');
+    expect(DEFAULT_PROMPT_YAML['cards.animation']).toContain('{{contentTypeRule}}');
   });
   it('cover.regeneration / card.image 仍用 styleSystemBlock 散文块', () => {
     expect(DEFAULT_PROMPT_YAML['cover.regeneration']).toContain('{{styleSystemBlock}}');
@@ -117,6 +120,7 @@ describe('build 函数注入', () => {
     startMs: 0,
     endMs: 3_000,
     transcriptExcerpt: '示例逐字稿',
+    semanticType: 'data',
   };
 
   it('cards.segment 注入 kit API 摘要与默认 tokens', () => {
@@ -137,6 +141,26 @@ describe('build 函数注入', () => {
     });
     expect(prompt).toContain('#7C5CFF');
     expect(prompt).toContain('风格专属提示');
+    expect(prompt).toContain('本段内容类型：data');
+    expect(prompt).toContain('trend > data-hero > network');
+  });
+
+  it('cards.animation 按 semanticType 与 stylePresetId 注入规则', () => {
+    const prompt = buildAnimationDirectionPrompt({
+      segment,
+      stylePresetId: 'nyt-data',
+    });
+    expect(prompt).toContain('本段内容类型：data');
+    expect(prompt).toContain('trend > data-hero > comparison');
+  });
+
+  it('旧模板没有占位符时不会额外注入内容类型规则', () => {
+    const prompt = buildSegmentCardPrompt(
+      { programContext: '节目摘要：测试', segment, stylePresetId: 'nyt-data' },
+      { name: 'legacy', user: 'segment={{segmentTitle}}' },
+    );
+    expect(prompt).toContain('segment=示例段落');
+    expect(prompt).not.toContain('本段内容类型');
   });
 
   it('cover.regeneration 默认注入 editorial-eink cover 散文块', () => {

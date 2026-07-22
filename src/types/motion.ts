@@ -63,6 +63,8 @@ export interface MotionCardProductionReport {
   reviewIssues: MotionCardProductionIssue[];
   assetIssues: MotionCardProductionIssue[];
   fallbackUsed: boolean;
+  /** true = 由 storyboard 确定性模板编译产出（未经 LLM 雕刻/审查）。 */
+  compiled?: boolean;
   fixRounds: number;
   reviewRounds: number;
   renderOk: boolean;
