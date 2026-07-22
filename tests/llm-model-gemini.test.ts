@@ -76,6 +76,22 @@ describe('createChatModelFromProvider', () => {
     expect(config.useResponsesApi).toBeUndefined();
   });
 
+  it('omits temperature for Kimi Coding models', () => {
+    createChatModelFromProvider(
+      makeProvider({
+        type: 'openai_compatible',
+        baseUrl: 'https://api.kimi.com/coding/v1/',
+      }),
+      'k3',
+    );
+
+    const config = chatOpenAIMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(config.temperature).toBeUndefined();
+    expect((config.configuration as Record<string, unknown>).baseURL).toBe(
+      'https://api.kimi.com/coding/v1',
+    );
+  });
+
   it('enables the Responses API for openai_responses providers', () => {
     createChatModelFromProvider(
       makeProvider({

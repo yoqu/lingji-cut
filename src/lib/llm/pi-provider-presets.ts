@@ -3,6 +3,9 @@ import { LMSTUDIO_DEFAULT_BASE_URL } from '../../types/ai';
 
 const MINIMAX_ANTHROPIC_DEFAULT_BASE_URL = 'https://api.minimaxi.com/anthropic';
 
+export const KIMI_CODING_BASE_URL = 'https://api.kimi.com/coding/v1';
+export const KIMI_CODING_MODELS = ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'];
+
 export interface PiProviderPreset {
   id: string;
   label: string;
@@ -189,12 +192,12 @@ export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
   {
     id: 'kimi',
     label: 'Kimi Coding',
-    description: 'Pi 内置 Kimi Coding provider，适合代码与长上下文任务。',
+    description: 'Kimi Coding 会员套餐，包含 Kimi K3 与 Kimi K2.7 Code。',
     piProviderId: 'kimi-coding',
     providerName: 'Kimi Coding',
     type: 'openai_compatible',
-    baseUrl: 'https://api.kimi.com/coding',
-    models: ['k2p7', 'kimi-k2-thinking', 'kimi-for-coding'],
+    baseUrl: KIMI_CODING_BASE_URL,
+    models: KIMI_CODING_MODELS,
     apiKeyPlaceholder: 'sk-...',
     apiKeyRequired: true,
     enableThinking: true,

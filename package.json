@@ -53,7 +53,7 @@
     "@codemirror/search": "^6.6.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.0",
-    "@earendil-works/pi-coding-agent": "0.79.1",
+    "@earendil-works/pi-coding-agent": "0.80.10",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@langchain/anthropic": "^1.4.0",

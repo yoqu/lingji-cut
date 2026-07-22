@@ -22,7 +22,7 @@ const EXPECTED_MODELS: Record<string, string[]> = {
   'zai-coding-cn': ['glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7'],
   moonshotai: ['kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2-thinking'],
   'moonshotai-cn': ['kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2-thinking'],
-  kimi: ['k2p7', 'kimi-k2-thinking', 'kimi-for-coding'],
+  kimi: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
 };
 
 describe('pi provider presets', () => {
@@ -39,5 +39,11 @@ describe('pi provider presets', () => {
     expect(allModels).not.toContain('MiniMax-M2');
     expect(allModels).not.toContain('kimi-k2-0905-preview');
     expect(allModels).toContain('gpt-5.5');
+  });
+
+  it('uses the official Kimi Coding OpenAI-compatible endpoint', () => {
+    expect(PI_PROVIDER_PRESETS.find((preset) => preset.id === 'kimi')?.baseUrl).toBe(
+      'https://api.kimi.com/coding/v1',
+    );
   });
 });

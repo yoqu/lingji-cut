@@ -252,13 +252,11 @@ export class PiInProcessSession {
     }
 
     // 2) auth + models（读 agentDir 下 App 投影出的 auth.json / models.json）。
-    const authStorage = sdk.AuthStorage.create(
-      agentDir ? path.join(agentDir, 'auth.json') : undefined,
-    );
-    const modelRegistry = sdk.ModelRegistry.create(
-      authStorage,
-      agentDir ? path.join(agentDir, 'models.json') : undefined,
-    );
+    const modelRuntime = await sdk.ModelRuntime.create({
+      authPath: agentDir ? path.join(agentDir, 'auth.json') : undefined,
+      modelsPath: agentDir ? path.join(agentDir, 'models.json') : undefined,
+      allowModelNetwork: false,
+    });
 
     // 3) model 解析：'provider/modelId' → Model；'default' / 解析失败 → 跟随配置。
     let model;
@@ -267,7 +265,7 @@ export class PiInProcessSession {
       if (slash > 0) {
         const provider = input.model.slice(0, slash);
         const modelId = input.model.slice(slash + 1);
-        model = modelRegistry.find(provider, modelId);
+        model = modelRuntime.getModel(provider, modelId);
       }
     }
 
@@ -297,8 +295,7 @@ export class PiInProcessSession {
     const { session } = await sdk.createAgentSession({
       cwd,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       sessionManager,
       settingsManager,
       resourceLoader,

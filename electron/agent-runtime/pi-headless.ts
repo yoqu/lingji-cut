@@ -115,14 +115,17 @@ export class PiHeadlessSession {
     const agentDir = input.agentDir ?? getPiConfigDir();
     process.env.PI_CODING_AGENT_DIR = agentDir;
 
-    const authStorage = sdk.AuthStorage.create(path.join(agentDir, 'auth.json'));
-    const modelRegistry = sdk.ModelRegistry.create(authStorage, path.join(agentDir, 'models.json'));
+    const modelRuntime = await sdk.ModelRuntime.create({
+      authPath: path.join(agentDir, 'auth.json'),
+      modelsPath: path.join(agentDir, 'models.json'),
+      allowModelNetwork: false,
+    });
     // 会话级模型覆盖：'provider/modelId' → Model；'default'/解析失败 → undefined（跟随配置）。
     let model;
     if (input.model && input.model !== 'default') {
       const slash = input.model.indexOf('/');
       if (slash > 0) {
-        model = modelRegistry.find(input.model.slice(0, slash), input.model.slice(slash + 1));
+        model = modelRuntime.getModel(input.model.slice(0, slash), input.model.slice(slash + 1));
       }
     }
     const settingsManager = sdk.SettingsManager.create(input.cwd, agentDir);
@@ -147,8 +150,7 @@ export class PiHeadlessSession {
     const { session } = await sdk.createAgentSession({
       cwd: input.cwd,
       agentDir,
-      authStorage,
-      modelRegistry,
+      modelRuntime,
       settingsManager,
       resourceLoader,
       sessionManager: sdk.SessionManager.inMemory(input.cwd),

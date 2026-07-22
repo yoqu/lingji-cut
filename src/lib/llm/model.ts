@@ -45,6 +45,15 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
+function isKimiCodingBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === 'api.kimi.com' && /^\/coding(?:\/|$)/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveEnableThinking(
   provider: LLMProvider,
   options?: { enableThinking?: boolean },
@@ -173,7 +182,7 @@ export function createChatModelFromProvider(
   return new ChatOpenAI({
     apiKey,
     model,
-    temperature: 0.3,
+    ...(!isKimiCodingBaseUrl(baseURL) ? { temperature: 0.3 } : {}),
     ...(useResponsesApi ? { useResponsesApi: true } : {}),
     configuration: {
       apiKey,

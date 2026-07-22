@@ -38,6 +38,15 @@ function joinUrl(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
+function isKimiCodingBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === 'api.kimi.com' && /^\/coding(?:\/|$)/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 /** 读取响应体文本用于错误展示；失败回退空串（不掩盖原始状态码）。 */
 async function safeErrorBody(res: Response): Promise<string> {
   try {
@@ -76,7 +85,9 @@ async function callOpenAi(
   const request = (jsonMode: boolean): Promise<Response> => {
     const body: Record<string, unknown> = {
       model: config.model,
-      temperature: config.temperature ?? DEFAULT_TEMPERATURE,
+      ...(!isKimiCodingBaseUrl(config.baseUrl)
+        ? { temperature: config.temperature ?? DEFAULT_TEMPERATURE }
+        : {}),
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -136,7 +147,9 @@ async function callAnthropic(
     body: JSON.stringify({
       model: config.model,
       max_tokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
-      temperature: config.temperature ?? DEFAULT_TEMPERATURE,
+      ...(!isKimiCodingBaseUrl(config.baseUrl)
+        ? { temperature: config.temperature ?? DEFAULT_TEMPERATURE }
+        : {}),
       system,
       messages: [{ role: 'user', content: user }],
     }),

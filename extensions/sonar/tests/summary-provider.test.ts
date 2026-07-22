@@ -42,6 +42,31 @@ describe('createOpenAiSummaryProvider', () => {
     expect(analysis.createdAt).toBe(9);
   });
 
+  it('omits temperature for Kimi Coding even when one is configured', async () => {
+    const content = JSON.stringify({
+      category: '深度分析',
+      summary: '这是摘要',
+      keyPoints: ['点1'],
+      tags: ['标签'],
+    });
+    const fetchImpl = vi.fn(async () => chatJson(content));
+    const provider = createOpenAiSummaryProvider(
+      {
+        baseUrl: 'https://api.kimi.com/coding/v1',
+        apiKey: 'sk-kimi',
+        model: 'k3',
+        temperature: 0.3,
+      },
+      { fetchImpl },
+    );
+
+    await provider.summarize(transcript, { videoId: 'v1' });
+
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.temperature).toBeUndefined();
+  });
+
   it('throws SUMMARY_INVALID_RESPONSE when content is not valid JSON', async () => {
     const fetchImpl = vi.fn(async () => chatJson('抱歉，我无法输出 JSON'));
     const provider = createOpenAiSummaryProvider(

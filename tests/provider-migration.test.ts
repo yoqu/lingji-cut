@@ -59,6 +59,58 @@ describe('migrateToProviders', () => {
     expect(result.llmProviders[0].enableThinking).toBe(true);
   });
 
+  it('把旧版 Kimi Coding 内置预设迁移到官方最新模型列表', () => {
+    const settings: AISettings = {
+      ...baseSettings,
+      llmProviders: [{
+        id: 'kimi-id',
+        name: 'Kimi Coding',
+        type: 'openai_compatible',
+        baseUrl: 'https://api.kimi.com/coding',
+        apiKey: 'sk-test',
+        models: ['k2p7', 'kimi-k2-thinking', 'kimi-for-coding'],
+        defaultModel: 'k2p7',
+        enableThinking: true,
+        pi: { builtinProviderId: 'kimi-coding' },
+      }],
+      defaultProviderId: 'kimi-id',
+      defaultModel: 'k2p7',
+    };
+
+    const result = migrateToProviders(settings);
+
+    expect(result.llmProviders[0]).toMatchObject({
+      baseUrl: 'https://api.kimi.com/coding/v1',
+      models: ['k3', 'kimi-for-coding', 'kimi-for-coding-highspeed'],
+      defaultModel: 'k3',
+    });
+    expect(result.defaultModel).toBe('k3');
+  });
+
+  it('保留用户自定义的 Kimi Coding 模型列表', () => {
+    const settings: AISettings = {
+      ...baseSettings,
+      llmProviders: [{
+        id: 'kimi-id',
+        name: 'Kimi Coding',
+        type: 'openai_compatible',
+        baseUrl: 'https://api.kimi.com/coding',
+        apiKey: 'sk-test',
+        models: ['my-kimi-alias'],
+        enableThinking: true,
+        pi: { builtinProviderId: 'kimi-coding' },
+      }],
+      defaultProviderId: 'kimi-id',
+      defaultModel: 'my-kimi-alias',
+    };
+
+    const result = migrateToProviders(settings);
+
+    expect(result.llmProviders[0].baseUrl).toBe('https://api.kimi.com/coding/v1');
+    expect(result.llmProviders[0].models).toEqual(['my-kimi-alias']);
+    expect(result.defaultModel).toBe('my-kimi-alias');
+  });
+
   it('当 llmBaseUrl 为空时返回空 providers', () => {
     const settings: AISettings = { ...baseSettings, llmBaseUrl: '' };
     const result = migrateToProviders(settings);
