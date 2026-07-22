@@ -155,7 +155,12 @@ export function getExportDimensions(
 }
 
 const LAST_EXPORT_DIR_KEY = 'video-web.last-export-dir';
+const LAST_EXPORT_RESOLUTION_KEY = 'video-web.last-export-resolution';
+const LAST_EXPORT_QUALITY_KEY = 'video-web.last-export-quality';
 const DEFAULT_EXPORT_FILE_NAME = 'podcast-export';
+
+const VALID_RESOLUTIONS: ExportResolution[] = ['source', '720p', '540p', '480p'];
+const VALID_QUALITIES: ExportQuality[] = ['speed', 'balanced', 'quality'];
 
 function hasBrowserStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -175,6 +180,40 @@ export function setLastExportDir(dir: string): void {
   }
 
   window.localStorage.setItem(LAST_EXPORT_DIR_KEY, dir);
+}
+
+export function getLastExportResolution(): ExportResolution | null {
+  if (!hasBrowserStorage()) {
+    return null;
+  }
+
+  const value = window.localStorage.getItem(LAST_EXPORT_RESOLUTION_KEY);
+  return VALID_RESOLUTIONS.includes(value as ExportResolution) ? (value as ExportResolution) : null;
+}
+
+export function setLastExportResolution(resolution: ExportResolution): void {
+  if (!hasBrowserStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(LAST_EXPORT_RESOLUTION_KEY, resolution);
+}
+
+export function getLastExportQuality(): ExportQuality | null {
+  if (!hasBrowserStorage()) {
+    return null;
+  }
+
+  const value = window.localStorage.getItem(LAST_EXPORT_QUALITY_KEY);
+  return VALID_QUALITIES.includes(value as ExportQuality) ? (value as ExportQuality) : null;
+}
+
+export function setLastExportQuality(quality: ExportQuality): void {
+  if (!hasBrowserStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(LAST_EXPORT_QUALITY_KEY, quality);
 }
 
 // 去除文件名中不安全的字符，保留中文、字母、数字及常见符号

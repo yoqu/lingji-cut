@@ -5,7 +5,11 @@ import {
   EXPORT_QUALITY_OPTIONS,
   EXPORT_RESOLUTION_OPTIONS,
   extractDirFromPath,
+  getLastExportQuality,
+  getLastExportResolution,
   setLastExportDir,
+  setLastExportQuality,
+  setLastExportResolution,
   type ExportConfig,
   type ExportQuality,
   type ExportResolution,
@@ -62,8 +66,8 @@ export function ExportSettingsModal({
       return;
     }
 
-    setResolution("720p");
-    setQuality("balanced");
+    setResolution(getLastExportResolution() || "720p");
+    setQuality(getLastExportQuality() || "balanced");
     setOutputPath(buildDefaultExportPath(projectName, projectDir));
     setIsSubmitting(false);
     setPathConflict(false);
@@ -141,6 +145,8 @@ export function ExportSettingsModal({
     }
 
     setIsSubmitting(true);
+    setLastExportResolution(resolution);
+    setLastExportQuality(quality);
 
     try {
       await onConfirm({
