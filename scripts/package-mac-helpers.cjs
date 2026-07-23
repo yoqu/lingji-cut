@@ -22,7 +22,7 @@ const STAGED_PROJECT_ROOTS = new Set([
 // dist-remotion 须 asar-unpack：导出时 fs.cp 整目录到可写临时站点，而 Electron 的 asar
 // 透明层不支持递归 copy asar 内目录；落到 app.asar.unpacked 后走真实 fs 即正常。
 // @rspack（@remotion/bundler 的打包内核）含原生 .node binding，无法从 asar 内 dlopen。
-const RENDER_RUNTIME_ASAR_UNPACK_DIRS = '{dist-cli,dist-remotion,vendor/ffmpeg,node_modules/@earendil-works,node_modules/@mariozechner,node_modules/@remotion,node_modules/@rspack,node_modules/esbuild,node_modules/@esbuild,node_modules/@puppeteer,node_modules/puppeteer-core,node_modules/sharp,node_modules/onnxruntime-node,node_modules/ffmpeg-static,node_modules/@ffprobe-installer,node_modules/playwright,node_modules/playwright-core,node_modules/node-pty}';
+const RENDER_RUNTIME_ASAR_UNPACK_DIRS = '{dist-cli,dist-remotion,vendor/ffmpeg,vendor/remotion-browser,node_modules/@earendil-works,node_modules/@mariozechner,node_modules/@remotion,node_modules/@rspack,node_modules/esbuild,node_modules/@esbuild,node_modules/@puppeteer,node_modules/puppeteer-core,node_modules/sharp,node_modules/onnxruntime-node,node_modules/ffmpeg-static,node_modules/@ffprobe-installer,node_modules/playwright,node_modules/playwright-core,node_modules/node-pty}';
 
 // 仅在 renderer（Vite bundle）中使用、主进程从不 require 的包可在此排除，
 // 以减小 .app 体积。漏排不会导致启动崩溃，只会让 app 变大。

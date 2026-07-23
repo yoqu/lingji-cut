@@ -11,7 +11,10 @@ import type { SrtEntry, TimelineData } from '../../src/types';
 import { parseSrt } from '../../src/lib/srt-parser';
 import { compileCards, type CompiledCard } from './compile-card-node';
 import { getRemotionBundle } from './bundle';
-import { renderRemotionVideo } from './render';
+import {
+  renderRemotionVideo,
+  selectRemotionComposition,
+} from './render';
 import { collectMotionCards } from '../../src/remotion/collect-cards';
 import { hydrateTimelineCards } from '../../src/lib/motion-card-externalize';
 import { prepareTimelineForHyperframes, type HyperframesAssetDescriptor } from '../../src/hyperframes/assets';
@@ -25,6 +28,19 @@ import { evaluateProductionQuality } from '../../src/lib/production-quality';
 import { mutateProjectProduction } from '../project-file';
 import { resolveFfmpegPath } from '../runtime-binaries';
 import { masterVideoAudio } from '../audio-mastering';
+import { resolveBundledRemotionBrowserExecutable } from './browser-runtime';
+import { startRemotionLocalServer } from './local-server';
+import {
+  renderChunkedVideo,
+  resolveChunkExecutionConfig,
+  resolveFramesPerChunk,
+} from './chunk-renderer';
+import {
+  probeFfmpegEncoder,
+  probeMediaFile,
+  type FfmpegEncoderProbe,
+  type MediaProbeResult,
+} from './gpu-runtime';
 
 // 以下三个辅助函数由 electron/main.ts 原样迁入（仅 render-video 使用）。
 
@@ -61,15 +77,21 @@ function inferProjectDirFromTimeline(timeline: TimelineData): string | null {
 
 export async function createRenderPublicDir(
   timeline: TimelineData,
-): Promise<{ timeline: TimelineData; publicDir: string }> {
+): Promise<{
+  timeline: TimelineData;
+  publicDir: string;
+}> {
   const projectDir = inferProjectDirFromTimeline(timeline);
   const { timeline: renderTimeline, assets } = prepareTimelineForHyperframes(
     timeline,
     projectDir,
   );
   const motionCardAssets = await collectMotionCardAssets(timeline, projectDir);
+  const assetSources = [...new Map(
+    [...assets, ...motionCardAssets].map((asset) => [asset.publicPath, asset]),
+  ).values()];
   const publicDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lingjijianying-public-'));
-  await materializeRenderAssets(publicDir, [...assets, ...motionCardAssets]);
+  await materializeRenderAssets(publicDir, assetSources);
 
   return {
     timeline: renderTimeline,
@@ -138,10 +160,100 @@ function compositorPackageName(): string | null {
  * dev 态返回 undefined，沿用 Remotion 默认（真实 node_modules 内的 compositor 包）。
  */
 function resolveRemotionBinariesDirectory(): string | undefined {
-  if (!app.isPackaged) return undefined;
   const pkg = compositorPackageName();
   if (!pkg) return undefined;
+  if (!app.isPackaged) {
+    try {
+      return path.dirname(require.resolve(`${pkg}/package.json`));
+    } catch {
+      return undefined;
+    }
+  }
   return path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', ...pkg.split('/'));
+}
+
+function remotionBinaryPath(
+  binariesDirectory: string | undefined,
+  binary: 'ffmpeg' | 'ffprobe',
+): string | null {
+  if (!binariesDirectory) return null;
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  return path.join(binariesDirectory, `${binary}${suffix}`);
+}
+
+function parseFrameRate(value: string | undefined): number | null {
+  if (!value) return null;
+  const [numerator, denominator = '1'] = value.split('/');
+  const ratio = Number(numerator) / Number(denominator);
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : null;
+}
+
+function assertFinalMedia(
+  probe: MediaProbeResult,
+  expected: {
+    width: number;
+    height: number;
+    fps: number;
+    totalFrames: number;
+  },
+): void {
+  if (!probe.ok) throw new Error(probe.error ?? 'ffprobe failed for final video');
+  const video = probe.streams.find((stream) => stream.codec_type === 'video');
+  const audio = probe.streams.find((stream) => stream.codec_type === 'audio');
+  if (video?.codec_name !== 'h264') {
+    throw new Error(`Final video codec must be h264, got ${video?.codec_name ?? 'missing'}`);
+  }
+  if (audio?.codec_name !== 'aac') {
+    throw new Error(`Final audio codec must be aac, got ${audio?.codec_name ?? 'missing'}`);
+  }
+  if (video.width !== expected.width || video.height !== expected.height) {
+    throw new Error(
+      `Final dimensions must be ${expected.width}x${expected.height}, got ${video.width}x${video.height}`,
+    );
+  }
+  const actualFps = parseFrameRate(video.avg_frame_rate ?? video.r_frame_rate);
+  if (actualFps === null || Math.abs(actualFps - expected.fps) > 0.01) {
+    throw new Error(`Final frame rate must be ${expected.fps}, got ${actualFps ?? 'unknown'}`);
+  }
+  const reportedFrames = Number(video.nb_frames);
+  if (Number.isFinite(reportedFrames) && reportedFrames !== expected.totalFrames) {
+    throw new Error(`Final frame count must be ${expected.totalFrames}, got ${reportedFrames}`);
+  }
+  const expectedDuration = expected.totalFrames / expected.fps;
+  if (
+    probe.durationSeconds !== null &&
+    Math.abs(probe.durationSeconds - expectedDuration) > Math.max(0.2, 2 / expected.fps)
+  ) {
+    throw new Error(
+      `Final duration must be about ${expectedDuration.toFixed(3)}s, got ${probe.durationSeconds.toFixed(3)}s`,
+    );
+  }
+}
+
+async function atomicallyReplaceOutput(tempPath: string, outputPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  const backupPath = `${outputPath}.lingji-backup-${crypto.randomUUID()}`;
+  let hadExistingOutput = false;
+  try {
+    await fs.access(outputPath);
+    hadExistingOutput = true;
+  } catch {
+    hadExistingOutput = false;
+  }
+  if (hadExistingOutput) await fs.rename(outputPath, backupPath);
+  try {
+    await fs.rename(tempPath, outputPath);
+    if (hadExistingOutput) await fs.rm(backupPath, { force: true });
+  } catch (error) {
+    if (hadExistingOutput) {
+      try {
+        await fs.rename(backupPath, outputPath);
+      } catch {
+        // Preserve the original error; the backup path remains recoverable beside the target.
+      }
+    }
+    throw error;
+  }
 }
 
 /**
@@ -178,6 +290,25 @@ async function prepareRemotionCwd(): Promise<{ cwd: string } | null> {
   return { cwd: cacheRoot };
 }
 
+const MAX_AUTOMATIC_EXPORT_CONCURRENCY = 4;
+
+/**
+ * Remotion 会为每个并发槽创建独立页面，并把完整 inputProps 注入每个页面。
+ * 大型项目在高核心数机器上按 `cpuCount - 2` 启动二十多个页面时，Chrome 会在
+ * 页面导航阶段重置部分连接，最终报 `Visited ... but got no response`。
+ * 默认并发限制为 4；显式环境变量仍用于受控性能诊断。
+ */
+export function resolveExportConcurrency(cpuCount: number, envValue?: string): number {
+  const explicit = Number(envValue);
+  if (Number.isInteger(explicit) && explicit >= 1) return explicit;
+
+  const normalizedCpuCount = Number.isFinite(cpuCount) ? Math.floor(cpuCount) : 1;
+  return Math.min(
+    MAX_AUTOMATIC_EXPORT_CONCURRENCY,
+    Math.max(1, normalizedCpuCount - 2),
+  );
+}
+
 export interface RenderVideoArgs {
   timeline: string;
   outputPath: string;
@@ -202,6 +333,7 @@ export async function renderVideoHeadless(
 ): Promise<{ outputPath: string }> {
   const onProgress = opts.onProgress ?? (() => {});
   const tel = opts.telemetry ?? { emit: () => undefined };
+  const requestedOutputPath = path.resolve(args.outputPath);
 
   const isDev = !app.isPackaged;
   const renderLogPrefix = '[render-video]';
@@ -243,11 +375,10 @@ export async function renderVideoHeadless(
   const cpuCount = os.cpus().length;
   // 帧渲染是 Chromium 截图主导的 CPU 任务；cpu-2 给系统留一点喘息，避免输入卡顿。
   // LINGJI_EXPORT_CONCURRENCY（正整数）供性能对比实验覆盖默认值。
-  const envConcurrency = Number(process.env.LINGJI_EXPORT_CONCURRENCY);
-  const explicitConcurrency =
-    Number.isInteger(envConcurrency) && envConcurrency >= 1
-      ? envConcurrency
-      : Math.max(1, cpuCount - 2);
+  const explicitConcurrency = resolveExportConcurrency(
+    cpuCount,
+    process.env.LINGJI_EXPORT_CONCURRENCY,
+  );
 
   // 把 UI 档位（resolution + quality）展开成完整的渲染配置：
   // - x264Preset / videoBitrate / audioBitrate 直接落到 renderMedia；
@@ -299,6 +430,7 @@ export async function renderVideoHeadless(
   const { timeline: renderTimeline, publicDir } = await createRenderPublicDir(timelineData);
   // dev / 打包态统一组装出的可写临时 serve 目录，导出后在 finally 清理。
   let tempServeDir: string | undefined;
+  let localServeServer: Awaited<ReturnType<typeof startRemotionLocalServer>> | undefined;
   // 打包态需要把 cwd 切到可写目录，让 Remotion 的浏览器缓存落点不是 `/.remotion`。
   // 在 finally 中恢复，避免影响后续主进程逻辑（譬如其它 IPC 的相对路径解析）。
   const originalCwd = process.cwd();
@@ -394,11 +526,32 @@ export async function renderVideoHeadless(
           publicDir,
         );
       }
-      serveUrl = tempServeDir;
+      localServeServer = await startRemotionLocalServer(tempServeDir);
+      serveUrl = localServeServer.serveUrl;
+      const probeStartedAt = Date.now();
+      try {
+        const probe = await localServeServer.probe();
+        tel.emit('render.server.probe', {
+          ok: probe.status === 200,
+          durationMs: Date.now() - probeStartedAt,
+          ...probe,
+        });
+        if (probe.status !== 200) {
+          throw new Error(`Remotion local-server probe returned HTTP ${probe.status}`);
+        }
+      } catch (error) {
+        tel.emit('render.server.probe', {
+          ok: false,
+          durationMs: Date.now() - probeStartedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       tel.emit('stage.end', {
         stage: 'export.bundle',
         durationMs: Date.now() - bundleStart,
         ok: true,
+        serveUrl,
       });
     } catch (err) {
       tel.emit('stage.end', {
@@ -412,12 +565,7 @@ export async function renderVideoHeadless(
 
     // ── stage: export.render ────────────────────────────────────────
     const renderStart = Date.now();
-    tel.emit('stage.start', {
-      stage: 'export.render',
-      concurrency: explicitConcurrency,
-      hardwareAcceleration: 'if-possible',
-    });
-    onProgress(0.05);
+    onProgress(0.01);
     // 关键：进入 Remotion 渲染前切到可写 cwd，让浏览器缓存解析到
     // `<userData>/remotion-cache/node_modules/.remotion` 而不是根目录下的 `/.remotion`。
     // selectComposition / renderMedia 内部触发 ensureBrowser → getDownloadsCacheDir，
@@ -434,47 +582,156 @@ export async function renderVideoHeadless(
     }
     // 每 15s 采样一次 rendered/encoded 帧数：encoded 持续贴近 rendered 说明编码不是瓶颈，
     // 差距持续拉大说明编码端拖后腿，据此决定调优截帧还是编码。
-    let lastSampleAt = renderStart;
+    const binariesDirectory = resolveRemotionBinariesDirectory();
+    const ffmpegPath = remotionBinaryPath(binariesDirectory, 'ffmpeg');
+    const ffprobePath = remotionBinaryPath(binariesDirectory, 'ffprobe');
+    const browserExecutable = resolveBundledRemotionBrowserExecutable({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      platform: process.platform,
+      arch: process.arch,
+    });
+    let encoderProbe: FfmpegEncoderProbe;
+    if (ffmpegPath) {
+      try {
+        encoderProbe = await probeFfmpegEncoder(ffmpegPath);
+      } catch (error) {
+        encoderProbe = {
+          ffmpegVersion: 'unknown',
+          nvencAdvertised: false,
+          nvencSmokeOk: false,
+          encoder: 'libx264',
+          remotionHardwareAcceleration: 'disable',
+          usesFfmpegOverride: false,
+          fallbackReason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    } else {
+      encoderProbe = {
+        ffmpegVersion: 'unknown',
+        nvencAdvertised: false,
+        nvencSmokeOk: false,
+        encoder: 'libx264',
+        remotionHardwareAcceleration: 'disable',
+        usesFfmpegOverride: false,
+        fallbackReason: 'Remotion binaries directory is unavailable',
+      };
+    }
+    tel.emit('export.encoder.probe', encoderProbe);
+    const execution = resolveChunkExecutionConfig(
+      cpuCount,
+      process.env.LINGJI_EXPORT_CHUNK_WORKERS,
+      process.env.LINGJI_EXPORT_CONCURRENCY,
+    );
+    tel.emit('stage.start', {
+      stage: 'export.render',
+      chunkWorkers: execution.workers,
+      concurrency: execution.concurrency,
+      totalPages: execution.totalPages,
+      encoder: encoderProbe.encoder,
+      requestedGl: process.platform === 'win32' ? 'angle' : 'default',
+    });
+    const resolvedOutputPath = requestedOutputPath;
+    await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
+    const temporaryOutputPath = path.join(
+      path.dirname(resolvedOutputPath),
+      `.${path.basename(resolvedOutputPath)}.lingji-${crypto.randomUUID()}.tmp.mp4`,
+    );
     try {
-      const { totalFrames, fps } = await renderRemotionVideo({
+      if (!ffprobePath) throw new Error('Remotion ffprobe binary is unavailable');
+      const composition = await selectRemotionComposition({
         serveUrl,
-        outputPath: args.outputPath,
-        timeline: renderTimeline,
-        srtEntries,
-        compiledCards,
-        scale: exportScale,
-        jpegQuality: renderConfig.jpegQuality,
-        x264Preset: renderConfig.x264Preset,
-        videoBitrate: renderConfig.videoBitrate,
-        audioBitrate: renderConfig.audioBitrate,
-        concurrency: explicitConcurrency,
-        hardwareAcceleration: 'if-possible',
-        binariesDirectory: resolveRemotionBinariesDirectory(),
-        onProgress: ({ ratio, renderedFrames, encodedFrames }) => {
-          onProgress(Math.max(0.05, Math.min(0.98, ratio)));
-          const now = Date.now();
-          if (now - lastSampleAt >= 15_000) {
-            lastSampleAt = now;
-            tel.emit('render.progress', {
-              stage: 'export.render',
-              elapsedMs: now - renderStart,
-              renderedFrames,
-              encodedFrames,
-            });
-          }
+        input: {
+          timeline: { ...renderTimeline, overlays: [], subtitleHighlights: [] },
+          srtEntries: [],
+          compiledCards: {},
         },
+        binariesDirectory,
+        browserExecutable,
+        platform: process.platform,
+        useAngle: process.platform === 'win32',
       });
+      const framesPerChunk = resolveFramesPerChunk(
+        composition.fps,
+        process.env.LINGJI_EXPORT_CHUNK_SECONDS,
+      );
+      let renderResult;
+      try {
+        renderResult = await renderChunkedVideo({
+          composition,
+          serveUrl,
+          outputPath: temporaryOutputPath,
+          input: { timeline: renderTimeline, srtEntries, compiledCards },
+          framesPerChunk,
+          workers: execution.workers,
+          concurrency: execution.concurrency,
+          scale: exportScale,
+          x264Preset: renderConfig.x264Preset,
+          quality: args.exportConfig.quality,
+          videoBitrate: renderConfig.videoBitrate,
+          audioBitrate: renderConfig.audioBitrate,
+          jpegQuality: renderConfig.jpegQuality,
+          encoder: encoderProbe.encoder,
+          ffprobePath,
+          binariesDirectory,
+          browserExecutable,
+          platform: process.platform,
+          emit: tel.emit,
+          onProgress,
+        });
+      } catch (chunkError) {
+        tel.emit('export.chunk.fallback', {
+          reason: chunkError instanceof Error ? chunkError.message : String(chunkError),
+          fallback: 'single-render',
+        });
+        await fs.rm(temporaryOutputPath, { force: true });
+        const legacyResult = await renderRemotionVideo({
+          serveUrl,
+          outputPath: temporaryOutputPath,
+          timeline: renderTimeline,
+          srtEntries,
+          compiledCards,
+          scale: exportScale,
+          jpegQuality: renderConfig.jpegQuality,
+          x264Preset: renderConfig.x264Preset,
+          videoBitrate: renderConfig.videoBitrate,
+          audioBitrate: renderConfig.audioBitrate,
+          concurrency: explicitConcurrency,
+          hardwareAcceleration: 'disable',
+          binariesDirectory,
+          browserExecutable,
+          onDiagnostic: (event) => tel.emit('render.browser', event),
+          onProgress: ({ ratio }) => onProgress(Math.max(0, Math.min(0.99, ratio))),
+        });
+        renderResult = {
+          ...legacyResult,
+          chunks: 1,
+          renderedChunks: 1,
+        };
+      }
+      const finalProbe = await probeMediaFile(ffprobePath, temporaryOutputPath);
+      assertFinalMedia(finalProbe, {
+        width: renderConfig.renderWidth,
+        height: renderConfig.renderHeight,
+        fps: renderResult.fps,
+        totalFrames: renderResult.totalFrames,
+      });
+      await atomicallyReplaceOutput(temporaryOutputPath, resolvedOutputPath);
       onProgress(1);
       const renderDurationMs = Date.now() - renderStart;
       tel.emit('stage.end', {
         stage: 'export.render',
         durationMs: renderDurationMs,
         ok: true,
-        totalFrames,
-        fps,
-        renderFps: Math.round((totalFrames / Math.max(1, renderDurationMs)) * 1000 * 10) / 10,
+        totalFrames: renderResult.totalFrames,
+        fps: renderResult.fps,
+        chunks: renderResult.chunks,
+        renderedChunks: renderResult.renderedChunks,
+        renderFps:
+          Math.round((renderResult.totalFrames / Math.max(1, renderDurationMs)) * 1000 * 10) / 10,
       });
     } catch (err) {
+      await fs.rm(temporaryOutputPath, { force: true });
       tel.emit('stage.end', {
         stage: 'export.render',
         durationMs: Date.now() - renderStart,
@@ -499,7 +756,7 @@ export async function renderVideoHeadless(
         const mastering = qualityExecution.audioPlan.mastering;
         const measurement = await masterVideoAudio({
           ffmpegPath,
-          inputPath: args.outputPath,
+          inputPath: requestedOutputPath,
           targetLufs: mastering.targetLufs,
           maxTruePeakDbtp: mastering.maxTruePeakDbtp,
           audioBitrate: renderConfig.audioBitrate,
@@ -554,7 +811,7 @@ export async function renderVideoHeadless(
       );
     }
 
-    return { outputPath: args.outputPath };
+    return { outputPath: requestedOutputPath };
   } catch (err) {
     if (isDev) {
       console.error(`${renderLogPrefix} 导出失败 @${timestamp()}`, err);
@@ -570,6 +827,14 @@ export async function renderVideoHeadless(
       }
     }
     await fs.rm(publicDir, { recursive: true, force: true });
+    if (localServeServer) {
+      tel.emit('render.server.summary', localServeServer.getDiagnostics());
+      try {
+        await localServeServer.close();
+      } catch {
+        /* ignore cleanup failure */
+      }
+    }
     if (tempServeDir) {
       await fs.rm(tempServeDir, { recursive: true, force: true });
     }

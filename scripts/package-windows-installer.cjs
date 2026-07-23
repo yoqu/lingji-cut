@@ -14,10 +14,26 @@ function resolveInstallerOutputName({ appName, version, arch }) {
   return `${appName}-${version}-${arch}-setup.exe`;
 }
 
-// 优先使用 MAKENSIS 环境变量指定的 makensis 路径，否则回退到 PATH 中的 makensis。
-function resolveMakensisCommand(env = process.env) {
+// 优先使用 MAKENSIS；Windows 上再探测 NSIS 默认安装目录，最后回退到 PATH。
+function resolveMakensisCommand(env = process.env, options = {}) {
   const explicit = (env.MAKENSIS || '').trim();
-  return explicit || 'makensis';
+  if (explicit) return explicit;
+
+  const platform = options.platform || process.platform;
+  const existsSync = options.existsSync || fs.existsSync;
+  if (platform === 'win32') {
+    const candidates = [
+      env['ProgramFiles(x86)'] && path.join(env['ProgramFiles(x86)'], 'NSIS', 'makensis.exe'),
+      env.ProgramFiles && path.join(env.ProgramFiles, 'NSIS', 'makensis.exe'),
+      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'NSIS', 'makensis.exe'),
+      env.ChocolateyInstall && path.join(env.ChocolateyInstall, 'bin', 'makensis.exe'),
+      env.USERPROFILE && path.join(env.USERPROFILE, 'scoop', 'apps', 'nsis', 'current', 'makensis.exe'),
+    ].filter(Boolean);
+    const installed = candidates.find((candidate) => existsSync(candidate));
+    if (installed) return installed;
+  }
+
+  return 'makensis';
 }
 
 function toWindowsPath(p) {
@@ -59,13 +75,20 @@ ${iconLine}
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\\${exeName}"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+Function .onInit
+  FindWindow $0 "" "${appName}"
+  StrCmp $0 0 app_not_running
+  MessageBox MB_ICONSTOP|MB_OK "检测到 ${appName} 正在运行。请先关闭应用，再重新运行安装程序。"
+  Abort
+app_not_running:
+FunctionEnd
 
 Section "Install"
   SetOutPath "$INSTDIR"
@@ -99,11 +122,16 @@ SectionEnd
 `;
 }
 
+function buildMakensisArgs(scriptPath, platform = process.platform) {
+  const optionPrefix = platform === 'win32' ? '/' : '-';
+  return [`${optionPrefix}INPUTCHARSET`, 'UTF8', scriptPath];
+}
+
 function runMakensis(command, scriptPath, cwd) {
   return new Promise((resolve, reject) => {
     // Windows 上 makensis 多为 .exe；若用户用 .bat/.cmd 包装则需 shell。
     const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
-    const child = spawn(command, [scriptPath], {
+    const child = spawn(command, buildMakensisArgs(scriptPath), {
       cwd,
       stdio: 'inherit',
       shell: useShell,
@@ -129,6 +157,26 @@ function makensisMissingMessage(command) {
   ].join('\n');
 }
 
+async function prepareNsisSource({
+  appDir,
+  tmpDir,
+  platform = process.platform,
+  linkName = `n${process.pid.toString(36)}`,
+  remove = fsp.rm,
+  symlink = fsp.symlink,
+}) {
+  if (platform !== 'win32') {
+    return { sourceDir: appDir, cleanup: async () => {} };
+  }
+
+  const sourceLink = path.join(path.parse(tmpDir).root, linkName);
+  await symlink(appDir, sourceLink, 'junction');
+  return {
+    sourceDir: sourceLink,
+    cleanup: () => remove(sourceLink, { recursive: true, force: true }),
+  };
+}
+
 async function createWindowsInstaller({
   appName,
   version,
@@ -152,39 +200,46 @@ async function createWindowsInstaller({
   const outFile = path.join(releaseDir, outName);
   const command = resolveMakensisCommand(env);
 
-  const scriptText = buildNsisScript({
-    appName,
-    version,
-    arch,
-    appDir,
-    exeName,
-    iconPath: iconPath && fs.existsSync(iconPath) ? iconPath : undefined,
-    outFile,
-  });
-
   await fsp.mkdir(tmpDir, { recursive: true });
-  const scriptPath = path.join(tmpDir, 'installer.nsi');
-  await fsp.writeFile(scriptPath, scriptText, 'utf8');
+  const preparedSource = await prepareNsisSource({ appDir, tmpDir });
 
   try {
-    await runMakensis(command, scriptPath, tmpDir);
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      throw new Error(makensisMissingMessage(command));
-    }
-    throw error;
-  }
+    const scriptText = buildNsisScript({
+      appName,
+      version,
+      arch,
+      appDir: preparedSource.sourceDir,
+      exeName,
+      iconPath: iconPath && fs.existsSync(iconPath) ? iconPath : undefined,
+      outFile,
+    });
+    const scriptPath = path.join(tmpDir, 'installer.nsi');
+    await fsp.writeFile(scriptPath, scriptText, 'utf8');
 
-  if (!fs.existsSync(outFile)) {
-    throw new Error(`安装包生成失败，未找到产物：${outFile}`);
+    try {
+      await runMakensis(command, scriptPath, tmpDir);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw new Error(makensisMissingMessage(command));
+      }
+      throw error;
+    }
+
+    if (!fs.existsSync(outFile)) {
+      throw new Error(`安装包生成失败，未找到产物：${outFile}`);
+    }
+    return outFile;
+  } finally {
+    await preparedSource.cleanup();
   }
-  return outFile;
 }
 
 module.exports = {
   UNINSTALL_REGISTRY_ROOT,
   resolveInstallerOutputName,
   resolveMakensisCommand,
+  buildMakensisArgs,
+  prepareNsisSource,
   buildNsisScript,
   makensisMissingMessage,
   createWindowsInstaller,

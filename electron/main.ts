@@ -96,6 +96,7 @@ import { getPipelineService, attachTaskProgressBridge } from './pipeline';
 import { runSculptCard } from './pipeline/runs/card-run';
 import { setActiveProjectPath } from './pipeline/context';
 import { lingjiLogin, lingjiLogout, lingjiRefreshConfig, loadAccount } from './lingji-account';
+import { sendToLiveWindow } from './safe-window-send';
 
 const execFileAsync = promisify(execFile);
 
@@ -1131,7 +1132,7 @@ ipcMain.handle('render-video', async (_event, args: RenderVideoArgs & { telemetr
   });
   try {
     const result = await renderVideoHeadless(args, {
-      onProgress: (f) => mainWindow?.webContents.send('render-progress', f),
+      onProgress: (f) => sendToLiveWindow(mainWindow, 'render-progress', f),
       onMotionCardCompileErrors: (errors, total) => {
         const firstError = errors[0];
         writeAppLog(

@@ -4,6 +4,8 @@ import {
   UNINSTALL_REGISTRY_ROOT,
   resolveInstallerOutputName,
   resolveMakensisCommand,
+  buildMakensisArgs,
+  prepareNsisSource,
   buildNsisScript,
   makensisMissingMessage,
 } from '../scripts/package-windows-installer.cjs';
@@ -27,6 +29,53 @@ describe('resolveMakensisCommand', () => {
 
   it('ignores blank MAKENSIS', () => {
     expect(resolveMakensisCommand({ MAKENSIS: '   ' })).toBe('makensis');
+  });
+
+  it('finds NSIS in the default Windows installation directory when it is not on PATH', () => {
+    const defaultMakensis = 'C:\\Program Files (x86)\\NSIS\\makensis.exe';
+    expect(
+      resolveMakensisCommand(
+        { 'ProgramFiles(x86)': 'C:\\Program Files (x86)' },
+        {
+          platform: 'win32',
+          existsSync: (candidate: string) => candidate === defaultMakensis,
+        },
+      ),
+    ).toBe(defaultMakensis);
+  });
+});
+
+describe('buildMakensisArgs', () => {
+  it('forces UTF-8 when compiling an NSIS script containing Chinese paths', () => {
+    expect(buildMakensisArgs('F:\\项目\\installer.nsi', 'win32')).toEqual([
+      '/INPUTCHARSET',
+      'UTF8',
+      'F:\\项目\\installer.nsi',
+    ]);
+  });
+});
+
+describe('prepareNsisSource', () => {
+  it('uses a short Windows junction so deeply nested package files stay below MAX_PATH', async () => {
+    const calls: unknown[][] = [];
+    const prepared = await prepareNsisSource({
+      appDir: 'F:\\ai\\video-web-master\\release\\灵机剪影-win32-x64',
+      tmpDir: 'F:\\ai\\video-web-master\\.tmp\\win-installer-x64',
+      platform: 'win32',
+      linkName: 'n',
+      remove: async (...args: unknown[]) => calls.push(['remove', ...args]),
+      symlink: async (...args: unknown[]) => calls.push(['symlink', ...args]),
+    });
+
+    expect(prepared.sourceDir).toBe('F:\\n');
+    expect(calls).toContainEqual([
+      'symlink',
+      'F:\\ai\\video-web-master\\release\\灵机剪影-win32-x64',
+      'F:\\n',
+      'junction',
+    ]);
+    await prepared.cleanup();
+    expect(calls.at(-1)?.[0]).toBe('remove');
   });
 });
 
@@ -58,6 +107,13 @@ describe('buildNsisScript', () => {
     expect(script).toContain(`${UNINSTALL_REGISTRY_ROOT}\\灵机剪影`);
     expect(script).toContain('WriteUninstaller "$INSTDIR\\Uninstall.exe"');
     expect(script).toContain('CreateShortcut "$DESKTOP\\灵机剪影.lnk" "$INSTDIR\\灵机剪影.exe"');
+  });
+
+  it('refuses to install over a running app and does not relaunch it elevated', () => {
+    expect(script).toContain('Function .onInit');
+    expect(script).toContain('FindWindow $0 ""');
+    expect(script).toContain('Abort');
+    expect(script).not.toContain('MUI_FINISHPAGE_RUN');
   });
 
   it('uses the icon when provided', () => {

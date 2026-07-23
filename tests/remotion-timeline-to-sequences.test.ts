@@ -74,9 +74,10 @@ describe('buildRenderPlan', () => {
   });
 
   it('maps srt entries to subtitle frames', () => {
-    const srt: SrtEntry[] = [{ index: 0, startMs: 1000, endMs: 2000, text: 'hi' }];
+    const srt: SrtEntry[] = [{ index: 42, startMs: 1000, endMs: 2000, text: 'hi' }];
     const plan = buildRenderPlan(timelineWithImage(), srt, 30);
     expect(plan.subtitles).toHaveLength(1);
+    expect(plan.subtitles[0].index).toBe(42);
     expect(plan.subtitles[0].startFrame).toBe(30);
     expect(plan.subtitles[0].durationFrames).toBe(30);
   });

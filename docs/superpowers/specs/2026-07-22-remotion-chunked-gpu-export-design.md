@@ -31,7 +31,7 @@ Remotion 官方文档给出以下约束：
 
 1. 保持 1280×720、30fps、H.264、AAC 以及现有时间线视觉与音频语义不变。
 2. 首次完整导出目标不超过 15 分钟，硬性验收上限 18 分钟；相对 38 分 2 秒基线至少提升 2 倍。
-3. 少量卡片或字幕修改后的增量导出目标为 1–5 分钟。
+3. 每次导出都重新渲染全部分块，不复用任何历史视频画面。
 4. 完全离线导出；Chrome、Remotion 二进制和兼容现代驱动的 FFmpeg 均进入安装包。
 5. GPU、NVENC 或分块路径不可用时自动回退，不让兼容性问题变成导出失败。
 6. 保持现有 auto-run JSONL 观测体系，不新增独立日志系统。
@@ -57,7 +57,7 @@ Remotion 官方文档给出以下约束：
   -> ffprobe 校验最终 MP4
 ```
 
-ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不裁剪不会减少总工作量；主要收益来自每个页面只接收当前块需要的数据、短生命周期浏览器避免 ANGLE 长片内存泄漏，以及可复用的块缓存。
+ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不裁剪不会减少总工作量；主要收益来自每个页面只接收当前块需要的数据，以及短生命周期浏览器避免 ANGLE 长片内存泄漏。
 
 ## 分块计划
 
@@ -94,7 +94,7 @@ ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不
 - Windows 安装包加入固定版本、可校验哈希的现代 FFmpeg，并保留许可证文件。
 - 构建时把现代 `ffmpeg.exe` 与 Remotion compositor 的 `ffprobe.exe`、`remotion.exe` 及 DLL 组成完整 `binariesDirectory`。
 - 运行时不仅检查 `-encoders` 是否包含 `h264_nvenc`，还执行极短的真实 NVENC smoke encode；旧 FFmpeg“声明支持但驱动调用失败”必须被识别。
-- smoke encode 成功时使用 `hardwareAcceleration: 'required'`，避免静默回退；失败则明确选择 `disable` + `libx264`。
+- Remotion 4.0.484 明确禁止 `h264-ts` 使用 `hardwareAcceleration:'required'`。smoke encode 成功时保持 Remotion 为 `disable`，再通过其公开的 `ffmpegOverride` 仅把 stitcher 的 `libx264` 替换为 `h264_nvenc`；失败则不注入 override，明确选择 `libx264`。这不是静默回退，实际 encoder 必须写入 telemetry。
 - 三档质量继续使用现有码率。NVENC preset 映射为 speed=`p1`、balanced=`p4`、quality=`p6`；CPU 回退沿用 ultrafast、veryfast、medium。
 - 有效 GL renderer、编码器和回退原因写入 telemetry。
 
@@ -134,22 +134,14 @@ ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不
 - fps、码率、音频 codec、metadata、binariesDirectory 与块渲染保持一致。
 - 合并到同目录临时文件，校验成功后原子替换用户目标路径。
 
-## 块缓存
+## 不使用持久化渲染缓存
 
-每个块使用内容哈希作为缓存键，包含：
-
-- 导出管线 schema 版本和应用版本。
-- frameRange、分辨率、fps、质量档、码率、GL 和编码器配置。
-- 裁剪后的 timeline、SRT、subtitleHighlights。
-- 本块 compiledCards 的内容哈希。
-- 引用素材的规范化路径、文件大小和 mtime。
-
-有效块完成后先 `ffprobe` 校验，再原子写入缓存。缓存命中直接进入合并进度。取消或失败不会删除已验证的块；临时半成品会清理。缓存采用 LRU，默认上限 4GB，避免长期无限增长。
+根据 2026-07-23 的产品决定，导出不读取或写入历史视频分块。每次导出都在独立临时目录中重新渲染全部块，合并完成或失败后清理临时文件。这样牺牲热导出速度，换取时间线文字、字幕和卡片修改不会复用旧画面。
 
 ## 进度、取消与错误处理
 
-- 总进度按所有块的帧数加权；缓存命中块立即计为完成。
-- 用户取消时终止所有活动 `renderMedia()`、停止调度新块、清理临时文件并保留有效缓存。
+- 总进度按所有块的帧数加权。
+- 用户取消时终止所有活动 `renderMedia()`、停止调度新块并清理临时文件。
 - 单块失败先以同一 GPU 配置、单页面重试一次。
 - ANGLE 失败则默认 GL 重试；NVENC 失败则 CPU 编码重试并在本次运行中禁用 NVENC。
 - 若分块编排或合并出现不可恢复错误，可回退现有单体导出路径；回退原因必须明确记录。
@@ -160,8 +152,7 @@ ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不
 继续写入 `<userData>/logs/auto-run/<runId>.jsonl`，新增事件不另起日志：
 
 - `export.chunk.plan`：块大小、块数、worker、页面并发、预计 props 缩减。
-- `export.chunk.start/end`：范围、输入规模、耗时、渲染 fps、是否命中缓存。
-- `export.chunk.cache.hit/miss`：缓存键摘要和原因。
+- `export.chunk.start/end`：范围、输入规模、耗时和渲染 fps。
 - `export.gpu.probe`：请求 GL、有效 renderer、是否硬件 GPU。
 - `export.encoder.probe`：FFmpeg 版本、NVENC smoke 结果、有效编码器。
 - `stage.start/end{stage:'export.render.chunks'}`。
@@ -175,8 +166,8 @@ ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不
 
 1. 分块范围：整除、尾块、单帧和边界输入。
 2. 输入裁剪：跨块 overlay、14 帧转场、字幕、附加音频、compiledCards。
-3. 缓存键：相关内容变化必须失效，无关块变化不得失效。
-4. GPU/编码器探测：NVENC 列出但 smoke 失败时回退；成功时必须选择 required。
+3. 无缓存回归：重复导出必须再次渲染全部块，且不得产生缓存事件。
+4. GPU/编码器探测：NVENC 列出但 smoke 失败时回退；成功时必须选择经过测试的 `h264-ts` stitcher override，且 Remotion 原生 `hardwareAcceleration` 保持 `disable` 以绕开其 codec gate。
 5. 并发调度：上限、取消、单块重试、GPU 降级、CPU 降级。
 6. `combineChunks()` 参数和块顺序。
 7. Windows 打包：现代 FFmpeg、许可证、Remotion compositor 和离线 Chrome 全部进入目录包与 NSIS。
@@ -188,11 +179,11 @@ ANGLE、NVENC 和分块裁剪是同一个方案的组成部分。仅分块而不
 
 1. 对三个代表性 60 秒区间跑旧路径与新路径矩阵，选择最快稳定组合。
 2. 用同一项目、720p、平衡档完整导出。
-3. 新 JSONL 必须证明 ANGLE 命中 RTX 4060 Ti、编码器为 `h264_nvenc`、块缓存/worker/合并均按设计运行。
+3. 新 JSONL 必须证明 ANGLE 命中 RTX 4060 Ti、编码器为 `h264_nvenc`、全部块均重新渲染且 worker/合并按设计运行。
 4. `ffprobe` 验证 H.264、1280×720、30fps、50,557 帧、AAC、时长约 1685.27 秒。
 5. 检查每个块边界前后帧和音频连续性。
 6. 首次完整导出硬上限 18 分钟、目标 15 分钟；未达到则继续调块大小和并发，直到新增组合提升不足 5%或触发稳定性边界。
-7. 再次导出验证缓存，少量修改后只重渲染受影响块。
+7. 再次导出并修改文字，验证两次都完整渲染且成片使用最新文字。
 
 ## 方案取舍
 

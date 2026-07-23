@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
   buildWindowsPackagerOptions,
+  buildNvencSmokeArgs,
   createIcoFromPng,
   normalizePackageArch,
+  patchStagedRemotionAacEncoder,
   resolvePackageArch,
   resolveSpawnCommand,
   resolveSpawnOptions,
@@ -13,6 +18,62 @@ const {
 } = require('../scripts/package-windows.cjs');
 
 describe('package windows helpers', () => {
+  it('patches the staged Remotion AAC mapping to the native Windows FFmpeg encoder', async () => {
+    const stageDir = await mkdtemp(path.join(tmpdir(), 'lingji-win-stage-aac-'));
+    const codecPath = path.join(
+      stageDir,
+      'node_modules',
+      '@remotion',
+      'renderer',
+      'dist',
+      'options',
+      'audio-codec.js',
+    );
+    await mkdir(path.dirname(codecPath), { recursive: true });
+    await writeFile(
+      codecPath,
+      [
+        "const audioCodecNames = ['libfdk_aac'];",
+        "if (audioCodec === 'aac') {",
+        "  return 'libfdk_aac';",
+        '}',
+      ].join('\n'),
+      'utf8',
+    );
+
+    try {
+      await patchStagedRemotionAacEncoder(stageDir);
+
+      const patched = await readFile(codecPath, 'utf8');
+      expect(patched).toContain("const audioCodecNames = ['libfdk_aac'];");
+      expect(patched).toContain("return 'aac';");
+      expect(patched).not.toContain("return 'libfdk_aac';");
+    } finally {
+      await rm(stageDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails staging when the pinned Remotion AAC mapping drifts', async () => {
+    const stageDir = await mkdtemp(path.join(tmpdir(), 'lingji-win-stage-aac-drift-'));
+    const codecPath = path.join(
+      stageDir,
+      'node_modules',
+      '@remotion',
+      'renderer',
+      'dist',
+      'options',
+      'audio-codec.js',
+    );
+    await mkdir(path.dirname(codecPath), { recursive: true });
+    await writeFile(codecPath, "return 'aac';\n", 'utf8');
+
+    try {
+      await expect(patchStagedRemotionAacEncoder(stageDir)).rejects.toThrow(/exactly one/i);
+    } finally {
+      await rm(stageDir, { recursive: true, force: true });
+    }
+  });
+
   it('normalizes Node architectures to Electron packager architectures', () => {
     expect(normalizePackageArch('x64')).toBe('x64');
     expect(normalizePackageArch('ia32')).toBe('ia32');
@@ -29,16 +90,22 @@ describe('package windows helpers', () => {
     );
   });
 
-  it('pins Windows FFmpeg vendor packages for supported architectures', () => {
+  it('pins a modern hashed Windows FFmpeg build for the supported architecture', () => {
     expect(windowsFfmpegPackages.x64).toMatchObject({
-      name: '@ffmpeg-installer/win32-x64',
-      version: '4.1.0',
+      version: '8.0.1',
+      url: 'https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-full_build.zip',
+      archiveSha256: '467CDE100A47ED4B03A897988AEB4A296890C1E2B2D2864204657D002BC5FB90',
+      ffmpegSha256: '74DB6C184A03DBA2BDFE23E1A1F41CF5A8385BC1DE6A7A1B26DB1DC541ABEF93',
     });
-    expect(windowsFfmpegPackages.ia32).toMatchObject({
-      name: '@ffmpeg-installer/win32-ia32',
-      version: '4.1.0',
-    });
+    expect(windowsFfmpegPackages.ia32).toBeUndefined();
     expect(windowsFfmpegPackages.arm64).toBeUndefined();
+  });
+
+  it('uses a real sixteen-frame NVENC encode for packaging smoke checks', () => {
+    expect(buildNvencSmokeArgs()).toEqual(expect.arrayContaining([
+      'color=c=black:s=256x256:r=30:d=0.54',
+      '-frames:v', '16', '-c:v', 'h264_nvenc', '-preset', 'p4', '-f', 'null', '-',
+    ]));
   });
 
   it('resolves npm to npm.cmd on Windows so spawn does not ENOENT', () => {
@@ -77,7 +144,7 @@ describe('package windows helpers', () => {
     expect(options.name).toBe('Lingji');
     expect(options.icon).toBe('F:/repo/build/icon.ico');
     expect(options.asar).toEqual({
-      unpackDir: '{dist-cli,dist-remotion,vendor/ffmpeg,node_modules/@earendil-works,node_modules/@mariozechner,node_modules/@remotion,node_modules/@rspack,node_modules/esbuild,node_modules/@esbuild,node_modules/@puppeteer,node_modules/puppeteer-core,node_modules/sharp,node_modules/onnxruntime-node,node_modules/ffmpeg-static,node_modules/@ffprobe-installer,node_modules/playwright,node_modules/playwright-core,node_modules/node-pty}',
+      unpackDir: expect.stringContaining('vendor/remotion-browser'),
     });
   });
 

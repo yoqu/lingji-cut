@@ -229,8 +229,10 @@ export function buildRenderPlan(timeline: TimelineData, srt: SrtEntry[], fpsArg?
 
   applyCardTransitions(visual, fps);
 
-  const subtitles: RenderableSubtitle[] = srt.map((e, index) => ({
-    index,
+  const subtitles: RenderableSubtitle[] = srt.map((e) => ({
+    // Preserve the SRT identity. Chunk slicing keeps absolute entries, so array position is
+    // intentionally unstable between chunks while subtitle highlight entryIndex is stable.
+    index: e.index,
     text: e.text,
     startFrame: msToFrames(e.startMs, fps),
     durationFrames: durationFrames(Math.max(1, e.endMs - e.startMs), fps),

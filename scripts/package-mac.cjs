@@ -10,6 +10,7 @@ const {
   listForeignArchPrunePaths,
   shouldStageProjectPath,
 } = require('./package-mac-helpers.cjs');
+const { stageBundledRemotionBrowser } = require('./remotion-browser-runtime.cjs');
 
 const rootDir = path.resolve(__dirname, '..');
 const packageJsonPath = path.join(rootDir, 'package.json');
@@ -19,6 +20,7 @@ const appName = packageJson.productName || packageJson.name;
 const releaseDir = path.join(rootDir, 'release');
 const iconPath = path.join(rootDir, 'build', 'icon.icns');
 const stageRootDir = path.join(rootDir, '.tmp', 'package-stage');
+const remotionBrowserCacheDir = path.join(rootDir, '.tmp', 'remotion-browser-cache');
 const buildOutputs = [
   path.join(rootDir, 'dist', 'index.html'),
   path.join(rootDir, 'dist-electron', 'main.js'),
@@ -153,6 +155,12 @@ async function createStageDirectory(stageDir) {
   await stageNodeModules(stageDir);
   pruneForeignArchBinaries(stageDir);
   ensureNodePtySpawnHelperExecutable(stageDir);
+  await stageBundledRemotionBrowser({
+    platform: 'darwin',
+    arch,
+    stageDir,
+    cacheRoot: remotionBrowserCacheDir,
+  });
 }
 
 if (!supportedArch.has(arch)) {

@@ -1,5 +1,5 @@
 import { AbsoluteFill, Sequence } from 'remotion';
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import type { SrtEntry, TimelineData } from '../types';
 import { buildRenderPlan } from './timeline-to-sequences';
 import { VideoOverlay } from './overlays/VideoOverlay';
@@ -29,6 +29,28 @@ export const MainComposition = memo(function MainComposition({
   cardProjectDir,
   podcastRevision,
 }: MainCompositionProps) {
+  useEffect(() => {
+    // One compact marker per render page lets the main process prove whether ANGLE reached
+    // the real adapter. Browser debug noise is aggregated per chunk and never written per frame.
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+      if (!gl) {
+        console.info('[lingji-gpu] WebGL unavailable');
+        return;
+      }
+      const extension = gl.getExtension('WEBGL_debug_renderer_info') as
+        | { UNMASKED_RENDERER_WEBGL: number }
+        | null;
+      const renderer = extension
+        ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)
+        : gl.getParameter(gl.RENDERER);
+      console.info(`[lingji-gpu] ${String(renderer)}`);
+    } catch (error) {
+      console.info(`[lingji-gpu] probe failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, []);
+
   const plan = useMemo(
     () => buildRenderPlan(timeline, srtEntries, timeline.fps ?? 30),
     [timeline, srtEntries],
