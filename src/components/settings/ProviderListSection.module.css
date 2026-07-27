@@ -171,7 +171,8 @@
   height: auto !important;
   padding: 0 !important;
   background: transparent;
-  color: var(--color-accent, var(--color-text-primary));
+  /* 注意：--color-accent 在 darwin-ui 里桥接为 control-bg（深灰），不能用作文字色 */
+  color: var(--color-system-blue);
   font-size: var(--font-size-md);
   font-weight: 600;
 }
