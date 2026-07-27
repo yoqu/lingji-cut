@@ -90,6 +90,8 @@ import { registerProjectTreeIpc } from './project-tree-ipc';
 import { getVideoImportService } from './video-import/import-service';
 import { resolveDouyinVideoSource } from './video-import/douyin-downloader';
 import type { VideoImportRequest } from '../src/lib/video-import-types';
+import { fetchWechatArticle, materializeWechatArticle } from './article-import/wechat-article';
+import type { WechatArticleMaterializeRequest } from '../src/lib/article-import-types';
 import { createWorkbenchTabContextMenuTemplate } from './workbench-tab-context-menu';
 import { getWindowChromeOptions } from './window-chrome';
 import { getPipelineService, attachTaskProgressBridge } from './pipeline';
@@ -912,6 +914,26 @@ ipcMain.handle('get-video-import-status', async (_event, importId: string) => {
   return videoImportService.getImportStatus(importId);
 });
 
+// 公众号文章抓取：拉取 HTML 并转 Markdown，图片保留远程 URL 供弹窗预览
+ipcMain.handle('fetch-wechat-article', async (_event, url: string) => {
+  writeAppLog('info', 'wechat-import', '抓取公众号文章', url);
+  return fetchWechatArticle(url);
+});
+
+// 公众号文章落地：项目创建后下载图片到 imports/wechat/<articleId>/ 并改写链接
+ipcMain.handle(
+  'materialize-wechat-article',
+  async (event, request: WechatArticleMaterializeRequest) => {
+    writeAppLog('info', 'wechat-import', '落地公众号文章', request.articleId);
+    return materializeWechatArticle({
+      ...request,
+      onProgress: (progress, stepLabel) => {
+        event.sender.send('wechat-article-progress', { progress, stepLabel });
+      },
+    });
+  },
+);
+
 // 渲染端取消 MCP/pipeline 任务（底部进度条的取消按钮）。进度推送走
 // attachTaskProgressBridge 的 `pipeline:task-update`；取消走这条反向通道。
 ipcMain.handle('pipeline:cancel-task', async (_event, taskId: string) => {
@@ -1023,7 +1045,14 @@ ipcMain.handle('read-directory', async (_event, dir: string) => {
   }
 
   async function readDir(dirPath: string, currentDepth: number): Promise<DirectoryEntry[]> {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    // 导入流会先声明 projectDir、首次写盘才建目录，此时按空树处理
+    let entries;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
     const result: DirectoryEntry[] = [];
 
     for (const entry of entries) {

@@ -4,6 +4,7 @@ import {
   FileText,
   FolderOpen,
   FolderSearch,
+  Link2,
   Loader2,
   Upload,
   X,
@@ -23,6 +24,7 @@ import {
   Input,
   Textarea,
 } from '../../ui';
+import { PillGroup } from '../../ui/patterns';
 import { getFileNameFromPath } from '../../lib/utils';
 import {
   AutoModeSection,
@@ -30,7 +32,21 @@ import {
   type AutoModeOption,
 } from './AutoModeSection';
 import type { AutoWorkflowParams } from '../../store/ai';
+import type { WechatArticleMeta } from '../../lib/article-import-types';
 import styles from './ImportScriptDialog.module.css';
+
+/** 抓取成功后随确认回调传出的公众号来源信息，落地阶段据此下载图片 */
+export interface ImportWechatArticleSource {
+  articleId: string;
+  meta: WechatArticleMeta;
+}
+
+export type ImportSourceTab = 'text' | 'wechat';
+
+const SOURCE_TAB_ITEMS = [
+  { value: 'text', label: '粘贴 / 文件' },
+  { value: 'wechat', label: '公众号文章' },
+] satisfies Array<{ value: ImportSourceTab; label: string }>;
 
 export interface ImportDialogSeedInput {
   defaults: AutoWorkflowParams;
@@ -89,7 +105,7 @@ export interface ImportScriptDialogProps {
   busy: boolean;
   errorMessage: string | null;
   onOpenChange: (open: boolean) => void;
-  /** 确认导入：传入父目录、项目名、原稿内容、是否一键成稿、自动模式参数、写稿模型绑定 */
+  /** 确认导入：传入父目录、项目名、原稿内容、是否一键成稿、自动模式参数、写稿模型绑定、公众号来源（非公众号导入为 null） */
   onConfirm: (
     parentDir: string,
     projectName: string,
@@ -97,6 +113,7 @@ export interface ImportScriptDialogProps {
     autoMode: boolean,
     autoParams: AutoWorkflowParams,
     modelBinding: AutoModeModelBinding | null,
+    wechatArticle: ImportWechatArticleSource | null,
   ) => Promise<void> | void;
   /** 一键成稿下拉选项与默认值（由父组件提供） */
   autoModeOptions: {
@@ -116,6 +133,8 @@ export interface ImportScriptDialogProps {
   initialAutoMode?: boolean;
   /** 写稿模板覆盖（如待创作箱用 'rewrite-remix' 二创转述）；模板在 UI 上不暴露，仅落到一键参数 */
   templateIdOverride?: string;
+  /** 打开时激活的来源 Tab（欢迎页「公众号导入」入口传 'wechat'）；缺省 'text' */
+  initialSourceTab?: ImportSourceTab;
 }
 
 export function ImportScriptDialog({
@@ -130,6 +149,7 @@ export function ImportScriptDialog({
   initialParentDir,
   initialAutoMode,
   templateIdOverride,
+  initialSourceTab,
 }: ImportScriptDialogProps) {
   const seed0 = computeImportDialogSeed({
     defaults: autoModeOptions.defaults,
@@ -147,6 +167,10 @@ export function ImportScriptDialog({
   const [isDragging, setIsDragging] = useState(false);
   const [readingFile, setReadingFile] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [sourceTab, setSourceTab] = useState<ImportSourceTab>(initialSourceTab ?? 'text');
+  const [wechatUrl, setWechatUrl] = useState('');
+  const [fetchingWechat, setFetchingWechat] = useState(false);
+  const [wechatArticle, setWechatArticle] = useState<ImportWechatArticleSource | null>(null);
   const [autoMode, setAutoMode] = useState(seed0.autoMode);
   const [autoParams, setAutoParams] = useState<AutoWorkflowParams>(seed0.autoParams);
   const [modelBinding, setModelBinding] = useState<AutoModeModelBinding | null>(seed0.modelBinding);
@@ -173,6 +197,10 @@ export function ImportScriptDialog({
       setIsDragging(false);
       setReadingFile(false);
       setLocalError(null);
+      setSourceTab(initialSourceTab ?? 'text');
+      setWechatUrl('');
+      setFetchingWechat(false);
+      setWechatArticle(null);
       setAutoMode(seed.autoMode);
       setAutoParams(seed.autoParams);
       setModelBinding(seed.modelBinding);
@@ -188,6 +216,7 @@ export function ImportScriptDialog({
     initialParentDir,
     initialAutoMode,
     templateIdOverride,
+    initialSourceTab,
   ]);
 
   const trimmedName = projectName.trim();
@@ -211,6 +240,7 @@ export function ImportScriptDialog({
       const text = await file.text();
       setContent(text);
       setSourceFileName(file.name);
+      setWechatArticle(null);
       // 仅当用户尚未自定义项目名时，用文件名预填
       setProjectName((prev) => (prev.trim() ? prev : stripExtension(file.name)));
     } catch (err) {
@@ -231,8 +261,29 @@ export function ImportScriptDialog({
     setContent(result.content);
     const name = getFileNameFromPath(result.path);
     setSourceFileName(name);
+    setWechatArticle(null);
     setProjectName((prev) => (prev.trim() ? prev : stripExtension(name)));
   }, []);
+
+  const handleFetchWechat = useCallback(async () => {
+    const url = wechatUrl.trim();
+    if (!url) return;
+    setFetchingWechat(true);
+    setLocalError(null);
+    try {
+      const result = await window.electronAPI.fetchWechatArticle(url);
+      setContent(result.markdown);
+      setSourceFileName(
+        `公众号 · ${result.meta.title}${result.imageCount ? `（${result.imageCount} 张配图）` : ''}`,
+      );
+      setWechatArticle({ articleId: result.articleId, meta: result.meta });
+      setProjectName((prev) => (prev.trim() ? prev : result.meta.title));
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : '公众号文章抓取失败');
+    } finally {
+      setFetchingWechat(false);
+    }
+  }, [wechatUrl]);
 
   const handleSelectDir = useCallback(async () => {
     const dir = await window.electronAPI.selectProjectDirectory();
@@ -273,13 +324,32 @@ export function ImportScriptDialog({
   const handleClearSource = useCallback(() => {
     setContent('');
     setSourceFileName(null);
+    setWechatArticle(null);
     setLocalError(null);
   }, []);
 
   const handleConfirm = useCallback(() => {
     if (!canConfirm || !parentDir) return;
-    void onConfirm(parentDir, trimmedName, content, autoMode, autoParams, modelBinding);
-  }, [canConfirm, parentDir, trimmedName, content, autoMode, autoParams, modelBinding, onConfirm]);
+    void onConfirm(
+      parentDir,
+      trimmedName,
+      content,
+      autoMode,
+      autoParams,
+      modelBinding,
+      wechatArticle,
+    );
+  }, [
+    canConfirm,
+    parentDir,
+    trimmedName,
+    content,
+    autoMode,
+    autoParams,
+    modelBinding,
+    wechatArticle,
+    onConfirm,
+  ]);
 
   const previewPath = parentDir && trimmedName ? `${parentDir}/${trimmedName}` : null;
   const displayedError = errorMessage ?? localError;
@@ -291,69 +361,124 @@ export function ImportScriptDialog({
         <DialogHeader>
           <DialogTitle>导入文稿</DialogTitle>
           <DialogDescription>
-            粘贴原稿、拖拽文件或选择 .md / .txt / .html 文件；导入后可启用自动剪辑，或进入工作台手动生成口播稿
+            粘贴原稿、拖拽文件、选择 .md / .txt / .html 文件，或抓取微信公众号文章；导入后可启用自动剪辑，或进入工作台手动生成口播稿
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {/* 文稿来源：textarea + drop zone + 选择文件 */}
-          <Field label="文稿内容">
-            <div
-              className={`${styles.dropZone} ${isDragging ? styles.dropZoneActive : ''}`}
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-            >
-              <Textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                placeholder="在此粘贴或输入原稿内容，也可以拖拽 .md / .txt / .html 文件到这里"
-                rows={8}
-                resize="vertical"
-              />
-              {isDragging && (
-                <div className={styles.dropOverlay}>
-                  <Upload size={28} strokeWidth={1.5} />
-                  <span>松开以载入文件</span>
-                </div>
-              )}
-            </div>
+          {/* 文稿来源切换：粘贴/文件 或 公众号文章链接 */}
+          <PillGroup
+            fullWidth
+            wrap={false}
+            size="sm"
+            items={SOURCE_TAB_ITEMS.map((item) => ({ ...item, disabled: busy || fetchingWechat }))}
+            value={sourceTab}
+            onChange={setSourceTab}
+          />
 
-            <div className={styles.sourceActions}>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleSelectFileClick()}
-                disabled={readingFile}
+          {sourceTab === 'wechat' && (
+            <div style={{ marginTop: 'var(--space-6)' }}>
+              {/* 公众号文章抓取：粘贴链接 → 主进程抓取转 Markdown 回填，图片在创建项目时本地化 */}
+              <Field
+                label="公众号文章链接"
+                hint="粘贴 mp.weixin.qq.com 链接抓取全文；正文图片会在创建项目时自动下载到项目内"
               >
-                {readingFile ? (
-                  <>
-                    <Loader2 size={14} className={styles.spinIcon} />
-                    读取中
-                  </>
-                ) : (
-                  <>
-                    <FileText size={14} strokeWidth={1.7} />
-                    选择文件…
-                  </>
-                )}
-              </Button>
-              {sourceFileName && (
-                <span className={styles.sourceTag}>
-                  <CheckCircle2 size={13} strokeWidth={2} className={styles.sourceTagIcon} />
-                  <span className={styles.sourceTagName}>{sourceFileName}</span>
-                  <button
-                    type="button"
-                    className={styles.sourceTagClear}
-                    onClick={handleClearSource}
-                    aria-label="清除已加载文件"
+                <div className={styles.wechatRow}>
+                  <Input
+                    type="text"
+                    value={wechatUrl}
+                    onChange={(e) => setWechatUrl(e.target.value)}
+                    placeholder="https://mp.weixin.qq.com/s/..."
+                    leftIcon={<Link2 size={16} strokeWidth={1.5} />}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleFetchWechat();
+                    }}
+                  />
+                  <Button
+                    variant="primary"
+                    onClick={() => void handleFetchWechat()}
+                    disabled={!wechatUrl.trim() || fetchingWechat || busy}
                   >
-                    <X size={12} strokeWidth={2} />
-                  </button>
-                </span>
-              )}
+                    {fetchingWechat ? (
+                      <>
+                        <Loader2 size={14} className={styles.spinIcon} />
+                        抓取中
+                      </>
+                    ) : (
+                      '抓取'
+                    )}
+                  </Button>
+                </div>
+              </Field>
             </div>
-          </Field>
+          )}
+
+          {/* 文稿内容：text 来源支持拖拽/选文件；wechat 来源作为抓取结果预览（可编辑） */}
+          <div style={{ marginTop: 'var(--space-6)' }}>
+            <Field label={sourceTab === 'wechat' ? '文稿内容（抓取后可编辑）' : '文稿内容'}>
+              <div
+                className={`${styles.dropZone} ${isDragging ? styles.dropZoneActive : ''}`}
+                onDragEnter={sourceTab === 'text' ? handleDragEnter : undefined}
+                onDragLeave={sourceTab === 'text' ? handleDragLeave : undefined}
+                onDragOver={sourceTab === 'text' ? handleDragOver : undefined}
+                onDrop={sourceTab === 'text' ? handleDrop : undefined}
+              >
+                <Textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  placeholder={
+                    sourceTab === 'wechat'
+                      ? '抓取公众号文章后，转换出的 Markdown 会显示在这里，可直接编辑'
+                      : '在此粘贴或输入原稿内容，也可以拖拽 .md / .txt / .html 文件到这里'
+                  }
+                  rows={8}
+                  resize="vertical"
+                />
+                {isDragging && (
+                  <div className={styles.dropOverlay}>
+                    <Upload size={28} strokeWidth={1.5} />
+                    <span>松开以载入文件</span>
+                  </div>
+                )}
+              </div>
+
+              <div className={styles.sourceActions}>
+                {sourceTab === 'text' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void handleSelectFileClick()}
+                    disabled={readingFile}
+                  >
+                    {readingFile ? (
+                      <>
+                        <Loader2 size={14} className={styles.spinIcon} />
+                        读取中
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={14} strokeWidth={1.7} />
+                        选择文件…
+                      </>
+                    )}
+                  </Button>
+                )}
+                {sourceFileName && (
+                  <span className={styles.sourceTag}>
+                    <CheckCircle2 size={13} strokeWidth={2} className={styles.sourceTagIcon} />
+                    <span className={styles.sourceTagName}>{sourceFileName}</span>
+                    <button
+                      type="button"
+                      className={styles.sourceTagClear}
+                      onClick={handleClearSource}
+                      aria-label="清除已加载文件"
+                    >
+                      <X size={12} strokeWidth={2} />
+                    </button>
+                  </span>
+                )}
+              </div>
+            </Field>
+          </div>
 
           {/* 项目名 */}
           <div style={{ marginTop: 'var(--space-6)' }}>

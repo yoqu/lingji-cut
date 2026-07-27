@@ -1,4 +1,4 @@
-import { Copy, FileUp, RefreshCw, Search, Sparkles, Square, User } from 'lucide-react';
+import { Copy, FileUp, Newspaper, RefreshCw, Search, Sparkles, Square, User } from 'lucide-react';
 import {
   selectAutoWorkbenchStage,
   selectEffectiveWorkbenchStage,
@@ -17,6 +17,7 @@ import styles from './QuickActionBar.module.css';
 interface QuickActionBarProps {
   onImportText: () => void;
   onImportDouyin: () => void;
+  onImportWechat: () => void;
 }
 
 const STAGE_OPTIONS: WorkbenchStage[] = [
@@ -28,7 +29,7 @@ const STAGE_OPTIONS: WorkbenchStage[] = [
 ];
 
 /** 内容区顶部快捷操作栏：根据真实文件状态派生阶段，并允许用户手动校准显示阶段 */
-export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarProps) {
+export function QuickActionBar({ onImportText, onImportDouyin, onImportWechat }: QuickActionBarProps) {
   const workbenchStage = useScriptStore(selectAutoWorkbenchStage);
   const effectiveWorkbenchStage = useScriptStore(selectEffectiveWorkbenchStage);
   const originalReadiness = useScriptStore(selectOriginalFileReadiness);
@@ -194,6 +195,10 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
           <FileUp size={12} />
           导入原稿
         </button>
+        <button type="button" className={styles.btn} onClick={onImportWechat}>
+          <Newspaper size={12} />
+          公众号文章
+        </button>
         <button type="button" className={styles.btn} onClick={onImportDouyin}>
           <FileUp size={12} />
           导入媒体
@@ -292,6 +297,10 @@ export function QuickActionBar({ onImportText, onImportDouyin }: QuickActionBarP
           <button type="button" className={styles.btn} onClick={onImportText}>
             <FileUp size={12} />
             重新导入
+          </button>
+          <button type="button" className={styles.btn} onClick={onImportWechat}>
+            <Newspaper size={12} />
+            公众号文章
           </button>
           <button type="button" className={styles.btn} onClick={onImportDouyin}>
             <FileUp size={12} />

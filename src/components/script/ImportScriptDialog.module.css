@@ -128,3 +128,14 @@
 .spinIcon {
   animation: spin 1s linear infinite;
 }
+
+.wechatRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.wechatRow > :first-child {
+  flex: 1;
+  min-width: 0;
+}

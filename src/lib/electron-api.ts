@@ -41,6 +41,11 @@ import type {
   VideoImportProgress,
   VideoImportRequest,
 } from './video-import-types';
+import type {
+  WechatArticleFetchResult,
+  WechatArticleMaterializeRequest,
+  WechatArticleMaterializeResult,
+} from './article-import-types';
 import type { VideoImportTaskSnapshot } from '../../electron/video-import/types';
 import type { PipelineTask } from '../../electron/pipeline/types';
 import type { AgentFeedEvent } from '../../electron/pipeline/agent-feed';
@@ -648,6 +653,15 @@ export interface ElectronAPI {
   ) => () => void;
   onDouyinImportProgress: (
     callback: (snapshot: VideoImportTaskSnapshot) => void,
+  ) => () => void;
+  /** 公众号文章抓取：转 Markdown 预览，图片保留远程 URL */
+  fetchWechatArticle: (url: string) => Promise<WechatArticleFetchResult>;
+  /** 公众号文章落地：下载图片到 imports/wechat/<articleId>/ 并改写链接 */
+  materializeWechatArticle: (
+    request: WechatArticleMaterializeRequest,
+  ) => Promise<WechatArticleMaterializeResult>;
+  onWechatArticleProgress: (
+    callback: (update: { progress: number; stepLabel: string }) => void,
   ) => () => void;
   startWatching: (dir: string) => Promise<void>;
   stopWatching: () => Promise<void>;

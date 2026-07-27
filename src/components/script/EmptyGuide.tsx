@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { ArrowDownToLine, FilePlus2, FolderOpen, Import, PenSquare, Sparkles, Search } from 'lucide-react';
+import { ArrowDownToLine, FilePlus2, FolderOpen, Import, Newspaper, PenSquare, Sparkles, Search } from 'lucide-react';
 import { useScriptStore } from '../../store/script';
 import { Button } from '../../ui';
 
@@ -8,6 +8,7 @@ interface EmptyGuideProps {
   onSelectProjectDir: () => void;
   onImportText: () => void;
   onImportDouyin: () => void;
+  onImportWechat: () => void;
   onCreateBlank: () => void;
   onDropFile?: (relativePath: string) => void;
 }
@@ -24,6 +25,7 @@ export function EmptyGuide({
   onSelectProjectDir,
   onImportText,
   onImportDouyin,
+  onImportWechat,
   onCreateBlank,
   onDropFile,
 }: EmptyGuideProps) {
@@ -156,7 +158,7 @@ export function EmptyGuide({
           {dragOver
             ? '文件内容将被写入 original.md'
             : hasProjectDir
-              ? '可以导入现有文本文件，从左侧文件树拖入，或直接创建一个空白 original.md。'
+              ? '可以导入现有文本文件、抓取公众号文章，从左侧文件树拖入，或直接创建一个空白 original.md。'
               : '工作目录会承载 original.md、script.md 和脚本状态文件。选择后即可导入原稿。'}
         </div>
       </div>
@@ -180,6 +182,14 @@ export function EmptyGuide({
               onClick={onImportText}
             >
               导入文本文件
+            </Button>
+            <Button
+              variant="outline"
+              size="lg"
+              leftIcon={<Newspaper size={16} />}
+              onClick={onImportWechat}
+            >
+              公众号文章
             </Button>
             <Button
               variant="outline"

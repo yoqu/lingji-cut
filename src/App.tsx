@@ -30,6 +30,8 @@ import { ImportProjectDialog } from './components/ImportProjectDialog';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import type { ImportProjectResult } from './lib/project-import-types';
 import type { VideoImportSourceInput } from './lib/video-import-types';
+import type { ImportWechatArticleSource } from './components/script/ImportScriptDialog';
+import { materializeWechatArticleWithProgress } from './lib/wechat-import';
 import { prefersReducedMotion } from './ui/lib/animation-config';
 import { WorkspaceTabs } from './components/WorkspaceTabs';
 import { PublishWorkbench } from './components/publish/PublishWorkbench';
@@ -639,6 +641,7 @@ export default function App() {
       autoMode: boolean,
       autoParams: AutoWorkflowParams,
       modelBinding: { providerId: string; model: string } | null,
+      wechatArticle: ImportWechatArticleSource | null = null,
     ) => {
       const trimmedName = projectName.trim();
       if (!parentDir || !trimmedName) {
@@ -647,6 +650,17 @@ export default function App() {
       const projectDir = `${parentDir}/${trimmedName}`;
 
       await bootstrapImportedProject(projectDir);
+
+      // 公众号来源：先把正文中的远程图片下载到项目目录并改写为相对路径
+      if (wechatArticle) {
+        content = await materializeWechatArticleWithProgress({
+          projectDir,
+          articleId: wechatArticle.articleId,
+          meta: wechatArticle.meta,
+          markdown: content,
+        });
+      }
+
       // 暂存原稿，进入工作台后由 useEffect 落盘并起飞 AI 写稿
       useScriptStore.getState().setPendingImportedScript({ content });
 

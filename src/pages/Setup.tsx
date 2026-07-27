@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, FileText, Video, FolderOpen, FolderInput, Heart, MessageCircle, Send } from 'lucide-react';
+import { Plus, FileText, Newspaper, Video, FolderOpen, FolderInput, Heart, MessageCircle, Send } from 'lucide-react';
 import type { RecentProjectEntry } from '../lib/electron-api';
 import type { VideoImportSourceInput } from '../lib/video-import-types';
 import { ProjectList } from '../components/ProjectList';
-import { ImportScriptDialog } from '../components/script/ImportScriptDialog';
+import {
+  ImportScriptDialog,
+  type ImportSourceTab,
+  type ImportWechatArticleSource,
+} from '../components/script/ImportScriptDialog';
 import { DouyinImportDialog } from '../components/script/DouyinImportDialog';
 import { SonarInboxPanel } from '../components/setup/SonarInboxPanel';
 import {
@@ -31,7 +35,7 @@ interface SetupProps {
   recentProjects: RecentProjectEntry[];
   onOpenRecentProject: (projectDir: string) => Promise<void>;
   onRemoveRecentProject?: (projectDir: string) => Promise<void> | void;
-  /** 文稿导入完成回调：传入父目录、项目名、原稿内容、是否一键成稿、自动模式参数、写稿模型绑定 */
+  /** 文稿导入完成回调：传入父目录、项目名、原稿内容、是否一键成稿、自动模式参数、写稿模型绑定、公众号来源 */
   onImportScript: (
     parentDir: string,
     projectName: string,
@@ -39,6 +43,7 @@ interface SetupProps {
     autoMode: boolean,
     autoParams: AutoWorkflowParams,
     modelBinding: AutoModeModelBinding | null,
+    wechatArticle: ImportWechatArticleSource | null,
   ) => Promise<void>;
   onOpenSettings: () => void;
   /** 媒体导入完成回调：传入父目录、标题、导入源（抖音链接 / 本地视频 / 本地音频）、是否一键成稿、自动模式参数、写稿模型绑定 */
@@ -75,6 +80,8 @@ export function Setup({
   const [contactOpen, setContactOpen] = useState(false);
   const [importScriptCreating, setImportScriptCreating] = useState(false);
   const [importScriptError, setImportScriptError] = useState<string | null>(null);
+  // 导入文稿弹窗打开时激活的来源 Tab（「公众号导入」入口直达 wechat Tab）
+  const [importScriptSourceTab, setImportScriptSourceTab] = useState<ImportSourceTab>('text');
   // ── 待创作箱触发的预填项（非空表示当前弹窗服务于某条 inbox 素材）──
   const [inboxDraftItem, setInboxDraftItem] = useState<SonarInboxItem | null>(null);
 
@@ -152,6 +159,16 @@ export function Setup({
     setInboxDraftItem(null);
     setImportScriptError(null);
     setImportScriptCreating(false);
+    setImportScriptSourceTab('text');
+    setImportScriptOpen(true);
+  }, []);
+
+  // 公众号导入：同一弹窗，直达公众号文章 Tab
+  const handleOpenWechatImport = useCallback(() => {
+    setInboxDraftItem(null);
+    setImportScriptError(null);
+    setImportScriptCreating(false);
+    setImportScriptSourceTab('wechat');
     setImportScriptOpen(true);
   }, []);
 
@@ -167,11 +184,20 @@ export function Setup({
       autoMode: boolean,
       autoParams: AutoWorkflowParams,
       modelBinding: AutoModeModelBinding | null,
+      wechatArticle: ImportWechatArticleSource | null,
     ) => {
       setImportScriptCreating(true);
       setImportScriptError(null);
       try {
-        await onImportScript(parentDir, projectNameInput, content, autoMode, autoParams, modelBinding);
+        await onImportScript(
+          parentDir,
+          projectNameInput,
+          content,
+          autoMode,
+          autoParams,
+          modelBinding,
+          wechatArticle,
+        );
         // 来自待创作箱：项目已创建并起飞流水线 → 标记该收件项为「已生成」并记录项目路径，避免重复创作。
         if (inboxDraftItem) {
           void window.electronAPI
@@ -243,6 +269,17 @@ export function Setup({
               <FileText size={22} strokeWidth={1.5} />
             </div>
             <span className={styles.quickItemLabel}>导入文稿</span>
+          </button>
+          {/* 公众号导入入口：抓取 mp.weixin.qq.com 文章转 Markdown（含图片下载）创建项目 */}
+          <button
+            type="button"
+            className={styles.quickItem}
+            onClick={handleOpenWechatImport}
+          >
+            <div className={styles.quickItemIcon}>
+              <Newspaper size={22} strokeWidth={1.5} />
+            </div>
+            <span className={styles.quickItemLabel}>公众号导入</span>
           </button>
           {/* 导入媒体入口：抖音链接 / 本地视频 / 本地音频统一多 Tab 弹窗，自动转录创建项目 */}
           <button
@@ -329,6 +366,7 @@ export function Setup({
         initialProjectName={inboxDraftItem ? deriveProjectName(inboxDraftItem) : undefined}
         initialAutoMode={inboxDraftItem ? true : undefined}
         templateIdOverride={inboxDraftItem ? 'rewrite-remix' : undefined}
+        initialSourceTab={importScriptSourceTab}
       />
 
       {/* ── 导入媒体弹窗：抖音 / 本地视频 / 本地音频统一入口，create 模式创建项目 ── */}

@@ -18,6 +18,11 @@ import type { AICard, AISegment, AISettings, PromptBindingMap } from '../src/typ
 import type { MotionBible } from '../src/types/motion';
 import type { ConversationAPI } from '../src/types/conversation';
 import type { VideoImportRequest } from '../src/lib/video-import-types';
+import type {
+  WechatArticleFetchResult,
+  WechatArticleMaterializeRequest,
+  WechatArticleMaterializeResult,
+} from '../src/lib/article-import-types';
 import type { VideoImportTaskSnapshot } from './video-import/types';
 import type { PipelineTask } from './pipeline/types';
 import type { AgentFeedEvent } from './pipeline/agent-feed';
@@ -456,6 +461,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_event: unknown, snapshot: VideoImportTaskSnapshot) => callback(snapshot);
     ipcRenderer.on('douyin-import-progress', handler);
     return () => ipcRenderer.removeListener('douyin-import-progress', handler);
+  },
+  // 公众号文章抓取（Markdown 预览，图片留远程 URL）
+  fetchWechatArticle: (url: string) =>
+    ipcRenderer.invoke('fetch-wechat-article', url) as Promise<WechatArticleFetchResult>,
+  // 公众号文章落地（下载图片到项目目录并改写链接）
+  materializeWechatArticle: (request: WechatArticleMaterializeRequest) =>
+    ipcRenderer.invoke(
+      'materialize-wechat-article',
+      request,
+    ) as Promise<WechatArticleMaterializeResult>,
+  onWechatArticleProgress: (
+    callback: (update: { progress: number; stepLabel: string }) => void,
+  ) => {
+    const handler = (_event: unknown, update: { progress: number; stepLabel: string }) =>
+      callback(update);
+    ipcRenderer.on('wechat-article-progress', handler);
+    return () => ipcRenderer.removeListener('wechat-article-progress', handler);
   },
   startWatching: (dir: string) => ipcRenderer.invoke('start-watching', dir),
   stopWatching: () => ipcRenderer.invoke('stop-watching'),

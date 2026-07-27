@@ -36,6 +36,9 @@ import { waitForValue } from '../lib/wait-for-value';
 import { AnnotationList } from '../components/script/AnnotationList';
 import { ConflictDialog } from '../components/script/ConflictDialog';
 import { DouyinImportDialog } from '../components/script/DouyinImportDialog';
+import { WechatImportDialog } from '../components/script/WechatImportDialog';
+import type { ImportWechatArticleSource } from '../components/script/ImportScriptDialog';
+import { materializeWechatArticleWithProgress } from '../lib/wechat-import';
 import { EmptyGuide } from '../components/script/EmptyGuide';
 import { FileTabs } from '../components/script/FileTabs';
 import { ScriptFileTreePanel } from '../components/script/ScriptFileTreePanel';
@@ -175,6 +178,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
   const [closedTabs, setClosedTabs] = useState<Set<string>>(new Set());
   const [thinkingText, setThinkingText] = useState('');
   const [douyinImportOpen, setDouyinImportOpen] = useState(false);
+  const [wechatImportOpen, setWechatImportOpen] = useState(false);
   const [douyinImportBusy, setDouyinImportBusy] = useState(false);
   const [douyinImportError, setDouyinImportError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -725,6 +729,39 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
     setScriptText,
     setWorkspaceFiles,
   ]);
+
+  // 公众号文章导入（已有项目）：落地图片到 imports/wechat/ 后把最终 Markdown 写入 original.md
+  const handleConfirmWechatImport = useCallback(
+    async (markdown: string, source: ImportWechatArticleSource) => {
+      const dir = await ensureProjectDirectory();
+      if (!dir) throw new Error('请先选择工作目录');
+
+      const finalMarkdown = await materializeWechatArticleWithProgress({
+        projectDir: dir,
+        articleId: source.articleId,
+        meta: source.meta,
+        markdown,
+      });
+      setOriginalText(finalMarkdown);
+      setScriptText('');
+      setAnnotations([]);
+      setWorkspaceFiles({ hasOriginalFile: true, hasScriptFile: false });
+      openFileTab('original.md');
+      setFileDirty('original.md', false);
+      await window.electronAPI.saveScriptFile(dir, 'original.md', finalMarkdown);
+      await refreshFileTree(dir);
+    },
+    [
+      ensureProjectDirectory,
+      refreshFileTree,
+      setAnnotations,
+      setFileDirty,
+      openFileTab,
+      setOriginalText,
+      setScriptText,
+      setWorkspaceFiles,
+    ],
+  );
 
   const handleCreateBlank = useCallback(async () => {
     const dir = await ensureProjectDirectory();
@@ -1855,6 +1892,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                 setDouyinImportError(null);
                 setDouyinImportOpen(true);
               }}
+              onImportWechat={() => setWechatImportOpen(true)}
             />
           )}
           {operationError ? (
@@ -1925,6 +1963,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                     setDouyinImportError(null);
                     setDouyinImportOpen(true);
                   }}
+                  onImportWechat={() => setWechatImportOpen(true)}
                   onCreateBlank={() => {
                     void handleCreateBlank();
                   }}
@@ -2155,6 +2194,7 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
                     setDouyinImportError(null);
                     setDouyinImportOpen(true);
                   }}
+                  onImportWechat={() => setWechatImportOpen(true)}
                   onCreateBlank={() => {
                     void handleCreateBlank();
                   }}
@@ -2215,6 +2255,11 @@ export function ScriptWorkbench({ onBack, onNavigateToEditor, setPage }: ScriptW
           }
         }}
         onSubmit={handleImportMediaSource}
+      />
+      <WechatImportDialog
+        open={wechatImportOpen}
+        onOpenChange={setWechatImportOpen}
+        onConfirm={handleConfirmWechatImport}
       />
     </AlertProvider>
   );

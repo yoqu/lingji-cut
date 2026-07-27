@@ -99,6 +99,7 @@ npm run dist:mac     # 构建并打包 macOS .app
 - `covers/`
 - `ai-cards/`
 - `imports/douyin/<videoId>/`
+- `imports/wechat/<articleId>/`
 - `configs/prompts/`
 
 ## Electron IPC 约束
