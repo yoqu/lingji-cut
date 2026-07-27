@@ -8,6 +8,7 @@ import { resolveAssetSrc } from '../asset-src';
 import { useIsRendering } from '../use-is-rendering';
 import { resolveAICardRenderPlan } from '../ai-card-render-plan';
 import { isMotionAssetUnderlay, motionAssetStyle } from '../../lib/motion-asset-layer';
+import { kenBurnsStyle } from '../ken-burns';
 
 /** 卡片内容不可用（媒体未生成 / 缺编译产物）时的通用降级占位。 */
 function CardPlaceholder({ title }: { title?: string }) {
@@ -162,7 +163,7 @@ export function AICardOverlay({
     }
     return (
       <AbsoluteFill style={wrapper}>
-        <Img src={src} style={mediaStyle} />
+        <Img src={src} style={{ ...mediaStyle, ...kenBurnsStyle(frame, durationFrames, overlay.id) }} />
       </AbsoluteFill>
     );
   }

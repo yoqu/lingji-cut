@@ -6,11 +6,12 @@ import {
   isDirectorBgmEnabled,
 } from '../../lib/director-audio-options';
 import styles from './DirectorPlanEditor.module.css';
+import { CARRIER_META, STORYBOARD_CARRIERS } from '../../lib/motion-storyboard';
 
 const CARRIERS = [
-  'data-hero', 'comparison', 'table', 'trend', 'list-build', 'process', 'quote', 'concept',
-  'timeline', 'matrix', 'funnel', 'network', 'before-after', 'stacked-composition', 'image',
-].map((value) => ({ value, label: value }));
+  ...STORYBOARD_CARRIERS.map((value) => ({ value, label: `${CARRIER_META[value].label} ${value}` })),
+  { value: 'image', label: '图片 image' },
+];
 
 const PURPOSES = [
   ['context', '建立语境'], ['explain', '解释'], ['compare', '对比'], ['evidence', '证据'],

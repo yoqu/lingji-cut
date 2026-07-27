@@ -26,14 +26,14 @@ describe('AICardInspector · 分镜', () => {
     const motionCard: AICard = {
       id: 'card-direction',
       segmentId: 'segment-1',
-      type: 'summary',
+      type: 'motion',
       title: 'Motion 卡片',
       content: '人工智能正在改变我们的创作方式。',
       startMs: 0,
       endMs: 45_000,
       displayDurationMs: 5_000,
       displayMode: 'fullscreen',
-      template: 'summary-default',
+      template: 'motion-default',
       enabled: true,
       style: baseCardStyle,
     };
@@ -75,6 +75,20 @@ describe('AICardInspector · 分镜', () => {
 
     expect(onGenerateAnimationDirection).toHaveBeenCalledTimes(1);
 
+    // 生成结果回填结构化编辑器（claim 输入框）。
+    const claimInput = Array.from(container.querySelectorAll('input')).find(
+      (el) => el.value === 'AI 改变创作',
+    );
+    expect(claimInput).toBeTruthy();
+
+    // JSON 源码默认折叠，展开后可见完整分镜 JSON。
+    const jsonToggle = Array.from(container.querySelectorAll('button')).find((el) =>
+      (el.textContent ?? '').includes('JSON 源码'),
+    );
+    expect(jsonToggle).toBeTruthy();
+    await act(async () => {
+      jsonToggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
     const textarea = Array.from(container.querySelectorAll('textarea')).find(
       (el) => el.value === generated,
     );
@@ -90,14 +104,14 @@ describe('AICardInspector · 分镜', () => {
     const motionCard: AICard = {
       id: 'card-motion',
       segmentId: 'segment-1',
-      type: 'summary',
+      type: 'motion',
       title: 'Motion 卡片',
       content: '旧卡片内容',
       startMs: 0,
       endMs: 5_000,
       displayDurationMs: 5_000,
       displayMode: 'fullscreen',
-      template: 'summary-default',
+      template: 'motion-default',
       enabled: true,
       style: baseCardStyle,
       renderMode: 'motion-card',

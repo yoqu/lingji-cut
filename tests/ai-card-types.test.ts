@@ -3,6 +3,7 @@ import {
   isAICardType,
   isMediaContent,
   isMediaCardType,
+  normalizeAICardType,
   buildAICardOverlayData,
   type AICard,
   type MediaCardContent,
@@ -17,17 +18,26 @@ describe('cards.animation prompt kind', () => {
 });
 
 describe('AICardType extension', () => {
-  it('image 与 video 是合法的 AICardType', () => {
+  it('仅 motion/image/video 是合法的 AICardType', () => {
+    expect(isAICardType('motion')).toBe(true);
     expect(isAICardType('image')).toBe(true);
     expect(isAICardType('video')).toBe(true);
-    expect(isAICardType('summary')).toBe(true);
+    expect(isAICardType('summary')).toBe(false);
     expect(isAICardType('foo')).toBe(false);
+  });
+
+  it('normalizeAICardType 把旧文字分类迁移为 motion', () => {
+    for (const legacy of ['summary', 'data', 'insight', 'chapter', 'quote']) {
+      expect(normalizeAICardType(legacy)).toBe('motion');
+    }
+    expect(normalizeAICardType('image')).toBe('image');
+    expect(normalizeAICardType('foo')).toBe(null);
   });
 
   it('isMediaCardType 仅对 image/video 为 true', () => {
     expect(isMediaCardType('image')).toBe(true);
     expect(isMediaCardType('video')).toBe(true);
-    expect(isMediaCardType('summary')).toBe(false);
+    expect(isMediaCardType('motion')).toBe(false);
   });
 
   it('isMediaContent 检测 mediaType + aspectRatio + generationStatus', () => {

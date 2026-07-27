@@ -1,4 +1,4 @@
-import { STORYBOARD_BEAT_ROLES, type MotionStoryboard, type StoryboardBeat } from '../../lib/motion-storyboard';
+import { BEAT_ROLE_LABELS, STORYBOARD_BEAT_ROLES, type MotionStoryboard, type StoryboardBeat } from '../../lib/motion-storyboard';
 import { Button, Select, Textarea, type SelectOption } from '../../ui';
 import { AppIcon } from '../AppIcon';
 import { CuePicker, type StoryboardCueOption } from './CuePicker';
@@ -6,7 +6,7 @@ import styles from './StoryboardEditor.module.css';
 
 const ROLE_OPTIONS: SelectOption[] = STORYBOARD_BEAT_ROLES.map((role) => ({
   value: role,
-  label: role,
+  label: BEAT_ROLE_LABELS[role],
 }));
 
 export function BeatList({
@@ -31,7 +31,7 @@ export function BeatList({
             value={beat.role ?? ''}
             options={ROLE_OPTIONS}
             className={styles.beatRole}
-            placeholder="role"
+            placeholder="角色"
             onChange={(event) => onPatchBeat(index, { role: event.target.value as StoryboardBeat['role'] })}
           />
           <CuePicker
@@ -39,7 +39,7 @@ export function BeatList({
             cueCount={cueCount}
             cueOptions={cueOptions}
             className={styles.beatCue}
-            placeholder={index === 0 ? 'null' : 'cue'}
+            placeholder={index === 0 ? '入场' : '锚点'}
             onChange={(cue) => onPatchBeat(index, { cue })}
           />
           <Textarea
@@ -48,7 +48,7 @@ export function BeatList({
             resize="none"
             value={beat.adds}
             className={styles.beatText}
-            placeholder="adds"
+            placeholder="本拍新增的画面内容"
             onChange={(event) => onPatchBeat(index, { adds: event.target.value })}
           />
           <Button

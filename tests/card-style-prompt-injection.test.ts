@@ -36,7 +36,7 @@ describe('提示词风格占位符', () => {
 });
 
 describe('全部预设的 motionTokens 结构合法', () => {
-  const AMBIENTS = ['none', 'grid', 'orbs', 'hairline', 'grain'];
+  const AMBIENTS = ['none', 'grid', 'orbs', 'hairline', 'hairline-grid', 'grain'];
   const CAMERAS = ['push', 'pull', 'pan', 'still'];
   const SURFACES = ['none', 'glass', 'panel'];
   const EASINGS = ['crisp', 'calm', 'bouncy'];

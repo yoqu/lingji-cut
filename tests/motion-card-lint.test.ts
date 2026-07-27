@@ -174,6 +174,48 @@ export default function Card({ cues = [] }) {
     expect(lintMotionCardTsx(noStage).ok).toBe(true);
   });
 
+  it('标注 / 运镜的用量与一致性闸门', () => {
+    const card = (body: string, stage = '<CardStage tokens={TOKENS}>') => `import { CardStage, SafeLayout, MotionSlot, Annotate, useBeats, Kicker, StatHero } from '@lingji/motion-kit';
+const TOKENS = { palette: { bg: '#111', ink: '#fff', muted: '#999', accent: '#08f' } };
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 1, 2]);
+  return ${stage}<SafeLayout variant="title-hero">
+    <MotionSlot name="header"><Kicker text="标题" beat={beats[0]} /></MotionSlot>
+    <MotionSlot name="main">${body}</MotionSlot>
+  </SafeLayout></CardStage>;
+}`;
+    // 2 个标注放行，3 个打回
+    const two = card('<Annotate kind="circle" beat={beats[1]}><Annotate kind="box" beat={beats[2]}><StatHero value={42} beat={beats[1]} /></Annotate></Annotate>');
+    expect(lintMotionCardTsx(two).issues.map((i) => i.code)).not.toContain('too-many-annotations');
+    const three = two.replace('<Annotate kind="circle"', '<Annotate kind="underline" beat={beats[1]}><Annotate kind="circle"').replace('</Annotate></Annotate>', '</Annotate></Annotate></Annotate>');
+    expect(lintMotionCardTsx(three).issues.map((i) => i.code)).toContain('too-many-annotations');
+
+    // CardStage layout 必须与 SafeLayout variant 同源
+    const mismatch = card(
+      '<StatHero value={42} beat={beats[1]} />',
+      `<CardStage tokens={TOKENS} layout="single-focus" shots={[{ beat: beats[1], move: 'focus', target: 'main' }]}>`,
+    );
+    expect(lintMotionCardTsx(mismatch).issues.map((i) => i.code)).toContain('camera-layout-mismatch');
+    const matched = mismatch.replace('layout="single-focus"', 'layout="title-hero"');
+    expect(lintMotionCardTsx(matched).issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+
+    // 声明 shots 却漏 layout 只警告
+    const noLayout = card(
+      '<StatHero value={42} beat={beats[1]} />',
+      `<CardStage tokens={TOKENS} shots={[{ beat: beats[1], move: 'push-in' }]}>`,
+    );
+    const noLayoutIssues = lintMotionCardTsx(noLayout).issues;
+    expect(noLayoutIssues.map((i) => i.code)).toContain('camera-missing-layout');
+    expect(noLayoutIssues.filter((i) => i.severity === 'error')).toHaveLength(0);
+
+    // 运镜超过 2 次打回
+    const tooMany = card(
+      '<StatHero value={42} beat={beats[1]} />',
+      `<CardStage tokens={TOKENS} layout="title-hero" shots={[{ beat: beats[0], move: 'push-in' }, { beat: beats[1], move: 'pull-out' }, { beat: beats[2], move: 'pan-left' }]}>`,
+    );
+    expect(lintMotionCardTsx(tooMany).issues.map((i) => i.code)).toContain('too-many-camera-shots');
+  });
+
   it('formatLintIssues 产出编号修复指令', () => {
     const r = lintMotionCardTsx('');
     expect(formatLintIssues(r.issues)).toMatch(/^1\. \[error\]/);

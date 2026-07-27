@@ -11,9 +11,22 @@ describe('buildMotionProductionPlan', () => {
       ],
       cards: [
         {
-          id: 'card-1', segmentId: 'topic-part-1', type: 'quote', title: '第一镜', content: '',
+          id: 'card-1', segmentId: 'topic-part-1', type: 'motion', title: '第一镜', content: '',
           startMs: 0, endMs: 6_000, displayDurationMs: 6_000, displayMode: 'fullscreen',
           template: 'default', enabled: true, style: { primaryColor: '#fff', backgroundColor: '#111', fontSize: 42 },
+          motionCard: {
+            compiledAt: 1, prompt: '', retryCount: 0,
+            storyboard: {
+              claim: '第一镜', carrier: 'quote', scene: '',
+              beats: [
+                { cue: null, kind: 'build', role: 'anticipation', adds: '' },
+                { cue: 0, kind: 'build', role: 'reveal', adds: '' },
+                { cue: 1, kind: 'accent', role: 'emphasis', adds: '' },
+                { cue: 2, kind: 'build', role: 'hold', adds: '' },
+                { cue: 3, kind: 'build', role: 'resolve', adds: '' },
+              ],
+            },
+          },
         },
         {
           id: 'card-2', segmentId: 'topic-part-2', type: 'motion', title: '第二镜', content: '',
@@ -57,7 +70,7 @@ describe('buildMotionProductionPlan', () => {
     const cards = segments.map((segment, index) => ({
       id: `card-${index + 1}`,
       segmentId: segment.id,
-      type: index % 2 === 0 ? 'data' as const : 'motion' as const,
+      type: 'motion' as const,
       title: segment.title,
       content: '',
       startMs: segment.startMs,

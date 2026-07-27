@@ -139,19 +139,30 @@ describe('AICardList', () => {
         cards={[
           {
             id: 'card-1',
-            type: 'summary',
+            type: 'motion',
             title: '本期要点',
             content: '重点内容',
             startMs: 0,
             endMs: 45_000,
             displayDurationMs: 5_000,
             displayMode: 'fullscreen',
-            template: 'summary-default',
+            template: 'motion-default',
             enabled: true,
             style: {
               primaryColor: '#6366f1',
               backgroundColor: '#0f172a',
               fontSize: 48,
+            },
+            motionCard: {
+              compiledAt: 1,
+              prompt: '',
+              retryCount: 0,
+              storyboard: {
+                claim: '本期要点',
+                carrier: 'concept',
+                scene: '',
+                beats: [{ cue: null, kind: 'build', adds: '' }],
+              },
             },
           },
         ]}
@@ -168,11 +179,11 @@ describe('AICardList', () => {
     );
 
     expect(html).toContain('data-ai-card-list="true"');
-    expect(html).toContain('data-ai-card-type="summary"');
+    expect(html).toContain('data-ai-card-type="motion"');
     expect(html).toContain('本期要点');
     expect(html).toContain('重点内容');
     expect(html).toContain('type="checkbox"');
-    expect(html).toContain('摘要');
+    expect(html).toContain('概念');
     expect(html).toContain('data-ai-card-copy="true"');
     expect(html).not.toContain('aria-label="删除 本期要点"');
   });
@@ -249,14 +260,14 @@ describe('AICardList', () => {
         cards={[
           {
             id: 'card-1',
-            type: 'summary',
+            type: 'motion',
             title: '本期要点',
             content: '重点内容',
             startMs: 0,
             endMs: 45_000,
             displayDurationMs: 5_000,
             displayMode: 'fullscreen',
-            template: 'summary-default',
+            template: 'motion-default',
             enabled: true,
             style: baseCardStyle,
           },

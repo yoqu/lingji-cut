@@ -107,6 +107,8 @@ export type MotionBibleIssueSeverity = 'warning' | 'error';
 export interface MotionSegmentDirective {
   segmentId: string;
   preferredCarrier?: string;
+  /** 载体内变体提示（目前仅 'anchor'：concept 关键词锚点卡，由弱卡降级 pass 写入）。 */
+  preferredVariant?: string;
   intensity: 1 | 2 | 3;
   reason: string;
 }
@@ -135,6 +137,10 @@ export interface MotionBible {
   generatedAt?: number;
   fallbackUsed?: boolean;
   warnings?: MotionBibleIssue[];
+  /** normalize 阶段系统按 concept 占比上限确定性再平衡的段数；0 / 缺省表示未触发。 */
+  carrierRebalanceCount?: number;
+  /** normalize 阶段弱卡降级（chapter-transition / 低可视化收益叙述段 → concept+anchor）的段数；0 / 缺省表示未触发。 */
+  carrierDowngradeCount?: number;
 }
 
 export interface MotionBibleIssue {
@@ -203,14 +209,6 @@ export interface MotionCardTransitionPlan {
   direction?: 'left' | 'right' | 'up' | 'down';
   motif?: string;
 }
-
-export type MotionTemplateKey =
-  | 'kpi-countup'
-  | 'bar-chart-reveal'
-  | 'ranking-stack'
-  | 'before-after-compare'
-  | 'step-flow-explainer'
-  | 'chapter-stinger';
 
 export interface MotionSubtitleCue {
   startMs: number;

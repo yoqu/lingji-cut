@@ -23,6 +23,13 @@
   font-weight: 600;
 }
 
+.hint {
+  margin-top: calc(var(--space-2) * -1);
+  color: var(--color-text-placeholder);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+}
+
 .beatList {
   display: flex;
   flex-direction: column;

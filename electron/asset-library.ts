@@ -25,12 +25,18 @@ import {
   type AssetSampleColorRequest,
   type AssetSampleColorResult,
   type AssetUpdatePatch,
+  type CardAssetBinding,
   type ProjectAssetHealth,
   type StoryboardAssetRequest,
   type ProjectAssetManifest,
   type ProjectAssetRef,
 } from '../src/types/assets';
-import { resolveStoryboardAssets } from '../src/lib/asset-resolution';
+import {
+  buildManualAssetBinding,
+  manualCardAssetCandidateNames,
+  resolveStoryboardAssets,
+} from '../src/lib/asset-resolution';
+import type { StoryboardLayout } from '../src/lib/motion-storyboard';
 import { findReusableMediaAssets } from '../src/lib/media-asset-resolution';
 import type { MediaAssetRequest } from '../src/types/production';
 import {
@@ -76,10 +82,45 @@ interface ResolveAssetRequestsArgs {
   sourceCardId?: string;
   generateMissing?: GenerateMissingAssetFileFn;
   signal?: AbortSignal;
+  /** 测试注入用：覆盖素材库根目录（缺省为用户默认库）。 */
+  libraryRootDir?: string;
+  /** 卡片编译布局（可选穿透）：asset-aside / asset-led 时主资产 placement 与网格资产格严格对齐。 */
+  layout?: StoryboardLayout;
+}
+
+/**
+ * 手动素材约定：卡目录（ai-cards/<cardId>/）下用户放入的 `<slot>.<ext>` 或
+ * `asset-<序号>.<ext>` 优先于素材库匹配与 AI 生成——存在即直接绑定用户文件，
+ * 该请求从后续解析/生成流程中剔除。无卡目录或无 sourceCardId 时返回 null。
+ */
+async function resolveManualCardAssets(args: ResolveAssetRequestsArgs): Promise<{
+  bindings: CardAssetBinding[];
+  remainingRequests: StoryboardAssetRequest[];
+} | null> {
+  if (!args.sourceCardId) return null;
+  const cardDir = path.join(args.projectDir, 'ai-cards', args.sourceCardId);
+  let entries: Set<string>;
+  try {
+    entries = new Set(await fs.readdir(cardDir));
+  } catch {
+    return null;
+  }
+  const bindings: CardAssetBinding[] = [];
+  const remainingRequests: StoryboardAssetRequest[] = [];
+  for (const [index, request] of args.requests.entries()) {
+    const hit = manualCardAssetCandidateNames(request, index).find((name) => entries.has(name));
+    if (!hit) {
+      remainingRequests.push(request);
+      continue;
+    }
+    // 项目相对路径（posix 形态，与 image 卡 assetPath 约定一致）：预览时绝对化、导出时 materialize。
+    bindings.push(buildManualAssetBinding(request, ['ai-cards', args.sourceCardId, hit].join('/'), index, args.layout));
+  }
+  return { bindings, remainingRequests };
 }
 
 async function initializeAssetResolution(args: ResolveAssetRequestsArgs) {
-  const library = await loadLibraryWithProjectAssets(args.projectDir);
+  const library = await loadLibraryWithProjectAssets(args.projectDir, args.libraryRootDir);
   const resolvableLibrary = await normalizeResolvableAssetLibrary(library);
   let projectManifest = await loadProjectManifest(args.projectDir);
   const result = resolveStoryboardAssets({
@@ -87,6 +128,7 @@ async function initializeAssetResolution(args: ResolveAssetRequestsArgs) {
     library: resolvableLibrary,
     projectManifest,
     sourceCardId: args.sourceCardId,
+    layout: args.layout,
   });
   for (const binding of result.bindings) {
     const asset = library.assets.find((item) => item.id === binding.assetId);
@@ -117,7 +159,7 @@ function patchGenerationRequest(
 }
 
 async function finalizeAssetResolution(args: ResolveAssetRequestsArgs) {
-  const library = await loadLibraryWithProjectAssets(args.projectDir);
+  const library = await loadLibraryWithProjectAssets(args.projectDir, args.libraryRootDir);
   const resolvableLibrary = await normalizeResolvableAssetLibrary(library);
   let projectManifest = await loadProjectManifest(args.projectDir);
   const result = resolveStoryboardAssets({
@@ -125,6 +167,7 @@ async function finalizeAssetResolution(args: ResolveAssetRequestsArgs) {
     library: resolvableLibrary,
     projectManifest,
     sourceCardId: args.sourceCardId,
+    layout: args.layout,
   });
   for (const binding of result.bindings) {
     const asset = library.assets.find((item) => item.id === binding.assetId);
@@ -146,7 +189,10 @@ export async function resolveAssetRequestsForProject(args: ResolveAssetRequestsA
     throw args.signal.reason instanceof Error ? args.signal.reason : new Error('资产生成已取消');
   };
   throwIfAborted();
-  const initial = await serializeAssetMutation(() => initializeAssetResolution(args));
+  // 手动素材约定优先：命中卡目录用户文件的请求直接绑定，不再匹配素材库 / 生成。
+  const manual = await resolveManualCardAssets(args);
+  const remainingArgs = manual ? { ...args, requests: manual.remainingRequests } : args;
+  const initial = await serializeAssetMutation(() => initializeAssetResolution(remainingArgs));
   let { result, library, projectManifest } = initial;
   const activity = {
     requested: args.requests.length,
@@ -156,6 +202,7 @@ export async function resolveAssetRequestsForProject(args: ResolveAssetRequestsA
     cutoutReady: 0,
     cutoutFailed: 0,
     durationMs: 0,
+    manual: manual?.bindings.length ?? 0,
   };
 
   if (args.generateMissing && projectManifest && result.generationRequests.length > 0) {
@@ -173,6 +220,7 @@ export async function resolveAssetRequestsForProject(args: ResolveAssetRequestsA
           requestId: request.id,
           filePath: generated.filePath,
           status: 'ready',
+          rootDir: args.libraryRootDir,
         }));
         activity.generated += 1;
         if (['object', 'symbol', 'overlay'].includes(request.role)) {
@@ -198,14 +246,16 @@ export async function resolveAssetRequestsForProject(args: ResolveAssetRequestsA
         });
       }
     }
-    const finalized = await serializeAssetMutation(() => finalizeAssetResolution(args));
+    const finalized = await serializeAssetMutation(() => finalizeAssetResolution(remainingArgs));
     result = finalized.result;
     library = finalized.library;
     projectManifest = finalized.projectManifest;
   }
 
   activity.durationMs = Date.now() - startedAt;
-  return { ...result, activity, library, projectManifest };
+  // 手动绑定与库/生成绑定合并返回；各绑定自带 slot/placement，顺序不影响渲染。
+  const bindings = [...(manual?.bindings ?? []), ...result.bindings];
+  return { ...result, bindings, activity, library, projectManifest };
 }
 
 export async function loadAssetLibraryState(projectDir?: string | null) {
@@ -1119,12 +1169,14 @@ async function acceptGeneratedFileForRequest(args: {
   requestId: string;
   filePath: string;
   status?: 'ready' | 'accepted';
+  /** 测试注入用：覆盖素材库根目录（缺省为用户默认库）。 */
+  rootDir?: string;
 }): Promise<{
   asset: AssetRecord;
   library: AssetLibraryFile;
   projectManifest: ProjectAssetManifest;
 }> {
-  const library = await loadLibrary();
+  const library = await loadLibrary(args.rootDir);
   let manifest = await loadProjectManifest(args.projectDir);
   const request = manifest?.generationRequests.find((item) => item.id === args.requestId);
   if (!manifest || !request) {

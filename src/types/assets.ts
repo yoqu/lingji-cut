@@ -366,6 +366,8 @@ export interface AssetResolutionResult {
     cutoutReady: number;
     cutoutFailed: number;
     durationMs: number;
+    /** 命动手动素材约定（卡目录用户文件）直接绑定的数量；这些请求未经素材库匹配与 AI 生成。 */
+    manual?: number;
   };
 }
 

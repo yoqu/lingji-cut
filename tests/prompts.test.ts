@@ -97,6 +97,27 @@ describe('cards.animation default template（JSON 分镜）', () => {
     expect(seg.user).toContain('{{motionKitApi}}');
     expect(seg.user).toContain('{{presetMotionTokens}}');
   });
+  it('anchor 关键词锚点收紧为系统标记 / 章节路标专用（防导演滥用）', () => {
+    const anim = DEFAULT_PROMPT_YAML['cards.animation'];
+    // anchor 条款：仅 bible directive 标记或纯章节路标可用，限量 0~2 张
+    expect(anim).toContain('carrier=concept(anchor)');
+    expect(anim).toContain('0~2 张');
+    expect(anim).toContain('不得以锚点逃避');
+    // 增量铁律：复述打回的正确做法是增量 / 图形素材载体优先，锚点不再列为通用逃生出口
+    expect(anim).toContain('优先提炼增量（数据 / 结构 / 出处），或改走图形 / 素材载体');
+    expect(anim).toContain('关键词锚点仅当该段是章节路标或系统已标弱卡时可用');
+  });
+});
+
+describe('motion.bible default template（carrier 多样性软配额）', () => {
+  it('约束 concept 总量、数据段载体与整期 carrier 种类数', () => {
+    const tpl = getBuiltinPromptTemplate('motion.bible');
+    expect(tpl.user).toContain('carrier 多样性');
+    expect(tpl.user).toContain('30%');
+    expect(tpl.user).toContain('semanticType=data');
+    expect(tpl.user).toContain('min(6');
+    expect(tpl.user).toContain('stacked-composition');
+  });
 });
 
 describe('renderUserPromptWithLock', () => {

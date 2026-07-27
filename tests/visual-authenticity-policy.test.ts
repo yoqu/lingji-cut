@@ -48,7 +48,7 @@ describe('真实事件画面真实性铁律', () => {
       'utf8',
     );
 
-    expect(role).toContain('version: 3');
+    expect(role).toContain('version: 7');
     expect(role).toContain('最高优先级铁律');
     expect(role).toContain('上市敲钟');
     expect(role).toContain('manual-only');

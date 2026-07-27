@@ -2,6 +2,7 @@ import { AnimatePresence, m } from 'framer-motion';
 import { useState } from 'react';
 import { Film, Image as ImageIcon, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react';
 import { toFileSrc } from '../lib/utils';
+import { CARRIER_META } from '../lib/motion-storyboard';
 import { useAIStore } from '../store/ai';
 import type { AICard, AICardType, MediaCardContent } from '../types/ai';
 import { Badge, Checkbox } from '../ui';
@@ -75,11 +76,6 @@ function buildThumbnailSrc(
 }
 
 const CARD_TYPE_META: Record<AICardType, { label: string; color: string; tone: string }> = {
-  summary: { label: '摘要', color: '#0A84FF', tone: 'blue' },
-  data: { label: '数据', color: '#32D74B', tone: 'green' },
-  insight: { label: '观点', color: '#FF9F0A', tone: 'orange' },
-  chapter: { label: '章节', color: '#BF5AF2', tone: 'purple' },
-  quote: { label: '金句', color: '#FFD60A', tone: 'yellow' },
   motion: { label: '动画', color: '#c084fc', tone: 'purple' },
   image: { label: '图片卡', color: '#32D74B', tone: 'green' },
   video: { label: '视频卡', color: '#FFD60A', tone: 'yellow' },
@@ -136,7 +132,12 @@ export function AICardList({
     <div className={styles.list} data-ai-card-list="true">
       <AnimatePresence mode="popLayout" initial={false}>
         {cards.map((card) => {
-          const meta = CARD_TYPE_META[card.type];
+          const baseMeta = CARD_TYPE_META[card.type] ?? CARD_TYPE_META.motion;
+          const carrier = card.motionCard?.storyboard?.carrier;
+          const meta =
+            card.type === 'motion' && carrier && CARRIER_META[carrier]
+              ? { ...baseMeta, label: CARRIER_META[carrier].label }
+              : baseMeta;
           const isMedia = card.type === 'image' || card.type === 'video';
           const media = isMedia ? getMediaContent(card) : null;
           const thumbSrc = isMedia ? buildThumbnailSrc(card, currentProjectDir) : null;

@@ -77,6 +77,7 @@ export function registerDirectorWorkflowIpc(ctx: DirectorWorkflowIpcContext): vo
         ok: true,
         revision: plan.revision,
         segments: plan.segments.length,
+        carrierRebalanced: plan.motionBible.carrierRebalanceCount ?? 0,
       });
       return production;
     } catch (error) {

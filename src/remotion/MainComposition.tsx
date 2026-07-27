@@ -2,6 +2,7 @@ import { AbsoluteFill, Sequence } from 'remotion';
 import { memo, useEffect, useMemo } from 'react';
 import type { SrtEntry, TimelineData } from '../types';
 import { buildRenderPlan } from './timeline-to-sequences';
+import { getStylePresetById } from '../lib/card-style';
 import { VideoOverlay } from './overlays/VideoOverlay';
 import { ImageOverlay } from './overlays/ImageOverlay';
 import { TextOverlay } from './overlays/TextOverlay';
@@ -20,6 +21,8 @@ export type MainCompositionProps = {
   cardProjectDir?: string;
   /** 预览专用：同名口播文件被覆盖时刷新媒体 URL；导出不传。 */
   podcastRevision?: number;
+  /** 项目级视觉主题预设 id（project.json 的 stylePresetId）；字幕 followTheme 时派生字体与 accent。 */
+  themePresetId?: string;
 };
 
 export const MainComposition = memo(function MainComposition({
@@ -28,6 +31,7 @@ export const MainComposition = memo(function MainComposition({
   compiledCards,
   cardProjectDir,
   podcastRevision,
+  themePresetId,
 }: MainCompositionProps) {
   useEffect(() => {
     // One compact marker per render page lets the main process prove whether ANGLE reached
@@ -56,6 +60,8 @@ export const MainComposition = memo(function MainComposition({
     [timeline, srtEntries],
   );
   const subtitleHighlights = timeline.subtitleHighlights ?? [];
+  // 字幕主题：未设置项目预设时回落内置默认风格（与 AI 卡片同一兜底路径）。
+  const subtitleTheme = useMemo(() => getStylePresetById(themePresetId), [themePresetId]);
   const audioSequences = useMemo(
     () =>
       plan.audio.map((a) => (
@@ -104,10 +110,10 @@ export const MainComposition = memo(function MainComposition({
     () =>
       plan.subtitles.map((s) => (
         <Sequence key={`sub-${s.index}`} from={s.startFrame} durationInFrames={s.durationFrames}>
-          <SubtitleLayer cue={s} style={timeline.subtitle} highlights={subtitleHighlights} />
+          <SubtitleLayer cue={s} style={timeline.subtitle} highlights={subtitleHighlights} theme={subtitleTheme} />
         </Sequence>
       )),
-    [plan.subtitles, subtitleHighlights, timeline.subtitle],
+    [plan.subtitles, subtitleHighlights, timeline.subtitle, subtitleTheme],
   );
 
   return (

@@ -1,11 +1,7 @@
-import type { AICardType } from '../types/ai';
 import type { AppIconName } from '../components/AppIcon';
+import { CARRIER_META, STORYBOARD_CARRIERS, type StoryboardCarrier } from './motion-storyboard';
 
 export type ManualCardKind = 'motion' | 'image' | 'video';
-export type ManualCardContentType = Extract<
-  AICardType,
-  'summary' | 'data' | 'insight' | 'chapter' | 'quote'
->;
 
 export const MANUAL_CARD_KIND_OPTIONS: Array<{
   kind: ManualCardKind;
@@ -17,13 +13,14 @@ export const MANUAL_CARD_KIND_OPTIONS: Array<{
   { kind: 'video', label: '视频卡', icon: 'film' },
 ];
 
-export const MANUAL_CARD_CONTENT_TYPE_OPTIONS: Array<{
-  value: ManualCardContentType;
+/** 手动建卡的载体倾向；auto = 交给导演自行判断 */
+export const MANUAL_CARD_CARRIER_OPTIONS: Array<{
+  value: StoryboardCarrier | 'auto';
   label: string;
 }> = [
-  { value: 'summary', label: '摘要' },
-  { value: 'insight', label: '观点 / 洞察' },
-  { value: 'quote', label: '金句' },
-  { value: 'data', label: '数据' },
-  { value: 'chapter', label: '章节' },
+  { value: 'auto', label: '自动（按内容判断）' },
+  ...STORYBOARD_CARRIERS.map((value) => ({
+    value,
+    label: `${CARRIER_META[value].label}（${CARRIER_META[value].description}）`,
+  })),
 ];

@@ -260,6 +260,12 @@ describe('validateStoryboard', () => {
     expect(valid.ok).toBe(true);
   });
 
+  it('asset-led 是合法 layout（素材主导大图小字布局）', () => {
+    const v = validateStoryboard({ ...BUDGETED, layout: 'asset-led' }, { ...CTX, requireCapacityModel: true });
+    expect(v.errors).toEqual([]);
+    expect(v.ok).toBe(true);
+  });
+
   it('逐拍模拟生命周期并阻止同时驻留区块超预算', () => {
     const overloaded: MotionStoryboard = {
       ...BUDGETED,
@@ -279,5 +285,232 @@ describe('validateStoryboard', () => {
     const result = validateStoryboard(overloaded, { ...CTX, requireCapacityModel: true });
     expect(result.ok).toBe(false);
     expect(result.errors.join()).toMatch(/同时驻留|预计占高/);
+  });
+});
+
+
+/* ---------- anchor 使用硬闸门（导演不得无视 bible 自选角落小字） ---------- */
+
+/** 合法的关键词锚点分镜（除闸门外的机器校验全部通过，便于隔离闸门行为）。 */
+const ANCHOR: MotionStoryboard = {
+  claim: '供应链关键词',
+  carrier: 'concept',
+  layout: 'corner-anchor',
+  scene: '右上角关键词小字',
+  focus: { beat: 1 },
+  data: { variant: 'anchor', term: '光模块' },
+  beats: [
+    { cue: null, kind: 'build', adds: '锚点入场' },
+    { cue: 1, kind: 'accent', adds: '关键词点亮' },
+  ],
+};
+
+const QUOTE_I3_DIRECTIVE = { preferredCarrier: 'quote', intensity: 3 };
+
+describe('anchor 使用硬闸门（semanticType / bible directive）', () => {
+  it('chapter-transition 段放行（纯章节路标）', () => {
+    const v = validateStoryboard(ANCHOR, {
+      ...CTX,
+      semanticType: 'chapter-transition',
+      bibleDirective: QUOTE_I3_DIRECTIVE,
+    });
+    expect(v.errors).toEqual([]);
+    expect(v.ok).toBe(true);
+  });
+
+  it('bible directive 标 preferredVariant=anchor 的系统弱卡段放行', () => {
+    const v = validateStoryboard(ANCHOR, {
+      ...CTX,
+      semanticType: 'narration',
+      bibleDirective: { preferredCarrier: 'concept', preferredVariant: 'anchor', intensity: 1 },
+    });
+    expect(v.errors).toEqual([]);
+    expect(v.ok).toBe(true);
+  });
+
+  it('重点段（bible 指定 quote / intensity=3）自选 anchor 打回，文案含指定载体与 intensity', () => {
+    const v = validateStoryboard(ANCHOR, {
+      ...CTX,
+      semanticType: 'quote',
+      bibleDirective: QUOTE_I3_DIRECTIVE,
+    });
+    expect(v.ok).toBe(false);
+    const message = v.errors.find((e) => e.includes('关键词锚点'));
+    expect(message).toBeDefined();
+    expect(message).toContain('carrier=quote');
+    expect(message).toContain('intensity=3');
+    expect(message).toContain('增量卡');
+  });
+
+  it('directive 无 preferredVariant 按未标记处理：普通叙述段自选 anchor 打回', () => {
+    const v = validateStoryboard(ANCHOR, {
+      ...CTX,
+      semanticType: 'narration',
+      bibleDirective: { preferredCarrier: 'list-build', intensity: 2 },
+    });
+    expect(v.ok).toBe(false);
+    expect(v.errors.join()).toContain('关键词锚点');
+  });
+
+  it('semanticType 不可得时兜底放行（手动选段 / 旧项目不卡死）', () => {
+    const v = validateStoryboard(ANCHOR, { ...CTX, bibleDirective: QUOTE_I3_DIRECTIVE });
+    expect(v.errors).toEqual([]);
+    expect(v.ok).toBe(true);
+  });
+
+  it('仅声明 corner-anchor 布局（非 anchor variant）同样被闸', () => {
+    const cornerOnly: MotionStoryboard = {
+      ...ANCHOR,
+      carrier: 'quote',
+      data: { text: '一句金句' },
+    };
+    const v = validateStoryboard(cornerOnly, {
+      ...CTX,
+      semanticType: 'quote',
+      bibleDirective: QUOTE_I3_DIRECTIVE,
+    });
+    expect(v.ok).toBe(false);
+    expect(v.errors.join()).toContain('corner-anchor');
+  });
+
+  it('非 anchor variant / 非 corner-anchor 布局不受闸门影响', () => {
+    const typewriter: MotionStoryboard = {
+      ...ANCHOR,
+      layout: undefined,
+      data: { variant: 'typewriter', term: '新名词', definition: '一句全新释义' },
+    };
+    const v = validateStoryboard(typewriter, {
+      ...CTX,
+      semanticType: 'data',
+      bibleDirective: { preferredCarrier: 'data-hero', intensity: 3 },
+    });
+    expect(v.errors).toEqual([]);
+    expect(v.ok).toBe(true);
+    // 满版数据卡照常通过
+    expect(
+      validateStoryboard(VALID, { ...CTX, semanticType: 'data', bibleDirective: QUOTE_I3_DIRECTIVE }).ok,
+    ).toBe(true);
+  });
+});
+
+describe('叙事运镜 / 指示标注归一化', () => {
+  const withBeats = (extra: Record<string, unknown>) =>
+    JSON.stringify({
+      claim: 'c',
+      carrier: 'data-hero',
+      scene: 's',
+      beats: [
+        { cue: null, kind: 'build', adds: '标题' },
+        { cue: 1, kind: 'accent', adds: '数字' },
+      ],
+      ...extra,
+    });
+
+  it('合法运镜按拍号排序保留，越界 / 非法 move / 同拍重复被丢弃', () => {
+    const sb = parseStoryboard(
+      withBeats({
+        camera: [
+          { beat: 1, move: 'focus', target: 'main' },
+          { beat: 9, move: 'push-in' },
+          { beat: 0, move: 'zoom-crazy' },
+          { beat: 1, move: 'pull-out' },
+          { beat: 0, move: 'pan-left' },
+        ],
+      }),
+    );
+    expect(sb?.camera).toEqual([
+      { beat: 0, move: 'pan-left' },
+      { beat: 1, move: 'focus', target: 'main' },
+    ]);
+  });
+
+  it('运镜超过上限被截断（整卡最多 2 次）', () => {
+    const sb = parseStoryboard(
+      withBeats({
+        beats: [
+          { cue: null, kind: 'build', adds: 'a' },
+          { cue: 1, kind: 'build', adds: 'b' },
+          { cue: 2, kind: 'build', adds: 'c' },
+        ],
+        camera: [
+          { beat: 0, move: 'push-in' },
+          { beat: 1, move: 'pull-out' },
+          { beat: 2, move: 'pan-right' },
+        ],
+      }),
+    );
+    expect(sb?.camera).toHaveLength(2);
+  });
+
+  it('标注非法 kind 丢弃，target 缺省为 main，同槽位只留最后一个', () => {
+    const sb = parseStoryboard(
+      withBeats({
+        annotate: [
+          { beat: 0, kind: 'sparkle' },
+          { beat: 0, kind: 'circle' },
+          { beat: 1, kind: 'spotlight' },
+          { beat: 1, kind: 'underline', target: 'header' },
+        ],
+      }),
+    );
+    expect(sb?.annotate).toEqual([
+      { beat: 1, kind: 'spotlight', target: 'main' },
+      { beat: 1, kind: 'underline', target: 'header' },
+    ]);
+  });
+
+  it('未声明 camera / annotate 时保持 undefined（不侵入既有分镜）', () => {
+    const sb = parseStoryboard(withBeats({}));
+    expect(sb?.camera).toBeUndefined();
+    expect(sb?.annotate).toBeUndefined();
+  });
+});
+
+describe('载体塌陷闸门（bible 规划图形化 → 分镜写成纯文字）', () => {
+  const collapsed = (extra: Partial<MotionStoryboard> = {}): MotionStoryboard => ({
+    claim: '出口结构在变',
+    carrier: 'concept',
+    scene: '一句结论',
+    focus: { beat: 1, emphasis: 'slam' },
+    beats: [
+      { cue: null, kind: 'build', adds: '标题' },
+      { cue: 1, kind: 'accent', adds: '结论' },
+    ],
+    ...extra,
+  });
+  const ctx = { cueCount: 4, transcript: '2019年是12，2022年是18，2025年是41。', bibleDirective: { preferredCarrier: 'trend', intensity: 3 as const } };
+
+  it('第 1 轮打回并给出两条出路', () => {
+    const v = validateStoryboard(collapsed(), ctx);
+    expect(v.ok).toBe(false);
+    expect(v.errors.join()).toContain('carrier="trend"');
+    expect(v.errors.join()).toContain('carrierDeviation');
+  });
+
+  it('第 2 轮起降级为提醒——绝不因为软规则把卡片打没', () => {
+    const v = validateStoryboard(collapsed(), { ...ctx, attempt: 1 });
+    expect(v.errors.filter((e) => e.includes('carrierDeviation'))).toEqual([]);
+    expect(v.warnings.join()).toContain('carrierDeviation');
+  });
+
+  it('写了合法偏离理由即放行', () => {
+    const v = validateStoryboard(collapsed({ carrierDeviation: { reason: 'no-data' } }), ctx);
+    expect(v.errors.filter((e) => e.includes('carrierDeviation'))).toEqual([]);
+  });
+
+  it('非法理由不算数；未规划图形化载体 / 未塌陷则不触发', () => {
+    expect(
+      validateStoryboard(collapsed({ carrierDeviation: { reason: 'because' as never } }), ctx).ok,
+    ).toBe(false);
+    // bible 本就规划 concept
+    expect(
+      validateStoryboard(collapsed(), { ...ctx, bibleDirective: { preferredCarrier: 'concept', intensity: 2 } })
+        .errors.filter((e) => e.includes('carrierDeviation')),
+    ).toEqual([]);
+    // 偏离到 data-hero 仍是数据表达，不拦
+    expect(
+      validateStoryboard(collapsed({ carrier: 'data-hero', data: { value: 41, unit: '' } }), ctx)
+        .errors.filter((e) => e.includes('carrierDeviation')),
+    ).toEqual([]);
   });
 });

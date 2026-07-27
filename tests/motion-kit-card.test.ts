@@ -433,3 +433,124 @@ export default function Card({ cues = [] }) {
     expect(first).not.toContain('指标5');
   });
 });
+
+describe('kinetic typography 文字动效原语（typewriter / word-pop / keyword-scan）', () => {
+  const KINETIC_CARD = `import { CardStage, useBeats, TypewriterText, WordPop, KeywordScan, ListBuild } from '@lingji/motion-kit';
+const TOKENS = {
+  palette: { bg: '#0E0E10', ink: '#ECE7DA', muted: '#8A8478', accent: '#0A84FF', track: 'rgba(236,231,218,0.12)' },
+  fonts: { display: "Georgia, serif", body: "sans-serif", mono: "monospace" },
+};
+export default function Card({ cues = [] }) {
+  const beats = useBeats(cues, [null, 0, 1, 2]);
+  return <CardStage tokens={TOKENS}><div style={{display:'flex',flexDirection:'column',gap:24}}>
+    <TypewriterText text={"环比增速\\n再创新高"} beat={beats[0]} detail="打完后淡入的副行" font="display" size={0.09} />
+    <TypewriterText text="光标可关" beat={beats[0]} cursor={false} />
+    <WordPop words={['光模块', '是', '最大的', '确定性']} beat={beats[1]} font="display" size={0.075} />
+    <KeywordScan text="毛利率创下历史新高" keywords={['历史新高']} beat={beats[2]} mode="sweep" />
+    <KeywordScan text="需求端持续爆发" keywords={['爆发']} beat={beats[2]} />
+    <ListBuild items={['需求爆发', '订单饱满']} keywords={['爆发', '饱满']} beats={[beats[1], beats[2]]} />
+  </div></CardStage>;
+}`;
+
+  it('三个新原语与 ListBuild keywords 可编译渲染（含多帧）', async () => {
+    const result = await validateMotionCardTsx(KINETIC_CARD, {
+      cues: [0, 24, 48],
+      frames: [0, 10, 40, 119],
+      durationInFrames: 120,
+      checkRenderedLayout: false,
+    });
+    expect(result.render.ok).toBe(true);
+    expect(result.issues.filter((issue) => issue.severity === 'error')).toHaveLength(0);
+  });
+
+  const makeKit = (frame: number) =>
+    createMotionKit({
+      ...Remotion,
+      useCurrentFrame: () => frame,
+      useVideoConfig: () => ({ width: 1920, height: 1080, fps: 30, durationInFrames: 150 }),
+    } as unknown as MotionKitRemotion);
+  const beat = { start: 0, p: 1, land: 12, done: true };
+
+  it('TypewriterText 逐字上屏：中间帧有未上屏字（opacity:0），末尾帧全显且光标退出', () => {
+    const render = (frame: number) =>
+      renderToStaticMarkup(
+        React.createElement(
+          makeKit(frame).CardStage,
+          null,
+          React.createElement(makeKit(frame).TypewriterText, { text: '打字机', beat }),
+        ),
+      );
+    const mid = render(2);
+    // 未上屏字符以 opacity:0 占位（字符级 span 才带 transform，区别于 Ambient 层透明度）
+    expect(mid).toContain('opacity:0;transform:translateY(0.300em)');
+    expect(mid).toContain('打');
+    const end = render(120);
+    expect(end).not.toContain('opacity:0;transform');
+    // 光标在落笔后退出（typedEnd+22 帧后不再渲染）
+    expect(end).not.toContain('width:0.09em');
+    // 同帧输出确定
+    expect(render(2)).toBe(mid);
+  });
+
+  it('WordPop 截断到 12 块且同帧输出稳定', () => {
+    const kit = makeKit(120);
+    const element = React.createElement(
+      kit.CardStage,
+      null,
+      React.createElement(kit.WordPop, {
+        beat,
+        words: Array.from({ length: 14 }, (_, index) => `词${index + 1}`),
+      }),
+    );
+    const first = renderToStaticMarkup(element);
+    expect(first).toBe(renderToStaticMarkup(element));
+    expect(first).toContain('词12');
+    expect(first).not.toContain('词13');
+  });
+
+  it('KeywordScan：sweep 色块扫过、color 变色点亮，关键词缺失时原样渲染', () => {
+    const kit = makeKit(120);
+    const sweep = renderToStaticMarkup(
+      React.createElement(
+        kit.CardStage,
+        null,
+        React.createElement(kit.KeywordScan, { text: '毛利率创下历史新高', keywords: ['历史新高'], beat, mode: 'sweep' }),
+      ),
+    );
+    expect(sweep).toContain('background-size:100.0% 100%');
+    const color = renderToStaticMarkup(
+      React.createElement(
+        kit.CardStage,
+        null,
+        React.createElement(kit.KeywordScan, { text: '需求端持续爆发', keywords: ['爆发'], beat }),
+      ),
+    );
+    expect(color).toContain('clip-path:inset(0 0.0% 0 0)');
+    const missing = renderToStaticMarkup(
+      React.createElement(
+        kit.CardStage,
+        null,
+        React.createElement(kit.KeywordScan, { text: '没有匹配词', keywords: ['不存在'], beat }),
+      ),
+    );
+    expect(missing).toContain('没有匹配词');
+    expect(missing).not.toContain('clip-path');
+  });
+
+  it('ListBuild keywords：条目落地后条内关键词变色点亮', () => {
+    const kit = makeKit(120);
+    const withKw = renderToStaticMarkup(
+      React.createElement(
+        kit.CardStage,
+        null,
+        React.createElement(kit.ListBuild, { items: ['需求爆发', '订单饱满'], keywords: ['爆发', ''], beat }),
+      ),
+    );
+    expect(withKw).toContain('clip-path:inset(0 0.0% 0 0)');
+    expect(withKw).toContain('订单饱满');
+    const without = renderToStaticMarkup(
+      React.createElement(kit.CardStage, null, React.createElement(kit.ListBuild, { items: ['需求爆发'], beat })),
+    );
+    expect(without).not.toContain('clip-path');
+  });
+});

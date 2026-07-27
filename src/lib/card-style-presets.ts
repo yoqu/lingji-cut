@@ -85,7 +85,7 @@ Design DNA（违反任何一条，缩略图感都会垮）：
 6. 质量词（独立词组，2-3 个）
    - 4K 超清，锐利清晰，富有层次的合成质感，大师级缩略图设计
 7. 画面文字（必须包含主标题，可选副标题，由以下两段组成）
-   - 7.1 文本：先从整期字幕提炼 1 条 4-8 个汉字的主标题（要狠、要冲突、要带钩子，例如"公司合法监控""你被算法骗了""老板不会告诉你"），用中文引号""…""精确包裹；可再追加 1 条 ≤6 字副标题（""摸鱼的你！""""我不允许""），同样用引号包裹
+   - 7.1 文本：主标题来源分两种——若外层任务已给定"作品标题"，必须直接使用该标题（超出字数上限时截取标题原文中的核心短语，保留原意与重点，禁止另造新标题）；未给定作品标题时，才从整期字幕提炼 1 条 4-8 个汉字的主标题（要狠、要冲突、要带钩子，例如"公司合法监控""你被算法骗了""老板不会告诉你"）；无论哪种来源，主标题用中文引号""…""精确包裹；可再追加 1 条 ≤6 字副标题（""摸鱼的你！""""我不允许""），同样用引号包裹
    - 7.2 排版约束（独立词组串联，必填项不可省）：
      · 字体族（主标题）：粗体综艺封面字 / 阿里妈妈数黑体 / 站酷酷黑 / 字魂综艺粗黑 / 优设标题黑；禁止衬线、禁止花体、禁止手写
      · 字重：Black / Heavy（必须最重的一档）
@@ -118,7 +118,7 @@ Design DNA（违反任何一条，缩略图感都会垮）：
 const EDITORIAL_EINK: VisualStylePreset = {
   id: DEFAULT_STYLE_PRESET_ID,
   name: '电子杂志墨水',
-  description: '深色克制社论风：衬线标题、hairline 分隔、无渐变无阴影、单一系统蓝 accent。',
+  description: '深色社论风：衬线标题、hairline+细网格基底、柔和直角衬底、单一系统蓝 accent。',
   tags: ['深色', '社论', '克制'],
   source: 'deck-guizang-editorial / web-proto-editorial',
   palette: { bg: '#0E0E10', ink: '#ECE7DA', muted: '#8A8478', accent: '#0A84FF' },
@@ -135,19 +135,19 @@ const EDITORIAL_EINK: VisualStylePreset = {
       body: "'PingFang SC','Hiragino Sans GB','Noto Sans SC','Helvetica Neue',sans-serif",
       mono: "'SF Mono','JetBrains Mono','Source Code Pro',Menlo,monospace",
     },
-    typeScale: { hero: 0.15, dataHero: 0.3, lead: 0.05, body: 0.036, label: 0.025 },
-    surface: { kind: 'none' },
-    ambient: { kind: 'hairline', opacity: [0.08, 0.16] },
-    camera: { mode: 'push', range: [0.99, 1.01] },
+    typeScale: { hero: 0.15, dataHero: 0.3, lead: 0.055, body: 0.04, label: 0.027 },
+    surface: { kind: 'panel', bg: 'rgba(236,231,218,0.045)', border: 'rgba(236,231,218,0.10)', radius: 0 },
+    ambient: { kind: 'hairline-grid', opacity: [0.18, 0.3] },
+    camera: { mode: 'push', range: [0.985, 1.015] },
     persona: { easing: 'crisp', emphasis: 'brighten' },
   },
   motionStyleNotes:
-    '克制杂志感：数字与 hero 标题必用衬线（display 字体）；分隔只靠留白与 1px hairline，禁渐变 / 阴影 / 圆角面板 / emoji；accent 蓝整卡只出现在唯一焦点上。',
+    '克制杂志感：数字与 hero 标题必用衬线（display 字体）；分隔靠留白、1px hairline 与直角柔和衬底面板，禁渐变 / 阴影 / 圆角 / emoji；accent 蓝整卡只出现在唯一焦点上。',
   motionSpec: {
     chartRules: '图表只用细描线、直角柱和单一 accent 焦点；网格与配重线保持 hairline。',
     emphasisRules: '数字计数后一次落定，强调只提亮唯一焦点，不做持续脉冲。',
     typographyRules: '标题和大数字使用 display 衬线；标签、出处与单位使用 mono 或克制无衬线。',
-    banned: '禁止渐变、投影、圆角面板、emoji、彩虹数据色和持续循环动画。',
+    banned: '禁止渐变、投影、圆角、emoji、彩虹数据色和持续循环动画。',
   },
   contentTypeRules: {
     quote: {

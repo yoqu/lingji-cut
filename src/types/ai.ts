@@ -5,15 +5,11 @@ import type { PromptKind } from '../lib/prompts/types';
 import type { CoverEditState } from '../lib/cover-editor/contracts';
 export type { MotionCardPayload } from './motion';
 
-export type AICardType =
-  | 'summary'
-  | 'data'
-  | 'insight'
-  | 'chapter'
-  | 'quote'
-  | 'motion'
-  | 'image'
-  | 'video';
+/** 卡片渲染形态；文字语义分类统一由 storyboard.carrier 承担。 */
+export type AICardType = 'motion' | 'image' | 'video';
+
+/** 旧工程遗留的文字内容分类，加载时一律迁移为 'motion'。 */
+export const LEGACY_TEXT_CARD_TYPES = ['summary', 'data', 'insight', 'chapter', 'quote'] as const;
 
 export type AICardMediaType = 'image' | 'video';
 export type AICardDisplayMode = 'fullscreen' | 'pip';
@@ -100,7 +96,7 @@ export interface VisualMotionTokens {
   fonts: { display: string; body: string; mono: string };
   typeScale?: { hero?: number; dataHero?: number; lead?: number; body?: number; label?: number };
   surface?: { kind: 'none' | 'glass' | 'panel'; bg?: string; border?: string; radius?: number };
-  ambient?: { kind: 'none' | 'grid' | 'orbs' | 'hairline' | 'grain'; opacity?: [number, number]; color?: string };
+  ambient?: { kind: 'none' | 'grid' | 'orbs' | 'hairline' | 'hairline-grid' | 'grain'; opacity?: [number, number]; color?: string };
   camera?: { mode: 'push' | 'pull' | 'pan' | 'still'; range?: [number, number] };
   persona?: { easing?: 'crisp' | 'calm' | 'bouncy'; emphasis?: 'settle' | 'brighten' | 'underline' | 'none' };
 }
@@ -497,9 +493,11 @@ export interface AISettings {
   autoAnimationDirection?: boolean;
   /**
    * Motion Card 出卡路径：template = storyboard 确定性模板编译（默认，不经 LLM 雕刻/审查，
-   * 单卡仅 1 次导演 LLM 调用）；agent = 旧的 LLM 雕刻+审查多轮链路（精雕强制 agent）。
+   * 单卡仅 1 次导演 LLM 调用）；agent = 旧的 LLM 雕刻+审查多轮链路（精雕强制 agent）；
+   * hybrid = 混合：重点段（visualizationScore 高 / data、quote 语义 / bible intensity=3）
+   * 走 agent 精雕，其余段走 template，每期 agent 段有上限，超出回落 template。
    */
-  motionCardMode?: 'template' | 'agent';
+  motionCardMode?: 'template' | 'agent' | 'hybrid';
 }
 
 export const DEFAULT_JIMENG_MODEL = 'jimeng-5.0';
@@ -548,11 +546,6 @@ export interface AICardTimelineDraft {
 const DEFAULT_CARD_BACKGROUND = '#151922';
 
 export const DEFAULT_CARD_STYLE: Record<AICardType, CardStyle> = {
-  summary: { primaryColor: '#79c4ff', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
-  data: { primaryColor: '#4ed38a', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
-  insight: { primaryColor: '#ffb347', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
-  chapter: { primaryColor: '#9eb7ff', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
-  quote: { primaryColor: '#ff8f7a', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
   motion: { primaryColor: '#7df9ff', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
   image: { primaryColor: '#79c4ff', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
   video: { primaryColor: '#ff8f7a', backgroundColor: DEFAULT_CARD_BACKGROUND, fontSize: 48 },
@@ -569,16 +562,19 @@ export function getDefaultCardStyle(type: AICardType): CardStyle {
 }
 
 export function isAICardType(value: unknown): value is AICardType {
-  return [
-    'summary',
-    'data',
-    'insight',
-    'chapter',
-    'quote',
-    'motion',
-    'image',
-    'video',
-  ].includes(String(value));
+  return value === 'motion' || value === 'image' || value === 'video';
+}
+
+/**
+ * 归一化卡片类型：旧文字分类（summary/data/insight/chapter/quote）迁移为 'motion'，
+ * 合法值原样返回，无法识别返回 null。
+ */
+export function normalizeAICardType(value: unknown): AICardType | null {
+  if (isAICardType(value)) return value;
+  if (LEGACY_TEXT_CARD_TYPES.includes(value as (typeof LEGACY_TEXT_CARD_TYPES)[number])) {
+    return 'motion';
+  }
+  return null;
 }
 
 export function isDataContent(value: unknown): value is DataContent {

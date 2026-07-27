@@ -1,12 +1,14 @@
-import type {
-  AssetGenerationRequest,
-  AssetLibraryFile,
-  AssetRecord,
-  AssetResolutionResult,
-  CardAssetBinding,
-  ProjectAssetManifest,
-  StoryboardAssetRequest,
+import {
+  DEFAULT_ASSET_TREATMENT,
+  type AssetGenerationRequest,
+  type AssetLibraryFile,
+  type AssetRecord,
+  type AssetResolutionResult,
+  type CardAssetBinding,
+  type ProjectAssetManifest,
+  type StoryboardAssetRequest,
 } from '../types/assets';
+import type { StoryboardLayout } from './motion-storyboard';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -71,6 +73,17 @@ function scoreAsset(request: StoryboardAssetRequest, asset: AssetRecord, project
 const REFERENCE_WIDTH = 1920;
 const REFERENCE_HEIGHT = 1080;
 
+/**
+ * SafeLayout 网格落点（1920×1080 基准）：CardStage 内容盒 x192→1728、y86.4→864，gap 37.8。
+ * 主资产 placement 与编译器网格严格对齐，素材不再"近似"压在资产格上。
+ * - asset-led：`"asset header" "asset main"`，列 1.3fr/0.7fr → 左格通栏 x192、w973.83→974、
+ *   满内容高 y86.4→864（给 height 让 objectFit:contain 在格内居中，等同网格 alignItems:center）。
+ * - asset-aside：`"header header" "main asset"`，列 1.15fr/0.85fr → 右格 x1091.27→1091、w636.74→637；
+ *   修掉旧近似（x1260/w540 漂在格内偏右 169px、窄 97px）。
+ */
+const ASSET_LED_PRIMARY_PLACEMENT = { x: 192, y: 86, width: 974, height: 778 } as const;
+const ASSET_ASIDE_PRIMARY_PLACEMENT = { x: 1091, width: 637 } as const;
+
 function placementSide(hint: string | undefined, index: number): 'left' | 'right' | 'center' {
   if (/右|right/i.test(hint ?? '')) return 'right';
   if (/中|center/i.test(hint ?? '')) return 'center';
@@ -78,7 +91,11 @@ function placementSide(hint: string | undefined, index: number): 'left' | 'right
   return index % 2 === 0 ? 'left' : 'right';
 }
 
-function resolvePlacement(request: StoryboardAssetRequest, index: number): CardAssetBinding['placement'] {
+function resolvePlacement(
+  request: StoryboardAssetRequest,
+  index: number,
+  layout?: StoryboardLayout,
+): CardAssetBinding['placement'] {
   const base = { referenceWidth: REFERENCE_WIDTH, referenceHeight: REFERENCE_HEIGHT };
   if (request.role === 'background' || request.role === 'texture') {
     return {
@@ -94,6 +111,21 @@ function resolvePlacement(request: StoryboardAssetRequest, index: number): CardA
   const side = placementSide(request.placementHint, index);
   const bottom = /下|bottom/i.test(request.placementHint ?? '');
   if (request.importance === 'primary') {
+    // layout 感知（可选穿透，缺省旧行为）：主资产严格对齐编译器网格的资产格。
+    if (layout === 'asset-led') {
+      // 大图小字：素材即主视觉，通栏左格不放旋转，保证边缘与网格严格对齐。
+      return { ...base, ...ASSET_LED_PRIMARY_PLACEMENT, opacity: 0.96, depth: 'foreground' };
+    }
+    if (layout === 'asset-aside') {
+      return {
+        ...base,
+        ...ASSET_ASIDE_PRIMARY_PLACEMENT,
+        y: bottom ? 320 : 210,
+        rotation: 2,
+        opacity: 0.96,
+        depth: 'foreground',
+      };
+    }
     const x = side === 'right' ? 1260 : side === 'center' ? 700 : 120;
     return { ...base, x, y: bottom ? 320 : 210, width: 540, rotation: side === 'left' ? -2 : 2, opacity: 0.96, depth: 'foreground' };
   }
@@ -140,14 +172,33 @@ function acceptedGeneratedAssetId(
   return accepted?.resultAssetId ?? null;
 }
 
+function bindingShell(
+  request: StoryboardAssetRequest,
+  index: number,
+  layout?: StoryboardLayout,
+): Pick<CardAssetBinding, 'slot' | 'placement' | 'motion' | 'request'> {
+  const isBackdrop = request.role === 'background' || request.role === 'texture';
+  return {
+    slot: request.slot,
+    placement: resolvePlacement(request, index, layout),
+    motion: {
+      enter: isBackdrop || request.importance === 'ambient' ? 'fade-in' : 'fade-up-soft',
+      emphasis: !isBackdrop && request.importance === 'primary' ? 'subtle-parallax' : 'none',
+      exit: request.importance === 'ambient' || request.role === 'texture' ? 'fade-out' : 'hold',
+      revealBeat: request.revealBeat,
+    },
+    request,
+  };
+}
+
 function buildBinding(
   request: StoryboardAssetRequest,
   asset: AssetRecord,
   index: number,
+  layout?: StoryboardLayout,
 ): CardAssetBinding {
-  const isBackdrop = request.role === 'background' || request.role === 'texture';
   return {
-    slot: request.slot,
+    ...bindingShell(request, index, layout),
     assetId: asset.id,
     filePath: asset.files.processed || asset.files.thumbnail || asset.files.original,
     treatment: asset.treatment,
@@ -158,14 +209,46 @@ function buildBinding(
       processedAt: asset.metadata.processedAt,
       processedColorKey: asset.metadata.processedColorKey,
     },
-    placement: resolvePlacement(request, index),
-    motion: {
-      enter: isBackdrop || request.importance === 'ambient' ? 'fade-in' : 'fade-up-soft',
-      emphasis: !isBackdrop && request.importance === 'primary' ? 'subtle-parallax' : 'none',
-      exit: request.importance === 'ambient' || request.role === 'texture' ? 'fade-out' : 'hold',
-      revealBeat: request.revealBeat,
-    },
-    request,
+  };
+}
+
+/* ---------- 手动素材约定（卡目录文件优先于素材库匹配与 AI 生成） ---------- */
+
+/** 手动素材约定支持的图片扩展名（与 CardAssetLayer 可渲染的格式一致）。 */
+export const MANUAL_CARD_ASSET_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'] as const;
+
+/**
+ * 手动素材约定的候选文件名（按优先级排序）：
+ * 卡目录（ai-cards/<cardId>/）下先匹配 `<slot>.<ext>`（分镜资产槽名，精确），
+ * 再匹配 `asset-<序号>.<ext>`（序号为 storyboard.assets 数组内 1 基下标）。
+ * 用户把文件放进卡目录即用用户文件，该资产请求不再匹配素材库、不再 AI 生成。
+ */
+export function manualCardAssetCandidateNames(request: StoryboardAssetRequest, index: number): string[] {
+  const names: string[] = [];
+  const slot = request.slot?.trim();
+  if (slot) {
+    for (const ext of MANUAL_CARD_ASSET_EXTENSIONS) names.push(`${slot}${ext}`);
+  }
+  for (const ext of MANUAL_CARD_ASSET_EXTENSIONS) names.push(`asset-${index + 1}${ext}`);
+  return names;
+}
+
+/**
+ * 手动素材文件 → 确定性绑定：placement / motion 与库资产同源（bindingShell），
+ * treatment 取分镜声明的 visualTreatment（库资产用资产自身 treatment）。
+ * filePath 用项目相对路径（ai-cards/<cardId>/<name>），预览时绝对化、导出时 materialize。
+ */
+export function buildManualAssetBinding(
+  request: StoryboardAssetRequest,
+  filePath: string,
+  index: number,
+  layout?: StoryboardLayout,
+): CardAssetBinding {
+  return {
+    ...bindingShell(request, index, layout),
+    assetId: `manual:${filePath}`,
+    filePath,
+    treatment: { ...DEFAULT_ASSET_TREATMENT, profile: request.visualTreatment },
   };
 }
 
@@ -198,8 +281,10 @@ export function resolveStoryboardAssets(params: {
   library: AssetLibraryFile;
   projectManifest?: ProjectAssetManifest | null;
   sourceCardId?: string;
+  /** 卡片编译布局（可选穿透）：asset-aside / asset-led 时主资产 placement 与网格资产格严格对齐；缺省旧行为。 */
+  layout?: StoryboardLayout;
 }): AssetResolutionResult {
-  const { requests, library, projectManifest, sourceCardId } = params;
+  const { requests, library, projectManifest, sourceCardId, layout } = params;
   const projectIds = new Set(projectManifest?.assetRefs.map((ref) => ref.assetId) ?? []);
   const bindings: CardAssetBinding[] = [];
   const generationRequests: AssetGenerationRequest[] = [];
@@ -211,7 +296,7 @@ export function resolveStoryboardAssets(params: {
       ? library.assets.find((asset) => asset.id === acceptedAssetId)
       : null;
     if (acceptedAsset) {
-      bindings.push(buildBinding(request, acceptedAsset, index));
+      bindings.push(buildBinding(request, acceptedAsset, index, layout));
       return;
     }
 
@@ -230,7 +315,7 @@ export function resolveStoryboardAssets(params: {
     const match = candidates[0]?.asset;
 
     if (match) {
-      bindings.push(buildBinding(request, match, index));
+      bindings.push(buildBinding(request, match, index, layout));
       return;
     }
 

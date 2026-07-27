@@ -1,8 +1,8 @@
 import type { AssetItem } from '../types';
 import {
-  isAICardType,
   isDataContent,
   isMediaContent,
+  normalizeAICardType,
   type AIAnalysisResult,
   type AICard,
   type AISegment,
@@ -27,6 +27,11 @@ function normalizeAnalysisResult(result: AIAnalysisResult | null): AIAnalysisRes
 
   return {
     ...result,
+    // 旧工程的文字分类卡（summary/data/insight/chapter/quote）迁移为 motion。
+    cards: result.cards.map((card) => {
+      const type = normalizeAICardType(card.type) ?? 'motion';
+      return type === card.type ? card : { ...card, type };
+    }),
     coverPrompts: normalizeCoverPrompts(result.coverPrompts),
   };
 }
@@ -70,7 +75,7 @@ function isAICard(value: unknown): value is AICard {
   return (
     typeof value.id === 'string' &&
     typeof value.segmentId === 'string' &&
-    isAICardType(value.type) &&
+    normalizeAICardType(value.type) !== null &&
     typeof value.title === 'string' &&
     (typeof value.content === 'string' ||
       isDataContent(value.content) ||

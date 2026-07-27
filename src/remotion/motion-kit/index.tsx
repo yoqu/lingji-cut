@@ -23,7 +23,7 @@ export interface MotionTokens {
   /** 面板质感：none=纯排版；glass/panel 给内容块半透明面 */
   surface?: { kind: 'none' | 'glass' | 'panel'; bg?: string; border?: string; radius?: number };
   ambient?: {
-    kind: 'none' | 'grid' | 'orbs' | 'hairline' | 'grain';
+    kind: 'none' | 'grid' | 'orbs' | 'hairline' | 'hairline-grid' | 'grain';
     opacity?: [number, number];
     color?: string;
   };
@@ -177,7 +177,9 @@ export type SafeLayoutVariant =
   | 'split-compare'
   | 'chart-with-kicker'
   | 'list-with-kicker'
-  | 'asset-aside';
+  | 'asset-aside'
+  | 'asset-led'
+  | 'corner-anchor';
 
 export type MotionSlotName =
   | 'header'
@@ -191,6 +193,32 @@ export interface MotionSlotLifecycle {
   collapse?: Beat;
   exit?: Beat;
 }
+
+/**
+ * 叙事摄影机运镜：由分镜声明意图，kit 内部确定性落地（幅度硬上限、单调收敛）。
+ * push-in 推近焦点 / pull-out 拉开看全局 / pan 横移 / focus 把目标槽位推到画面中心。
+ */
+export type CameraMove = 'push-in' | 'pull-out' | 'pan-left' | 'pan-right' | 'focus';
+
+export interface CameraShot {
+  beat: Beat;
+  move: CameraMove;
+  /** focus / push-in 的目标槽位；缺省时只做纵深变化不平移 */
+  target?: MotionSlotName;
+}
+
+/**
+ * 指示标注（讲解者的手）：圈选 / 框选 / 箭头 / 批注 / 聚光灯压暗其余。
+ * 全部以包裹器形式覆盖在目标元素上，不参与布局流，不影响容量预算。
+ */
+export type AnnotateKind =
+  | 'circle'
+  | 'box'
+  | 'underline'
+  | 'highlight'
+  | 'strike'
+  | 'arrow'
+  | 'spotlight';
 
 interface StageState {
   tokens: MotionTokens;
@@ -206,7 +234,15 @@ interface StageState {
 }
 
 export interface MotionKit {
-  CardStage: React.ComponentType<{ tokens?: Partial<MotionTokens> | null; children?: ReactNode; style?: CSSProperties }>;
+  CardStage: React.ComponentType<{
+    tokens?: Partial<MotionTokens> | null;
+    /** 叙事运镜；与风格慢漂叠加后统一限幅 */
+    shots?: CameraShot[];
+    /** 运镜目标定位依据（与 SafeLayout variant 保持一致）；缺省按 single-focus 处理 */
+    layout?: SafeLayoutVariant;
+    children?: ReactNode;
+    style?: CSSProperties;
+  }>;
   SafeLayout: React.ComponentType<{ variant: SafeLayoutVariant; children?: ReactNode; style?: CSSProperties }>;
   MotionSlot: React.ComponentType<{
     name: MotionSlotName;
@@ -229,10 +265,40 @@ export interface MotionKit {
   popIn: (p: number) => CSSProperties;
   trackIn: (p: number) => CSSProperties;
   drawOn: (p: number, axis?: 'x' | 'y') => CSSProperties;
+  /** 遮罩揭示：内容不位移，由一道边界擦出（比位移更"信息图"） */
+  maskReveal: (p: number, dir?: 'up' | 'down' | 'left' | 'right') => CSSProperties;
+  /** 失焦→合焦：注意力从模糊聚拢到清晰 */
+  blurIn: (p: number) => CSSProperties;
+  /** 展开：绕顶边 3D 翻下，适合结论 / 卡面展开 */
+  unfold: (p: number) => CSSProperties;
+  /** 穿过：从略大缩到位，读作镜头穿越而非弹出 */
+  scaleThrough: (p: number) => CSSProperties;
+  /** 弹性入场：一次可控 overshoot 后收敛 */
+  elasticIn: (p: number) => CSSProperties;
+  /** 错峰子进度：把一个 beat 的 p 分给 total 个子项，返回第 index 项的 0→1 */
+  stagger: (p: number, index: number, total: number, overlap?: number) => number;
   countUp: (p: number, value: number, decimals?: number) => string;
+  /** 数值改写：从 from 变到 to（不是从 0 计数），用于"同一个指标变了" */
+  valueRewrite: (p: number, from: number, to: number, decimals?: number) => string;
+  /** 同位替换：旧内容缩淡出、新内容放淡入，占同一位置（before→after 的"变过去"） */
+  morphSwap: (p: number) => { out: CSSProperties; in: CSSProperties };
+  /** 列表重排：第 fromIndex 项移动到 toIndex 位（rowHeight = 行高 px） */
+  reorderY: (p: number, fromIndex: number, toIndex: number, rowHeight: number) => CSSProperties;
   settle: (frame: number, land: number, fps: number, max?: number) => CSSProperties;
   brighten: (frame: number, land: number) => CSSProperties;
   emphasize: (frame: number, land: number, fps: number, kind?: MotionKitEmphasis) => CSSProperties;
+  /**
+   * 指示标注包裹器：把讲解者的"手"叠在目标元素上。
+   * 不占布局、不进容量预算；每张卡最多 2 个（lint 拦截）。
+   */
+  Annotate: React.ComponentType<{
+    kind: AnnotateKind;
+    beat: Beat;
+    /** arrow 的指入方向 */
+    side?: 'left' | 'right' | 'top' | 'bottom';
+    children?: ReactNode;
+    style?: CSSProperties;
+  }>;
   Kicker: React.ComponentType<{ text: string; beat: Beat; accent?: boolean }>;
   StatHero: React.ComponentType<{
     value: number;
@@ -288,6 +354,8 @@ export interface MotionKit {
     beats?: Beat[];
     focusIndex?: number;
     emphasis?: MotionKitEmphasis;
+    /** 条内关键词（keywords[i] 属于 items[i]，空串跳过）：条目落地后逐个变色点亮。 */
+    keywords?: string[];
   }>;
   RankList: React.ComponentType<{
     items: Array<{ label: string; value?: string }>;
@@ -383,9 +451,57 @@ export interface MotionKit {
     emphasis?: MotionKitEmphasis;
   }>;
   UnderlineSweep: React.ComponentType<{ beat: Beat; width?: string }>;
+  /** 打字机：逐字上屏（中文按字符切分，\n 多行），光标落笔后闪烁退出；detail 副行打完后淡入 */
+  TypewriterText: React.ComponentType<{
+    text: string;
+    beat: Beat;
+    /** 每字上屏间隔帧数（越小越快），默认 2 */
+    framesPerChar?: number;
+    cursor?: boolean;
+    detail?: string;
+    font?: 'display' | 'body' | 'mono';
+    /** H 的倍数；缺省走 typeScale.lead */
+    size?: number;
+    weight?: number;
+    color?: string;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 逐词弹入：按调用方给定的语义块数组逐组 popIn（kit 不做分词），带 scale 回弹 */
+  WordPop: React.ComponentType<{
+    words: string[];
+    beat?: Beat;
+    beats?: Beat[];
+    /** 逐组 stagger 帧数（无 beats 时生效），默认 4 */
+    gap?: number;
+    font?: 'display' | 'body' | 'mono';
+    size?: number;
+    weight?: number;
+    color?: string;
+    emphasis?: MotionKitEmphasis;
+  }>;
+  /** 关键词扫描：句内关键词逐个变色点亮（color）或 accent 色块扫过（sweep）；关键词以传入数组为准 */
+  KeywordScan: React.ComponentType<{
+    text: string;
+    keywords: string[];
+    beat: Beat;
+    mode?: 'color' | 'sweep';
+    /** 关键词逐个点亮间隔帧数，默认 10 */
+    gap?: number;
+    font?: 'display' | 'body' | 'mono';
+    size?: number;
+    weight?: number;
+    color?: string;
+    emphasis?: MotionKitEmphasis;
+  }>;
 }
 
 const CLAMP = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
+
+/**
+ * 叙事运镜的最大推近倍率——推近必然让内容层超出画布（裁边是运镜的定义，不是缺陷）。
+ * 渲染探针的画布级出血容差必须引用这个常量，否则正常运镜会被误判成"内容装不下"。
+ */
+export const MOTION_CAMERA_MAX_SCALE = 1.12;
 
 export function createMotionKit(R: MotionKitRemotion): MotionKit {
   const { useCurrentFrame, useVideoConfig, interpolate, spring, Easing, AbsoluteFill } = R;
@@ -512,9 +628,96 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
       ? { transform: `scaleX(${e})`, transformOrigin: 'left center' }
       : { transform: `scaleY(${e})`, transformOrigin: 'center bottom' };
   };
-  const countUp = (p: number, value: number, decimals = 0): string => {
+  /* ---------- 手法扩展：揭示不等于位移，状态转移不等于重新入场 ---------- */
+
+  const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+  /** 小数位自动推导：未显式指定时按数值本身的小数位（封顶 2 位），整数恒为 0。 */
+  const autoDecimals = (value: number): number => {
+    if (!Number.isFinite(value)) return 0;
+    const s = String(value);
+    const dot = s.indexOf('.');
+    return dot < 0 ? 0 : Math.min(2, s.length - dot - 1);
+  };
+
+  const maskReveal = (p: number, dir: 'up' | 'down' | 'left' | 'right' = 'up'): CSSProperties => {
+    const e = eases.drive(p);
+    const hidden = ((1 - e) * 100).toFixed(2);
+    const inset =
+      dir === 'up'
+        ? `${hidden}% 0 0 0`
+        : dir === 'down'
+          ? `0 0 ${hidden}% 0`
+          : dir === 'left'
+            ? `0 ${hidden}% 0 0`
+            : `0 0 0 ${hidden}%`;
+    return { clipPath: `inset(${inset})`, opacity: Math.min(1, e * 1.6) };
+  };
+  const blurIn = (p: number): CSSProperties => {
+    const e = eases.crisp(p);
+    return e >= 1 ? { opacity: 1 } : { opacity: e, filter: `blur(${((1 - e) * 10).toFixed(2)}px)` };
+  };
+  const unfold = (p: number): CSSProperties => {
+    const e = eases.drive(p);
+    return {
+      opacity: Math.min(1, e * 1.5),
+      transform: `perspective(1200px) rotateX(${((1 - e) * -32).toFixed(2)}deg)`,
+      transformOrigin: 'center top',
+    };
+  };
+  const scaleThrough = (p: number): CSSProperties => {
+    const e = eases.crisp(p);
+    return { opacity: eases.snap(p), transform: `scale(${(1.14 - e * 0.14).toFixed(4)})` };
+  };
+  const elasticIn = (p: number): CSSProperties => {
+    const e = eases.lift(p);
+    return { opacity: Math.min(1, eases.snap(p) * 1.5), transform: `translateY(${((1 - e) * 28).toFixed(2)}px)` };
+  };
+  /**
+   * 错峰子进度：overlap=0 完全串行，overlap→1 趋近齐动。
+   * 让"逐项"由调用方自由拼装，不必为每种列表新增组件。
+   */
+  const stagger = (p: number, index: number, total: number, overlap = 0.55): number => {
+    const n = Math.max(1, total);
+    if (n === 1) return clamp01(p);
+    const span = 1 / (n - (n - 1) * clamp01(overlap));
+    const step = span * (1 - clamp01(overlap));
+    const start = index * step;
+    return clamp01((clamp01(p) - start) / Math.max(0.0001, span));
+  };
+
+  /* ---------- 状态转移：同一个元素变成另一个状态（MG 的核心） ---------- */
+
+  const valueRewrite = (p: number, from: number, to: number, decimals?: number): string => {
+    const v = from + (to - from) * eases.drive(clamp01(p));
+    const d = decimals ?? Math.max(autoDecimals(from), autoDecimals(to));
+    return d > 0 ? v.toFixed(d) : String(Math.round(v));
+  };
+  const morphSwap = (p: number): { out: CSSProperties; in: CSSProperties } => {
+    const e = eases.glide(clamp01(p));
+    return {
+      out: {
+        opacity: Math.max(0, 1 - e * 1.8),
+        filter: `blur(${(e * 6).toFixed(2)}px)`,
+        transform: `scale(${(1 - e * 0.12).toFixed(4)})`,
+      },
+      in: {
+        opacity: Math.max(0, e * 1.8 - 0.8),
+        filter: `blur(${((1 - e) * 6).toFixed(2)}px)`,
+        transform: `scale(${(0.9 + e * 0.1).toFixed(4)})`,
+      },
+    };
+  };
+  const reorderY = (p: number, fromIndex: number, toIndex: number, rowHeight: number): CSSProperties => {
+    const e = eases.glide(clamp01(p));
+    const dy = (toIndex - fromIndex) * rowHeight * e;
+    return { transform: `translateY(${dy.toFixed(2)}px)`, zIndex: toIndex < fromIndex ? 2 : 1 };
+  };
+
+  const countUp = (p: number, value: number, decimals?: number): string => {
     const v = value * eases.drive(p);
-    return decimals > 0 ? v.toFixed(decimals) : String(Math.round(v));
+    const d = decimals ?? autoDecimals(value);
+    return d > 0 ? v.toFixed(d) : String(Math.round(v));
   };
 
   /* ---------- 落地强调：一次性、有界、收敛后静止 ---------- */
@@ -583,6 +786,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
       const cell = Math.round(H * 0.08);
       return (
         <div
+          data-motion-layer="decorative"
           style={{
             ...base,
             backgroundImage: `repeating-linear-gradient(0deg, ${t.palette.track ?? 'rgba(255,255,255,0.1)'} 0 1px, transparent 1px ${cell}px), repeating-linear-gradient(90deg, ${t.palette.track ?? 'rgba(255,255,255,0.1)'} 0 1px, transparent 1px ${cell}px)`,
@@ -592,8 +796,9 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     }
     if (ambient.kind === 'orbs') {
       return (
-        <div style={base}>
+        <div data-motion-layer="decorative" style={base}>
           <div
+            data-motion-layer="decorative"
             style={{
               position: 'absolute',
               top: -H * 0.1,
@@ -606,6 +811,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
             }}
           />
           <div
+            data-motion-layer="decorative"
             style={{
               position: 'absolute',
               bottom: -H * 0.12,
@@ -623,6 +829,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     if (ambient.kind === 'grain') {
       return (
         <div
+          data-motion-layer="decorative"
           style={{
             ...base,
             backgroundImage: `repeating-linear-gradient(45deg, ${t.palette.track ?? 'rgba(255,255,255,0.06)'} 0 1px, transparent 1px 5px)`,
@@ -630,10 +837,44 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
         />
       );
     }
+    // hairline-grid：hairline 社论基线 + 全幅细网格叠层（网格降一档透明度保持基线层级；
+    // 格距比纯 grid 疏，读作杂志栏格而非坐标纸）。
+    if (ambient.kind === 'hairline-grid') {
+      const cell = Math.round(H * 0.12);
+      return (
+        <div data-motion-layer="decorative" style={base}>
+          <div
+            data-motion-layer="decorative"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              opacity: 0.75,
+              backgroundImage: `repeating-linear-gradient(0deg, ${t.palette.track ?? 'rgba(255,255,255,0.1)'} 0 1px, transparent 1px ${cell}px), repeating-linear-gradient(90deg, ${t.palette.track ?? 'rgba(255,255,255,0.1)'} 0 1px, transparent 1px ${cell}px)`,
+            }}
+          />
+          <div
+            data-motion-layer="decorative"
+            style={{
+              position: 'absolute',
+              left: W * 0.1,
+              right: W * 0.1,
+              top: H * 0.075,
+              height: 1,
+              background: t.palette.track ?? 'rgba(255,255,255,0.14)',
+            }}
+          />
+          <div
+            data-motion-layer="decorative"
+            style={{ position: 'absolute', left: W * 0.1, top: H * 0.075, width: W * 0.04, height: 2, background: color }}
+          />
+        </div>
+      );
+    }
     // hairline：安全区顶部一条基线 + 左上角短 accent 刻度
     return (
-      <div style={base}>
+      <div data-motion-layer="decorative" style={base}>
         <div
+          data-motion-layer="decorative"
           style={{
             position: 'absolute',
             left: W * 0.1,
@@ -644,18 +885,72 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
           }}
         />
         <div
+          data-motion-layer="decorative"
           style={{ position: 'absolute', left: W * 0.1, top: H * 0.075, width: W * 0.04, height: 2, background: color }}
         />
       </div>
     );
   }
 
+  /**
+   * 槽位在内容盒中的归一化中心偏移（相对内容盒中心，范围 ±0.5）——
+   * 运镜靠这张表确定性推算目标位置，不做 DOM 测量（渲染必须是 frame 的纯函数）。
+   */
+  const SLOT_OFFSET: Record<SafeLayoutVariant, Partial<Record<MotionSlotName, [number, number]>>> = {
+    'single-focus': { main: [0, 0] },
+    'title-hero': { header: [0, -0.38], main: [0, 0.08] },
+    'split-compare': { header: [0, -0.4], main: [0, 0.08] },
+    'chart-with-kicker': { header: [0, -0.38], main: [0, 0.08] },
+    'list-with-kicker': { header: [0, -0.38], main: [0, 0.08] },
+    'asset-aside': { header: [0, -0.4], main: [-0.22, 0.08], asset: [0.3, 0.08] },
+    'asset-led': { asset: [-0.28, 0], header: [0.34, -0.3], main: [0.34, 0.15] },
+    'corner-anchor': { main: [0.38, -0.36] },
+  };
+
+  /** 运镜限幅：越界即失控，一律夹在有界区间内（配合 CardStage overflow:hidden 不会露底）。 */
+  const CAMERA_BOUND = { scale: [0.94, MOTION_CAMERA_MAX_SCALE] as const, shift: 0.09 };
+
+  interface CameraState {
+    scale: number;
+    x: number;
+    y: number;
+  }
+
+  function resolveShotState(shot: CameraShot, prev: CameraState, layout: SafeLayoutVariant): CameraState {
+    const offset = (shot.target ? SLOT_OFFSET[layout]?.[shot.target] : undefined) ?? [0, 0];
+    if (shot.move === 'pull-out') return { scale: 0.97, x: 0, y: 0 };
+    if (shot.move === 'pan-left') return { ...prev, x: -0.05 };
+    if (shot.move === 'pan-right') return { ...prev, x: 0.05 };
+    const scale = shot.move === 'focus' ? 1.1 : 1.06;
+    // 推近时把目标槽位往画面中心带（乘 scale 抵消缩放引入的位移放大）
+    return { scale, x: -offset[0] * scale * 0.9, y: -offset[1] * scale * 0.9 };
+  }
+
+  function cameraFromShots(shots: CameraShot[] | undefined, layout: SafeLayoutVariant): CameraState {
+    let cur: CameraState = { scale: 1, x: 0, y: 0 };
+    for (const shot of shots ?? []) {
+      if (!shot?.beat) continue;
+      const target = resolveShotState(shot, cur, layout);
+      const e = eases.glide(clamp01(shot.beat.p));
+      cur = {
+        scale: cur.scale + (target.scale - cur.scale) * e,
+        x: cur.x + (target.x - cur.x) * e,
+        y: cur.y + (target.y - cur.y) * e,
+      };
+    }
+    return cur;
+  }
+
   function CardStage({
     tokens,
+    shots,
+    layout = 'single-focus',
     children,
     style,
   }: {
     tokens?: Partial<MotionTokens> | null;
+    shots?: CameraShot[];
+    layout?: SafeLayoutVariant;
     children?: ReactNode;
     style?: CSSProperties;
   }) {
@@ -663,18 +958,26 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     const { width: W, height: H, fps, durationInFrames: D } = useVideoConfig();
     const t = normalizeMotionTokens(tokens);
     const camera = t.camera ?? { mode: 'still' as const };
-    let cameraTransform = 'none';
+    let driftScale = 1;
+    let driftX = 0;
     if (camera.mode !== 'still') {
       // range = [起点, 终点]，跨全片单调慢漂；push 通常升序（推近）、pull 降序（拉远），
       // 数值本身即真源，mode 只是语义标签。pan 把同一漂移映射为 ±小幅水平位移。
       const [a, b] = camera.range ?? (camera.mode === 'pull' ? [1.01, 0.99] : [0.99, 1.01]);
       const drift = interpolate(frame, [0, Math.max(D, 1)], [a, b], { ...CLAMP, easing: eases.glide });
-      if (camera.mode === 'pan') {
-        cameraTransform = `translateX(${((drift - (a + b) / 2) * W).toFixed(2)}px)`;
-      } else {
-        cameraTransform = `scale(${drift.toFixed(4)})`;
-      }
+      if (camera.mode === 'pan') driftX = (drift - (a + b) / 2) * W;
+      else driftScale = drift;
     }
+    // 叙事运镜与风格慢漂叠加后统一限幅：慢漂负责"活着"，运镜负责"讲清楚"。
+    const shot = cameraFromShots(shots, layout);
+    const finalScale = Math.max(
+      CAMERA_BOUND.scale[0],
+      Math.min(CAMERA_BOUND.scale[1], shot.scale * driftScale),
+    );
+    const bound = CAMERA_BOUND.shift;
+    const finalX = Math.max(-bound, Math.min(bound, shot.x)) * (W * 0.8) + driftX;
+    const finalY = Math.max(-bound, Math.min(bound, shot.y)) * (H * 0.72);
+    const cameraTransform = `translate(${finalX.toFixed(2)}px, ${finalY.toFixed(2)}px) scale(${finalScale.toFixed(4)})`;
     const exitOpacity = D > 90 ? interpolate(frame, [D - 14, D], [1, 0], CLAMP) : 1;
     const stage: StageState = { tokens: t, W, H, CW: W * 0.8, CH: H * 0.72, fps, D, frame };
     return (
@@ -751,6 +1054,22 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
         gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 0.85fr)',
         gridTemplateRows: 'auto minmax(0, 1fr)',
         gridTemplateAreas: '"header header" "main asset"',
+      },
+      // 大图小字：素材通栏占左格（约 65% 宽、满内容高）承担主视觉；
+      // 右列只剩 header kicker + main 一行注释——文字必须少而克制。
+      'asset-led': {
+        gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 0.7fr)',
+        gridTemplateRows: 'auto minmax(0, 1fr)',
+        gridTemplateAreas: '"asset header" "asset main"',
+      },
+      // 关键词锚点：main 槽收缩到内容尺寸并钉在内容盒右上角（底部 20% 字幕区之外），
+      // 大面积留白是刻意的——让观众聚焦口播，锚点只做「叮一下」的强调。
+      'corner-anchor': {
+        gridTemplateColumns: 'minmax(0, 1fr)',
+        gridTemplateRows: 'minmax(0, 1fr)',
+        gridTemplateAreas: '"main"',
+        alignItems: 'start',
+        justifyItems: 'end',
       },
     };
     return (
@@ -833,6 +1152,173 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     };
   }
 
+  /* ---------- 指示标注层：讲解者的手（圈 / 框 / 划 / 指 / 聚光） ---------- */
+
+  function dimColor(t: MotionTokens, alpha: number): string {
+    const rgb = parseColor(t.palette.bg);
+    if (!rgb) return `rgba(0,0,0,${alpha.toFixed(3)})`;
+    return `rgba(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])},${alpha.toFixed(3)})`;
+  }
+
+  function Annotate({
+    kind,
+    beat,
+    side = 'right',
+    children,
+    style,
+  }: {
+    kind: AnnotateKind;
+    beat: Beat;
+    side?: 'left' | 'right' | 'top' | 'bottom';
+    children?: ReactNode;
+    style?: CSSProperties;
+  }) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const p = clamp01(beat?.p ?? 1);
+    const draw = eases.drive(p);
+    const accent = t.palette.accent;
+    const stroke = Math.max(2, H * 0.0035);
+    // 标注的呼吸留白由包裹器 padding 真实占位（下方 wrap），标注层再精确铺满这层留白：
+    // 任何负向外扩都会溢出内容盒被渲染探针判裁切，所以这里一律 inset:0 且显式给尺寸。
+    const cover: CSSProperties = {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      width: '100%',
+      height: '100%',
+      pointerEvents: 'none',
+    };
+    const svgProps = { viewBox: '0 0 100 100', preserveAspectRatio: 'none' as const, style: cover };
+    const strokeProps = {
+      fill: 'none',
+      stroke: accent,
+      strokeWidth: stroke,
+      strokeLinecap: 'round' as const,
+      vectorEffect: 'non-scaling-stroke' as const,
+      pathLength: 1,
+      strokeDasharray: 1,
+      strokeDashoffset: 1 - draw,
+    };
+    let layer: ReactNode = null;
+    if (kind === 'circle') {
+      layer = (
+        <svg {...svgProps} style={{ ...cover, transform: 'rotate(-1.2deg)' }}>
+          <ellipse cx="50" cy="50" rx="48" ry="45" {...strokeProps} />
+        </svg>
+      );
+    } else if (kind === 'box') {
+      layer = (
+        <svg {...svgProps}>
+          <rect x="1" y="1" width="98" height="98" {...strokeProps} />
+        </svg>
+      );
+    } else if (kind === 'underline') {
+      layer = (
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: Math.max(2, H * 0.005),
+            background: accent,
+            transform: `scaleX(${draw.toFixed(4)})`,
+            transformOrigin: 'left center',
+          }}
+        />
+      );
+    } else if (kind === 'highlight') {
+      // 荧光笔：低透明 accent 扫过文字背面，不改字色——不触发字底对比度回退
+      layer = (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: accent,
+            opacity: 0.18,
+            zIndex: 0,
+            transform: `scaleX(${draw.toFixed(4)})`,
+            transformOrigin: 'left center',
+          }}
+        />
+      );
+    } else if (kind === 'strike') {
+      layer = (
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: '50%',
+            height: Math.max(2, H * 0.004),
+            background: accent,
+            transform: `scaleX(${draw.toFixed(4)})`,
+            transformOrigin: 'left center',
+          }}
+        />
+      );
+    } else if (kind === 'spotlight') {
+      layer = (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: H * 0.02,
+            boxShadow: `0 0 0 9999px ${dimColor(t, 0.66 * eases.crisp(p))}`,
+          }}
+        />
+      );
+    } else if (kind === 'arrow') {
+      // 从挂靠边内侧指向元素中心，箭头全程在盒内
+      const geometry =
+        side === 'left'
+          ? { d: 'M 2 50 L 26 50', head: 'M 26 50 L 18 45 L 18 55 Z' }
+          : side === 'right'
+            ? { d: 'M 98 50 L 74 50', head: 'M 74 50 L 82 45 L 82 55 Z' }
+            : side === 'top'
+              ? { d: 'M 50 2 L 50 26', head: 'M 50 26 L 45 18 L 55 18 Z' }
+              : { d: 'M 50 98 L 50 74', head: 'M 50 74 L 45 82 L 55 82 Z' };
+      layer = (
+        <svg {...svgProps}>
+          <path d={geometry.d} {...strokeProps} />
+          <path d={geometry.head} fill={accent} opacity={clamp01((p - 0.6) / 0.3)} />
+        </svg>
+      );
+    }
+
+    return (
+      <div
+        data-motion-annotate={kind}
+        style={{
+          // 与 MotionSlot 的容器语义保持一致：包一层不能改变子元素的尺寸约束，
+          // 否则原本受 flex 约束的图表会退回内在高度并撑破内容盒。
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          minWidth: 0,
+          minHeight: 0,
+          ...style,
+        }}
+      >
+        <div
+          style={{
+            position: 'relative',
+            zIndex: 1,
+            // flex 子项默认 min-width:auto——不显式归零，宽内容会把包裹器顶出内容盒
+            minWidth: 0,
+            minHeight: 0,
+            maxWidth: '100%',
+            opacity: kind === 'strike' ? 1 - 0.42 * draw : 1,
+          }}
+        >
+          {children}
+        </div>
+        {layer}
+      </div>
+    );
+  }
+
   /* ---------- 内容原语 ---------- */
 
   function Kicker({ text, beat, accent = true }: { text: string; beat: Beat; accent?: boolean }) {
@@ -858,7 +1344,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     unit,
     label,
     beat,
-    decimals = 0,
+    decimals,
     max,
     emphasis: emphasisOverride,
   }: {
@@ -910,7 +1396,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     unit,
     label,
     beat,
-    decimals = 0,
+    decimals,
     emphasis: emphasisOverride,
   }: {
     value: number;
@@ -1086,7 +1572,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     fill?: boolean;
     emphasis?: MotionKitEmphasis;
   }) {
-    const { tokens: t, H, frame, fps } = useStage();
+    const { tokens: t, H, CH, frame, fps } = useStage();
     const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
     const safePoints = points.length > 0 ? points : [0];
     const min = Math.min(...safePoints);
@@ -1101,7 +1587,9 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     const last = coords[coords.length - 1];
     const first = coords[0];
     return (
-      <div style={{ position: 'relative', width: '100%' }}>
+      // 满宽折线的高度 = 宽 × 0.42，通栏时单图就吃掉整个内容盒（带 header / 标签必溢出）：
+      // 按内容盒高度反推最大宽度，把图表钉在 ≤0.58CH，其余留给标题与首尾标签。
+      <div style={{ position: 'relative', width: '100%', maxWidth: (CH * 0.58) / 0.42, margin: '0 auto' }}>
         <svg viewBox="0 0 100 42" style={{ width: '100%', display: 'block', overflow: 'visible' }}>
           {fill ? (
             <polygon
@@ -1223,12 +1711,14 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     beats,
     focusIndex = 0,
     emphasis: emphasisOverride,
+    keywords,
   }: {
     items: string[];
     beat?: Beat;
     beats?: Beat[];
     focusIndex?: number;
     emphasis?: MotionKitEmphasis;
+    keywords?: string[];
   }) {
     const { tokens: t, H, frame, fps } = useStage();
     const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
@@ -1240,6 +1730,8 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
           const start = b ? b.start : (beat?.start ?? 0) + i * 6;
           const p = b ? b.p : interpolate(frame, [start, start + 12], [0, 1], CLAMP);
           const numP = interpolate(frame, [start, start + 8], [0, 1], CLAMP);
+          const land = b?.land ?? start + 12;
+          const keyword = typeof keywords?.[i] === 'string' && keywords[i].trim() ? keywords[i].trim() : '';
           return (
             <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: H * 0.03 }}>
               <span
@@ -1260,10 +1752,12 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
                   overflowWrap: 'anywhere',
                   minWidth: 0,
                   ...fadeUp(p, 20),
-                  ...(i === focusIndex ? emphasize(frame, b?.land ?? start + 12, fps, emphasis) : {}),
+                  ...(i === focusIndex ? emphasize(frame, land, fps, emphasis) : {}),
                 }}
               >
-                {text}
+                {keyword
+                  ? scanSpans(text, [keyword], () => land + 2, frame, 'color', t.palette.ink, accentTextColor(t), t.palette.bg)
+                  : text}
               </span>
             </div>
           );
@@ -1657,9 +2151,12 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
         {safeItems.map((item, i) => {
           const x = Math.max(8, Math.min(92, item.x));
           const y = Math.max(8, Math.min(92, 100 - item.y));
+          // 象限点逐项 stagger 入场（不再统一 opacity），focus 项落定后保留 emphasize。
+          const start = beat.start + i * 5;
+          const p = interpolate(frame, [start, start + 12], [0, 1], CLAMP);
           return (
-            <div key={i} style={{ position: 'absolute', left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -50%)', opacity: eases.snap(beat.p) }}>
-              <div style={{ padding: `${H * 0.01}px ${H * 0.018}px`, background: item.focus ? t.palette.accent : t.palette.track, color: item.focus ? t.palette.bg : t.palette.ink, fontFamily: t.fonts.body, fontSize: H * 0.028, whiteSpace: 'nowrap', ...(item.focus ? emphasize(frame, beat.land, fps, emphasis) : {}) }}>
+            <div key={i} style={{ position: 'absolute', left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -50%)' }}>
+              <div style={{ padding: `${H * 0.01}px ${H * 0.018}px`, background: item.focus ? t.palette.accent : t.palette.track, color: item.focus ? t.palette.bg : t.palette.ink, fontFamily: t.fonts.body, fontSize: H * 0.028, whiteSpace: 'nowrap', ...popIn(p), ...(item.focus ? emphasize(frame, start + 12, fps, emphasis) : {}) }}>
                 {item.label}
               </div>
             </div>
@@ -1722,9 +2219,14 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     return (
       <div style={{ position: 'relative', height: H * 0.42, ...fadeUp(beat.p, 16) }}>
         <svg viewBox="0 0 100 100" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-          {links.slice(0, 8).map(([a, b], i) => coords[a] && coords[b] ? (
-            <line key={i} x1={coords[a].x} y1={coords[a].y} x2={coords[b].x} y2={coords[b].y} stroke={t.palette.track} strokeWidth={0.8} />
-          ) : null)}
+          {links.slice(0, 8).map(([a, b], i) => {
+            if (!coords[a] || !coords[b]) return null;
+            // 节点落位后连线依次描边生长（drawOn 在 SVG 上的描边等价手法，与 TrendLine 一致）
+            const linkP = interpolate(frame, [beat.start + 4 + i * 3, beat.start + 16 + i * 3], [0, 1], CLAMP);
+            return (
+              <line key={i} x1={coords[a].x} y1={coords[a].y} x2={coords[b].x} y2={coords[b].y} stroke={t.palette.track} strokeWidth={0.8} pathLength={1} strokeDasharray={1} strokeDashoffset={1 - eases.glide(linkP)} />
+            );
+          })}
         </svg>
         {safeNodes.map((node, i) => (
           <div key={i} style={{ position: 'absolute', left: `${coords[i].x}%`, top: `${coords[i].y}%`, transform: 'translate(-50%, -50%)', padding: `${H * 0.012}px ${H * 0.02}px`, background: i === focusIndex ? t.palette.accent : t.palette.track, color: i === focusIndex ? t.palette.bg : t.palette.ink, fontFamily: t.fonts.body, fontSize: H * 0.028, whiteSpace: 'nowrap' }}>
@@ -1843,6 +2345,241 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     const { tokens: t, H } = useStage();
     return (
       <div style={{ width, height: Math.max(3, H * 0.005), background: t.palette.accent, ...drawOn(beat.p) }} />
+    );
+  }
+
+  /* ---------- 文字动效原语（kinetic typography：逐字 / 逐词 / 关键词扫描） ---------- */
+
+  /** 三个文字原语共享的排版覆写：缺省全部走 tokens。 */
+  interface KineticTypeProps {
+    font?: 'display' | 'body' | 'mono';
+    size?: number;
+    weight?: number;
+    color?: string;
+  }
+
+  function kineticTypeStyle(t: MotionTokens, H: number, props: KineticTypeProps): CSSProperties {
+    return {
+      fontFamily: props.font ? t.fonts[props.font] : t.fonts.body,
+      fontSize: H * (props.size ?? t.typeScale?.lead ?? 0.05),
+      fontWeight: props.weight ?? 500,
+      color: props.color ?? t.palette.ink,
+    };
+  }
+
+  /** 句内关键词定位：按 keywords 顺序在 text 中顺序匹配首次出现，返回 [start, end) 区间（kit 不做分词/提取）。 */
+  function locateKeywords(text: string, keywords: string[]): Array<[number, number]> {
+    const ranges: Array<[number, number]> = [];
+    let cursor = 0;
+    for (const raw of keywords) {
+      const kw = String(raw ?? '');
+      if (!kw) continue;
+      const at = text.indexOf(kw, cursor);
+      if (at < 0) continue;
+      ranges.push([at, at + kw.length]);
+      cursor = at + kw.length;
+    }
+    return ranges;
+  }
+
+  /**
+   * 关键词扫描着色片段（KeywordScan 与 ListBuild keywords 共用）：
+   * color = 文字颜色渐变点亮（clip-path 扫亮）；sweep = accent 色块扫过。
+   * startAt(k) 给出第 k 个关键词的扫描起始帧。
+   */
+  function scanSpans(
+    text: string,
+    keywords: string[],
+    startAt: (k: number) => number,
+    frame: number,
+    mode: 'color' | 'sweep',
+    baseColor: string,
+    accent: string,
+    onAccent: string,
+  ): ReactNode[] {
+    const ranges = locateKeywords(text, keywords).slice(0, 6);
+    const nodes: ReactNode[] = [];
+    let pos = 0;
+    ranges.forEach(([s, e], k) => {
+      if (s > pos) nodes.push(text.slice(pos, s));
+      const word = text.slice(s, e);
+      const p = interpolate(frame, [startAt(k), startAt(k) + 10], [0, 1], CLAMP);
+      if (mode === 'sweep') {
+        nodes.push(
+          <span
+            key={`kw${k}`}
+            style={{
+              display: 'inline-block',
+              whiteSpace: 'nowrap',
+              // padding 扩块、负 margin 收回，扫块不推动前后文字
+              padding: '0 0.14em',
+              margin: '0 -0.14em',
+              borderRadius: '0.14em',
+              color: p >= 0.5 ? onAccent : baseColor,
+              backgroundImage: `linear-gradient(${accent}, ${accent})`,
+              backgroundRepeat: 'no-repeat',
+              backgroundSize: `${(p * 100).toFixed(1)}% 100%`,
+            }}
+          >
+            {word}
+          </span>,
+        );
+      } else {
+        nodes.push(
+          <span key={`kw${k}`} style={{ position: 'relative', display: 'inline-block', whiteSpace: 'nowrap' }}>
+            <span>{word}</span>
+            <span style={{ position: 'absolute', inset: 0, color: accent, clipPath: `inset(0 ${((1 - p) * 100).toFixed(1)}% 0 0)` }}>
+              {word}
+            </span>
+          </span>,
+        );
+      }
+      pos = e;
+    });
+    if (pos < text.length) nodes.push(text.slice(pos));
+    return nodes;
+  }
+
+  function TypewriterText({
+    text,
+    beat,
+    framesPerChar = 2,
+    cursor = true,
+    detail,
+    emphasis: emphasisOverride,
+    ...typeProps
+  }: {
+    text: string;
+    beat: Beat;
+    framesPerChar?: number;
+    cursor?: boolean;
+    detail?: string;
+    emphasis?: MotionKitEmphasis;
+  } & KineticTypeProps) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const lines = String(text ?? '').split('\n');
+    // 单字落笔窗（pop 回弹），逐字间隔 framesPerChar
+    const perChar = 4;
+    const total = lines.reduce((n, line) => n + Array.from(line).length, 0);
+    if (total === 0 && !detail) return null;
+    const typedEnd = beat.start + Math.max(0, (total - 1) * framesPerChar) + perChar;
+    const headIndex = Math.min(total - 1, Math.max(-1, Math.floor((frame - beat.start) / Math.max(1, framesPerChar))));
+    // 光标：打字中常显；落笔后短闪烁再退出（全部帧驱动，确定性）
+    const cursorOn = frame < typedEnd || Math.floor((frame - typedEnd) / 4) % 2 === 0;
+    const cursorGone = frame >= typedEnd + 22;
+    const cursorNode = cursor && !cursorGone ? (
+      <span
+        style={{
+          display: 'inline-block',
+          width: '0.09em',
+          height: '0.92em',
+          marginLeft: '0.05em',
+          verticalAlign: '-0.1em',
+          background: typeProps.color ?? accentTextColor(t),
+          opacity: frame >= beat.start && cursorOn ? 1 : 0,
+        }}
+      />
+    ) : null;
+    const detailP = interpolate(frame, [typedEnd + 2, typedEnd + 14], [0, 1], CLAMP);
+    let charIndex = 0;
+    return (
+      <div style={{ lineHeight: 1.3, ...kineticTypeStyle(t, H, typeProps), ...emphasize(frame, typedEnd, fps, emphasis) }}>
+        {lines.map((line, lineIdx) => {
+          const chars = Array.from(line);
+          const nodes: ReactNode[] = [];
+          if (lineIdx === 0 && headIndex < 0 && cursorNode) nodes.push(cursorNode);
+          chars.forEach((ch) => {
+            const idx = charIndex;
+            charIndex += 1;
+            const appear = beat.start + idx * Math.max(1, framesPerChar);
+            const p = interpolate(frame, [appear, appear + perChar], [0, 1], CLAMP);
+            const e = eases.lift(p);
+            nodes.push(
+              <span
+                key={idx}
+                style={{
+                  display: 'inline-block',
+                  whiteSpace: 'pre',
+                  opacity: eases.snap(p),
+                  transform: `translateY(${((1 - e) * 0.3).toFixed(3)}em) scale(${(0.92 + e * 0.08).toFixed(4)})`,
+                }}
+              >
+                {ch}
+              </span>,
+            );
+            if (idx === headIndex && cursorNode) nodes.push(cursorNode);
+          });
+          return <div key={lineIdx}>{nodes.length > 0 ? nodes : ' '}</div>;
+        })}
+        {detail ? (
+          <div style={{ marginTop: H * 0.03, fontFamily: t.fonts.body, fontSize: H * (t.typeScale?.body ?? 0.036), lineHeight: 1.45, color: t.palette.muted, ...fadeUp(detailP, 14) }}>
+            {detail}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  function WordPop({
+    words,
+    beat,
+    beats,
+    gap = 4,
+    emphasis: emphasisOverride,
+    ...typeProps
+  }: {
+    words: string[];
+    beat?: Beat;
+    beats?: Beat[];
+    gap?: number;
+    emphasis?: MotionKitEmphasis;
+  } & KineticTypeProps) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const safeWords = words.map((w) => String(w ?? '')).filter((w) => w.length > 0).slice(0, 12);
+    if (safeWords.length === 0) return null;
+    const lastBeat = beats?.[safeWords.length - 1];
+    const lastLand = lastBeat?.land ?? (beat?.start ?? 0) + (safeWords.length - 1) * gap + 10;
+    return (
+      <div style={{ lineHeight: 1.3, ...kineticTypeStyle(t, H, typeProps), ...emphasize(frame, lastLand, fps, emphasis) }}>
+        {safeWords.map((word, i) => {
+          const b = beats?.[i];
+          const start = b ? b.start : (beat?.start ?? 0) + i * gap;
+          const p = b ? b.p : interpolate(frame, [start, start + 10], [0, 1], CLAMP);
+          return (
+            <span key={i} style={{ display: 'inline-block', whiteSpace: 'pre', marginRight: i < safeWords.length - 1 ? '0.22em' : 0, ...popIn(p) }}>
+              {word}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function KeywordScan({
+    text,
+    keywords,
+    beat,
+    mode = 'color',
+    gap = 10,
+    emphasis: emphasisOverride,
+    ...typeProps
+  }: {
+    text: string;
+    keywords: string[];
+    beat: Beat;
+    mode?: 'color' | 'sweep';
+    gap?: number;
+    emphasis?: MotionKitEmphasis;
+  } & KineticTypeProps) {
+    const { tokens: t, H, frame, fps } = useStage();
+    const emphasis = emphasisOverride ?? t.persona?.emphasis ?? 'settle';
+    const base = kineticTypeStyle(t, H, typeProps);
+    return (
+      <div style={{ lineHeight: 1.4, overflowWrap: 'anywhere', ...base, ...fadeUp(beat.p, 18), ...emphasize(frame, beat.land, fps, emphasis) }}>
+        {scanSpans(String(text ?? ''), keywords, (k) => beat.start + 6 + k * gap, frame, mode, base.color as string, accentTextColor(t), t.palette.bg)}
+      </div>
     );
   }
 
@@ -2009,7 +2746,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     label,
     delta,
     beat,
-    decimals = 0,
+    decimals,
     emphasis: emphasisOverride,
   }: {
     value: number;
@@ -2062,7 +2799,7 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     label,
     reference,
     beat,
-    decimals = 0,
+    decimals,
     emphasis: emphasisOverride,
   }: {
     value: number;
@@ -2252,10 +2989,20 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     popIn,
     trackIn,
     drawOn,
+    maskReveal,
+    blurIn,
+    unfold,
+    scaleThrough,
+    elasticIn,
+    stagger,
     countUp,
+    valueRewrite,
+    morphSwap,
+    reorderY,
     settle,
     brighten,
     emphasize: emphasize as MotionKit['emphasize'],
+    Annotate,
     Kicker,
     StatHero,
     RingCounter,
@@ -2287,6 +3034,9 @@ export function createMotionKit(R: MotionKitRemotion): MotionKit {
     DataTable,
     SectionTitle,
     UnderlineSweep,
+    TypewriterText,
+    WordPop,
+    KeywordScan,
   };
 }
 
@@ -2307,10 +3057,20 @@ export const MOTION_KIT_EXPORT_NAMES = [
   'popIn',
   'trackIn',
   'drawOn',
+  'maskReveal',
+  'blurIn',
+  'unfold',
+  'scaleThrough',
+  'elasticIn',
+  'stagger',
   'countUp',
+  'valueRewrite',
+  'morphSwap',
+  'reorderY',
   'settle',
   'brighten',
   'emphasize',
+  'Annotate',
   'Kicker',
   'StatHero',
   'RingCounter',
@@ -2342,16 +3102,23 @@ export const MOTION_KIT_EXPORT_NAMES = [
   'DataTable',
   'SectionTitle',
   'UnderlineSweep',
+  'TypewriterText',
+  'WordPop',
+  'KeywordScan',
 ] as const;
 
 /**
  * 注入雕刻提示词的 kit API 摘要——唯一事实来源，与实现同文件维护。
  * 修改 API 时必须同步本摘要。
  */
-export const MOTION_KIT_API_DOC = `import { CardStage, SafeLayout, MotionSlot, useBeats, useTimingPlan, Kicker, StatHero, RingCounter, BarChart, HorizontalBars, TrendLine, CompareRow, ListBuild, RankList, ChecklistPop, ProcessFlow, CauseChain, QuoteBlock, ConceptCard, CitationCard, KeyPointMarker, TimelineRail, MatrixQuadrant, FunnelStack, NetworkMap, BeforeAfter, MythFactSwap, StackedComposition, ColumnChart, DonutChart, MetricPulse, ScaleImpact, StatGrid, DataTable, SectionTitle, UnderlineSweep, fadeUp, slideIn, riseIn, popIn, trackIn, drawOn, countUp, emphasize, useStage } from '@lingji/motion-kit';
+export const MOTION_KIT_API_DOC = `import { CardStage, SafeLayout, MotionSlot, Annotate, useBeats, useTimingPlan, Kicker, StatHero, RingCounter, BarChart, HorizontalBars, TrendLine, CompareRow, ListBuild, RankList, ChecklistPop, ProcessFlow, CauseChain, QuoteBlock, ConceptCard, CitationCard, KeyPointMarker, TimelineRail, MatrixQuadrant, FunnelStack, NetworkMap, BeforeAfter, MythFactSwap, StackedComposition, ColumnChart, DonutChart, MetricPulse, ScaleImpact, StatGrid, DataTable, SectionTitle, UnderlineSweep, TypewriterText, WordPop, KeywordScan, fadeUp, slideIn, riseIn, popIn, trackIn, drawOn, maskReveal, blurIn, unfold, scaleThrough, elasticIn, stagger, countUp, valueRewrite, morphSwap, reorderY, emphasize, useStage } from '@lingji/motion-kit';
 
 // 舞台（必用做根节点）：底色/安全区(底部20%字幕区)/镜头慢漂/氛围装饰层/退场淡出全部内置
 <CardStage tokens={TOKENS}>{...}</CardStage>   // TOKENS = 系统注入的风格 tokens 常量，原样传入
+// 叙事运镜（可选，强解释力）：把镜头推向正在讲的那块内容；限幅与收敛内置，只声明意图
+<CardStage tokens={TOKENS} layout="title-hero" shots={[{ beat: beats[2], move: 'focus', target: 'main' }]}>
+// move: 'push-in' 推近 | 'focus' 推近并把 target 槽位带到画面中心 | 'pull-out' 拉开看全局 | 'pan-left' / 'pan-right' 横移
+// layout 必须与下面 SafeLayout 的 variant 一致；整卡运镜 ≤2 次，滥用会晕
 
 // 自动模式安全布局（必用）：一个 header + 一个 main，或明确的左右槽位；禁止自由 absolute 定位
 <SafeLayout variant="title-hero">
@@ -2359,6 +3126,7 @@ export const MOTION_KIT_API_DOC = `import { CardStage, SafeLayout, MotionSlot, u
   <MotionSlot name="main" role="focus" lifecycle={{enter: beats[1]}}><StatHero ... /></MotionSlot>
 </SafeLayout>
 // lifecycle 作用于整个语义区块：enter 入场、update 短暂提亮、collapse 收为弱辅助、exit 退场
+// corner-anchor 变体：main 槽钉在右上角（无 header），专供关键词锚点卡——配 WordPop size={0.04} 小字，大面积留白让观众聚焦口播
 
 // 节拍（必用）：anchors[i] = 第 i 拍内容在逐句字幕里被讲到的句索引（第 0 拍传 null 表示入场）
 const beats = useBeats(cues, [null, 2, 5]);    // 返回 Beat[]：{ start, p(0→1), land, done }
@@ -2398,10 +3166,31 @@ const beats = useTimingPlan(timingPlan, cues, [null, 2, 5]);
 <DataTable columns={['平台','粉丝','单价']} rows={[['抖音','120万','¥18'], ['B站','45万','¥32']]} beat={beats[1]} focusRow={0} /> // ≤5行×≤4列，行逐条揭示
 <SectionTitle index="02" title="章节标题" subtitle="可选副题" beat={beats[1]} />          // 章节过渡卡
 <UnderlineSweep beat={beats[2]} width="38%" />                           // 焦点下划线扫过（accent 小重音）
+<TypewriterText text="逐字上屏的标题" beat={beats[1]} framesPerChar={2} detail="打完后淡入的副行" font="display" size={0.09} /> // 打字机，\n 多行；cursor={false} 去光标
+<WordPop words={['光模块', '是', '最大确定性']} beat={beats[1]} font="display" size={0.08} emphasis="settle" /> // 逐词弹入带回弹；语义块由你切分（kit 不分词），≤12 块
+<KeywordScan text="毛利率创下历史新高" keywords={['历史新高']} beat={beats[1]} mode="sweep" />  // 句内关键词逐个强调：color=变色点亮(默认) sweep=色块扫过
+<ListBuild items={['需求爆发', '订单饱满']} keywords={['爆发', '']} beats={[beats[1], beats[2]]} /> // keywords[i] 属于 items[i]，条目落地后变色点亮
+
+// 指示标注（讲解者的手，clarity 最高杠杆）：包住要指的那块内容；标注层不占布局、不进容量预算
+<Annotate kind="circle" beat={beats[2]}><StatHero ... /></Annotate>
+<Annotate kind="arrow" beat={beats[2]} side="right"><TrendLine ... /></Annotate>
+// kind: 'circle' 圈出 | 'box' 框出 | 'underline' 划线 | 'highlight' 荧光笔扫过 | 'strike' 划掉(误区)
+//     | 'spotlight' 压暗其余只留这块 | 'arrow' 箭头指入(side 定方向)
+// 纯图形无文字——要写字用 Kicker / 内容原语。整卡 ≤2 个 Annotate，只标真正的焦点
 
 // 手法（返回 style 片段，自由拼装自己的元素；每种缓动不同，别整卡只用一种）
 fadeUp(beat.p)  slideIn(beat.p,'left')  riseIn(beat.p)  popIn(beat.p)  trackIn(beat.p)  drawOn(beat.p,'x')
+maskReveal(beat.p,'up')   // 内容不动，由边界擦出（信息图首选）
+blurIn(beat.p)            // 失焦→合焦
+unfold(beat.p)            // 绕顶边 3D 翻下
+scaleThrough(beat.p)      // 从略大缩到位，镜头穿越感
+elasticIn(beat.p)         // 一次可控回弹
+stagger(beat.p, i, n)     // 逐项错峰子进度：items.map((x,i)=> fadeUp(stagger(beat.p,i,items.length)))
 countUp(beat.p, 28842)                       // 数字字符串（配 fontVariantNumeric:'tabular-nums'）
+// 状态转移（MG 的核心：同一元素变成另一状态，而不是又一次入场）
+valueRewrite(beat.p, 19003, 28842)           // 数值从旧值改写到新值（"这个指标变了"）
+const m = morphSwap(beat.p)                  // 同位替换：<span style={m.out}>旧</span> 叠 <span style={m.in}>新</span>
+reorderY(beat.p, 3, 0, rowH)                 // 列表某项移动到新名次（rowH = 行高 px）
 emphasize(frame, beat.land, fps, 'slam')
 // storyboard 原生强调：'countup-settle'计数后回弹 | 'slam'重落 | 'underline-sweep'下划线扫过 | 'brighten'短暂提亮
 // 兼容旧卡：'settle' | 'underline' | 'none'

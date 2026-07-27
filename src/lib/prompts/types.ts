@@ -219,12 +219,16 @@ const LOCKED_CARDS_ANIMATION = `【系统契约 · 不可修改】
   "carrier": "data-hero|comparison|table|trend|list-build|process|quote|concept|timeline|matrix|funnel|network|before-after|stacked-composition",
   "scene": "一句话描述整卡终态画面",
   "focus": { "beat": 1, "emphasis": "countup-settle|slam|underline-sweep|brighten" },
+  "carrierDeviation": { "reason": "no-data|data-not-comparable|transcript-mismatch" },
+  "camera": [{ "beat": 1, "move": "push-in|pull-out|pan-left|pan-right|focus", "target": "header|main|asset" }],
+  "annotate": [{ "beat": 1, "kind": "circle|box|underline|highlight|strike|arrow|spotlight", "target": "main|header" }],
   "beats": [
     { "cue": null, "kind": "build", "adds": "新出现的元素及内容", "motion": "动作意图" },
     { "cue": 2, "kind": "build|transform|accent", "adds": "…", "changes": "已有元素如何变化（可省略）", "motion": "…" }
   ]
 }
 beats 1-6 个；cue 必须是逐句节拍里的合法索引且随拍序单调不减（仅第 0 拍允许 null）；adds/changes 中的数字与专名必须来自逐字稿原文。机器会逐条校验，不合法将被打回重出。
+carrier 默认取整片 bible 为本段规划的载体；偏离时必须带 carrierDeviation。camera / annotate 均可整项省略（没有"必须指出来的那一块"就不写）；各最多 2 项，beat 为 beats 下标，越界或非法枚举会被系统丢弃而不打回。
 
 ${LOCKED_VISUAL_AUTHENTICITY}
 

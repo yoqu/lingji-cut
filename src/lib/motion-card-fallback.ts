@@ -33,8 +33,13 @@ const q = (text: string): string => JSON.stringify(text);
 /**
  * 把分镜编译为保底 TSX：Kicker（论点）+（可选）StatHero（焦点数字）+ ListBuild（其余拍要点），
  * 全部锚到各拍 cue。产物只 import @lingji/motion-kit，帧纯函数，天然通过 lint 与安全区校验。
+ * opts.assetsResolved === false（素材物化失败）时 asset-aside / asset-led 同样退回载体默认布局，与满血编译一致。
  */
-export function buildFallbackCardTsx(sb: MotionStoryboard, presetTokensJson: string): string {
+export function buildFallbackCardTsx(
+  sb: MotionStoryboard,
+  presetTokensJson: string,
+  opts?: { assetsResolved?: boolean },
+): string {
   const beats: StoryboardBeat[] = Array.isArray(sb.beats) && sb.beats.length > 0
     ? sb.beats
     : [{ cue: null, kind: 'build', adds: sb.claim }];
@@ -109,13 +114,15 @@ export function buildFallbackCardTsx(sb: MotionStoryboard, presetTokensJson: str
     return `          <ListBuild items={[${safeList.map((entry) => q(entry.text)).join(', ')}]} beats={[${safeList.map((entry) => `beats[${entry.i}]`).join(', ')}]} />`;
   })();
 
-  const layout = sb.layout ?? (sb.carrier === 'comparison' || sb.carrier === 'before-after'
-    ? 'split-compare'
-    : sb.carrier === 'data-hero'
-      ? 'title-hero'
-      : sb.carrier === 'list-build' || sb.carrier === 'process'
-        ? 'list-with-kicker'
-        : 'chart-with-kicker');
+  const layout = (sb.layout && !((sb.layout === 'asset-aside' || sb.layout === 'asset-led') && opts?.assetsResolved === false))
+    ? sb.layout
+    : (sb.carrier === 'comparison' || sb.carrier === 'before-after'
+      ? 'split-compare'
+      : sb.carrier === 'data-hero'
+        ? 'title-hero'
+        : sb.carrier === 'list-build' || sb.carrier === 'process'
+          ? 'list-with-kicker'
+          : 'chart-with-kicker');
   const headerSlot = layout === 'single-focus'
     ? ''
     : `        <MotionSlot name="header" role="support">

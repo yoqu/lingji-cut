@@ -5,6 +5,7 @@ import {
   getDefaultTemplate,
   isAICardType,
   isDataContent,
+  normalizeAICardType,
   normalizeCardGenerationConcurrency,
   type AIAnalysisCardError,
   type AIAnalysisResult,
@@ -28,6 +29,7 @@ import type {
   MotionCardPayload,
   MotionCardProductionReport,
   MotionCardValidationInput,
+  MotionSegmentDirective,
 } from '../types/motion';
 import { generateStructuredData, generateText } from './llm';
 import { resolvePromptBinding } from './llm/binding-resolver';
@@ -54,7 +56,7 @@ import {
   parseMotionBible,
   validateMotionBible,
 } from './motion-bible';
-import { parseStoryboard } from './motion-storyboard';
+import { CARRIER_META, parseStoryboard, type StoryboardCarrier, type StoryboardLayout } from './motion-storyboard';
 import { requiresVerifiedRealFootage } from './visual-authenticity';
 import type {
   AssetGenerationRequest,
@@ -143,13 +145,31 @@ export interface MotionCardAgentContext {
   existingTsx?: string;
   /** 当前 segment 的 Motion Bible 摘要块，供审查员核对整片一致性。 */
   motionBible?: string;
+  /**
+   * 本段 Motion Bible carrierPlan 的结构化 directive；storyboard 校验的 anchor 硬闸门
+   * 据此识别系统弱卡降级标记（preferredVariant='anchor'）并在打回文案中指出指定载体与
+   * intensity；缺失按「未标记」处理。
+   */
+  motionBibleDirective?: MotionSegmentDirective;
   /** 自动模式只接受安全布局；导演模式在质量错误未解决时阻断工作流。 */
   qualityMode?: 'auto' | 'director';
   /**
    * 出卡路径：template = storyboard 确定性模板编译（默认，不经 LLM 雕刻/审查）；
-   * agent = LLM 雕刻 + 修复 + 审查。精雕（existingTsx 存在）时强制走 agent。
+   * agent = LLM 雕刻 + 修复 + 审查；hybrid = 重点段 agent、普通段 template
+   * （编排器按下方段信号与 hybridDecision 判定）。精雕（existingTsx 存在）时强制走 agent。
    */
-  motionCardMode?: 'template' | 'agent';
+  motionCardMode?: 'template' | 'agent' | 'hybrid';
+  /** hybrid 判定素材：段语义类型（planning 产出；旧项目 / 手动选段可缺失）。 */
+  semanticType?: AISegmentSemanticType;
+  /** hybrid 判定素材：可视化收益分 0-100（planning 产出，缺省 50；无下游消费时由本字段接通）。 */
+  visualizationScore?: number;
+  /** hybrid 判定素材：Motion Bible carrierPlan 中本段的 intensity（1-3）。 */
+  motionBibleIntensity?: number;
+  /**
+   * hybrid 批量路径的预选决议（含每期上限截断），由 pipeline 在持有全量段列表处注入；
+   * 缺失时编排器按单卡规则兜底判定（无上限概念）。
+   */
+  hybridDecision?: { agent: boolean; reasons: string[] };
   /** 真实字幕窗口与时长；编排器据此构造 TimingPlan 和逐拍探针帧。 */
   timingInput?: {
     srt: SrtEntry[];
@@ -181,6 +201,8 @@ export type ResolveCardAssetsFn = (args: {
   requests: StoryboardAssetRequest[];
   sourceCardId: string;
   signal?: AbortSignal;
+  /** 卡片编译布局（可选穿透）：asset-aside / asset-led 时主资产 placement 与网格资产格严格对齐；缺省旧行为。 */
+  layout?: StoryboardLayout;
 }) => Promise<AssetResolutionResult>;
 
 interface AnalyzeSrtOptions {
@@ -558,11 +580,7 @@ function buildMotionCardShell(params: {
   assetBindings?: CardAssetBinding[];
 }): AICard {
   const { segment, tsx, cardPrompt, currentCard, content, animationDirection, productionReport, assetBindings } = params;
-  // 沿用既有卡片的语义类型（重生成保持一致）；新卡片默认 'motion'。image/video 不属于 motion 流程。
-  const type: AICardType =
-    currentCard && currentCard.type !== 'image' && currentCard.type !== 'video'
-      ? currentCard.type
-      : 'motion';
+  const type: AICardType = 'motion';
   const displayMode: 'fullscreen' | 'pip' =
     currentCard?.displayMode === 'pip' ? 'pip' : 'fullscreen';
   const title = currentCard?.title?.trim() || segment.title?.trim() || `卡片 ${segment.id}`;
@@ -623,7 +641,7 @@ function normalizeCard(
   }
 
   const candidate = rawCard as Record<string, unknown>;
-  let cardType: AICardType | null = isAICardType(candidate.type) ? candidate.type : null;
+  let cardType: AICardType | null = normalizeAICardType(candidate.type);
   // 强制对齐分流策略：上游 visualType 优先于 LLM 自报
   if (expectedVisualType === 'image') {
     cardType = 'image';
@@ -1676,6 +1694,10 @@ export async function generateCardForSegment(
         : `cards.segment（${segment.id}）`;
 
     const sourceCardId = currentCard?.id ?? `${segment.id}-card-1`;
+    // anchor 硬闸门素材：结构化 directive 随 ctx 下发（motionBible 字符串块只供 prompt / 审查阅读）。
+    const segmentDirective = motionBible?.carrierPlan.find(
+      (directive) => directive.segmentId === segment.id,
+    );
     const generated = await generateMotionCard({
       segmentId: segment.id,
       segmentTitle: segment.title,
@@ -1723,9 +1745,17 @@ export async function generateCardForSegment(
       reuseStoryboardDraft,
       existingTsx: refineExistingMotion ? currentCard?.motionCard?.tsx || undefined : undefined,
       motionBible: buildMotionBibleDirectiveBlock(motionBible, segment.id),
+      motionBibleDirective: segmentDirective,
       qualityMode,
       // 精雕（existingTsx）由编排器内部强制 agent；此处只透传用户设置。
       motionCardMode: settings.motionCardMode ?? 'template',
+      // hybrid 判定素材：planning 产的 visualizationScore 此前无下游消费，从这里接通编排器。
+      semanticType: segment.semanticType,
+      visualizationScore: (() => {
+        const score = (segment as Partial<AISegmentAnalysis>).visualizationScore;
+        return typeof score === 'number' && Number.isFinite(score) ? score : undefined;
+      })(),
+      motionBibleIntensity: segmentDirective?.intensity,
       timingInput: {
         srt: entries,
         startMs: segment.startMs,
@@ -2261,6 +2291,8 @@ export interface SubtitleCardDraftInput {
   displayDurationMs: number;
   /** 卡片类型倾向（user hint，LLM 可自行微调） */
   type: AICardType;
+  /** 载体倾向（user hint，导演可自行微调） */
+  preferredCarrier?: StoryboardCarrier;
   /** 用户补充指令，可选 */
   promptHint?: string;
 }
@@ -2335,8 +2367,12 @@ export async function generateSingleCardFromSubtitles(
   const hint = draft.promptHint?.trim();
   const cardPromptLines = [
     `只产出 1 张卡片，renderMode 必须为 "motion-card"，并在 motionCard.tsx 里给出单文件 Remotion 函数组件（export default，帧驱动动画）。`,
-    `卡片类型建议为 "${draft.type}"，可根据内容微调。`,
   ];
+  if (draft.preferredCarrier) {
+    cardPromptLines.push(
+      `载体建议为 "${draft.preferredCarrier}"（${CARRIER_META[draft.preferredCarrier].label}），可根据内容微调。`,
+    );
+  }
   if (hint) {
     cardPromptLines.push(`用户补充：${hint}`);
   }

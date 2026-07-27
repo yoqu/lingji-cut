@@ -1,4 +1,4 @@
-import type { AICard, AISegment } from '../types/ai';
+import type { AICard, AISegment, AISegmentSemanticType, AISegmentVisualType } from '../types/ai';
 import type {
   MotionBible,
   MotionBibleDensity,
@@ -6,24 +6,10 @@ import type {
   MotionBibleTransition,
   MotionSegmentDirective,
 } from '../types/motion';
-import { parseStoryboard } from './motion-storyboard';
+import { DEFAULT_CONTENT_TYPE_RULES } from './card-style-presets';
+import { parseStoryboard, STORYBOARD_CARRIERS } from './motion-storyboard';
 
-const CARRIERS = [
-  'data-hero',
-  'comparison',
-  'table',
-  'trend',
-  'list-build',
-  'process',
-  'quote',
-  'concept',
-  'timeline',
-  'matrix',
-  'funnel',
-  'network',
-  'before-after',
-  'stacked-composition',
-] as const;
+const CARRIERS = STORYBOARD_CARRIERS;
 const DENSITIES: MotionBibleDensity[] = ['quiet', 'balanced', 'dense'];
 const TRANSITIONS: MotionBibleTransition[] = ['crossfade', 'hard-cut', 'push', 'wipe', 'match-cut'];
 
@@ -48,7 +34,13 @@ function cleanIntensity(value: unknown, fallback: 1 | 2 | 3): 1 | 2 | 3 {
 
 function pickCarrier(segment: AISegment, index: number): string {
   const haystack = `${segment.title} ${segment.summary} ${segment.transcriptExcerpt ?? ''}`;
-  if (/[0-9０-９]|%|％|倍|万|亿|人数|金额|参数/.test(haystack)) return 'data-hero';
+  // data-hero 需要"数字 + 数据语义"双信号：年份、序号、集数等零散数字不再触发，
+  // 避免解释 / 叙述段被误判成数据卡。
+  const hasNumber = /[0-9０-９%％]|[0-9０-９一二三四五六七八九十两]+(?:万|亿|倍)/.test(haystack);
+  const dataSignal =
+    segment.semanticType === 'data'
+    || /倍|万|亿|人数|金额|参数|增长|下降|增速|同比|环比|占比|份额|突破|达到|超过|高达|仅有|只有|规模|营收|市值|估值|销量|指标|统计|排名/.test(haystack);
+  if (hasNumber && dataSignal) return 'data-hero';
   if (/时间线|历史|版本|阶段|年份|过去|未来/.test(haystack)) return 'timeline';
   if (/象限|矩阵|优先级|高低|二维/.test(haystack)) return 'matrix';
   if (/漏斗|筛选|转化|流失|收窄/.test(haystack)) return 'funnel';
@@ -102,13 +94,205 @@ function normalizeCarrierPlan(value: unknown, segments: AISegment[]): MotionSegm
   return directives;
 }
 
+const CONCEPT_CARRIER = 'concept';
+const DEFAULT_CONCEPT_SHARE_LIMIT = 0.35;
+const DEFAULT_REBALANCE_WINDOW = 2;
+
+type CarrierRebalanceSegment = AISegment & { visualType?: AISegmentVisualType };
+
+export interface CarrierRebalanceOptions {
+  /** concept 占比上限（默认 0.35）；超过才把超出部分改派到其它载体。 */
+  conceptShareLimit?: number;
+  /** 改派目标要求在近 N 段（时间线前后）内未使用过；默认 2。 */
+  window?: number;
+}
+
+export interface CarrierRebalanceResult {
+  carrierPlan: MotionSegmentDirective[];
+  /** 实际被改派的段数（concept → 其它载体）；0 表示未触发或无需改派。 */
+  rebalanced: number;
+}
+
+function recommendedCarriers(semanticType: AISegmentSemanticType | undefined): string[] {
+  return DEFAULT_CONTENT_TYPE_RULES[semanticType ?? 'explanation'].preferredCarriers;
+}
+
+/**
+ * concept 在该语义类型推荐清单里的适配度：不在清单 = -1（最差，最先改派）；
+ * 在清单里时位置越靠后适配度越低（如 narration 的 concept 末位）。
+ */
+function conceptFitScore(semanticType: AISegmentSemanticType | undefined): number {
+  const list = recommendedCarriers(semanticType);
+  const index = list.indexOf(CONCEPT_CARRIER);
+  return index === -1 ? -1 : list.length - index;
+}
+
+/**
+ * carrier 多样性安全网：concept 占比超过上限时，把超出部分中适配度最低的段
+ * 改派到其语义类型推荐清单中近 N 段内未用过的载体。
+ * - image 段不参与（不消耗 motion 载体，分子分母都不计）；
+ * - 不破坏"同类不连续 2 次"的局部约束（改派目标必与相邻段不同）；
+ * - 未超限时原样返回（引用恒等）。
+ */
+export function rebalanceCarrierPlan(
+  carrierPlan: MotionSegmentDirective[],
+  segments: CarrierRebalanceSegment[],
+  options: CarrierRebalanceOptions = {},
+): CarrierRebalanceResult {
+  const shareLimit = options.conceptShareLimit ?? DEFAULT_CONCEPT_SHARE_LIMIT;
+  const windowRadius = Math.max(1, Math.floor(options.window ?? DEFAULT_REBALANCE_WINDOW));
+  const segmentMetaById = new Map(segments.map((segment, index) => [segment.id, { segment, index }]));
+
+  // 时间线顺序的工作集：只含已知且非 image 的段
+  const timeline = carrierPlan
+    .map((directive, planIndex) => ({ planIndex, meta: segmentMetaById.get(directive.segmentId) }))
+    .filter((entry): entry is { planIndex: number; meta: { segment: CarrierRebalanceSegment; index: number } } =>
+      Boolean(entry.meta) && entry.meta!.segment.visualType !== 'image',
+    )
+    .sort((a, b) => a.meta.index - b.meta.index);
+
+  const conceptEntries = timeline.filter(
+    (entry) => carrierPlan[entry.planIndex].preferredCarrier === CONCEPT_CARRIER,
+  );
+  const maxConcept = Math.floor(timeline.length * shareLimit);
+  if (timeline.length === 0 || conceptEntries.length <= maxConcept) {
+    return { carrierPlan, rebalanced: 0 };
+  }
+
+  // 适配度最低优先（如 data 段推荐清单里没有 concept）；并列时按时间线从前到后。
+  const queue = [...conceptEntries].sort(
+    (a, b) =>
+      conceptFitScore(a.meta.segment.semanticType) - conceptFitScore(b.meta.segment.semanticType)
+      || a.meta.index - b.meta.index,
+  );
+
+  const result = carrierPlan.map((directive) => ({ ...directive }));
+  const timelinePlanIndexes = timeline.map((entry) => entry.planIndex);
+  const carrierNear = (timelineIdx: number): string | undefined =>
+    result[timelinePlanIndexes[timelineIdx]]?.preferredCarrier;
+
+  const target = conceptEntries.length - maxConcept;
+  let rebalanced = 0;
+  for (const entry of queue) {
+    if (rebalanced >= target) break;
+    const timelineIdx = timelinePlanIndexes.indexOf(entry.planIndex);
+    const candidates = recommendedCarriers(entry.meta.segment.semanticType).filter(
+      (carrier) => carrier !== CONCEPT_CARRIER,
+    );
+    if (candidates.length === 0) continue;
+    const usedNearby = new Set<string>();
+    const from = Math.max(0, timelineIdx - windowRadius);
+    const to = Math.min(timelinePlanIndexes.length - 1, timelineIdx + windowRadius);
+    for (let j = from; j <= to; j += 1) {
+      if (j === timelineIdx) continue;
+      const carrier = carrierNear(j);
+      if (carrier) usedNearby.add(carrier);
+    }
+    let next = candidates.find((carrier) => !usedNearby.has(carrier));
+    if (!next) {
+      // 窗口内候选全用过：退而只保证不与直接相邻段同 carrier
+      const prev = carrierNear(timelineIdx - 1);
+      const following = carrierNear(timelineIdx + 1);
+      next = candidates.find((carrier) => carrier !== prev && carrier !== following);
+    }
+    if (!next) continue;
+    const current = result[entry.planIndex];
+    result[entry.planIndex] = {
+      ...current,
+      preferredCarrier: next,
+      reason: `${current.reason}（系统再平衡：concept→${next}）`,
+    };
+    rebalanced += 1;
+  }
+  return { carrierPlan: result, rebalanced };
+}
+
+/* ---------- 弱卡降级（卡密度节奏）：纯文字弱卡改派 concept+anchor 关键词锚点 ---------- */
+
+/** 弱卡降级的可视化收益阈值：narration / explanation 段低于该分即降级。 */
+export const WEAK_CARD_VISUALIZATION_SCORE_THRESHOLD = 40;
+/** 降级目标：concept 载体的 anchor 变体（关键词锚点卡）。 */
+export const ANCHOR_CARD_VARIANT = 'anchor';
+
+/**
+ * 纯文字卡载体（降级的作用域）。图形 / 数据载体（data-hero / comparison / table /
+ * trend / matrix / funnel / network / before-after / stacked-composition）提供的
+ * 是结构化增量信息，即使段本身「弱」也不动。
+ */
+const TEXT_CARRIERS: ReadonlySet<string> = new Set(['concept', 'list-build', 'process', 'timeline', 'quote']);
+
+type WeakCardSegment = AISegment & { visualType?: AISegmentVisualType; visualizationScore?: number };
+
+export interface WeakCardDowngradeOptions {
+  /** 低可视化收益阈值（默认 40）；段缺 visualizationScore 时不按分数降级。 */
+  scoreThreshold?: number;
+}
+
+export interface WeakCardDowngradeResult {
+  carrierPlan: MotionSegmentDirective[];
+  /** 实际被降级为 concept+anchor 的段数；0 表示未触发（返回原数组引用）。 */
+  downgraded: number;
+}
+
+/**
+ * 卡密度节奏降级 pass（在 rebalance 之后运行）：
+ * - semanticType=chapter-transition 段：职责是章节路标，降级为关键词锚点；
+ * - visualizationScore < 阈值的 narration / explanation 段：可视化收益低，降级为关键词锚点；
+ * - 已经是图形 / 数据载体的段不动（它们提供的是增量信息）；image 段不动；
+ * - 已是 concept+anchor 的段不重复降级。
+ * 只作用于纯文字卡载体；降级后 carrier=concept 且 preferredVariant='anchor'。
+ */
+export function downgradeWeakCarrierPlan(
+  carrierPlan: MotionSegmentDirective[],
+  segments: WeakCardSegment[],
+  options: WeakCardDowngradeOptions = {},
+): WeakCardDowngradeResult {
+  const scoreThreshold = options.scoreThreshold ?? WEAK_CARD_VISUALIZATION_SCORE_THRESHOLD;
+  const segmentById = new Map(segments.map((segment) => [segment.id, segment]));
+
+  const isWeak = (segment: WeakCardSegment): boolean => {
+    if (segment.semanticType === 'chapter-transition') return true;
+    if (segment.semanticType !== 'narration' && segment.semanticType !== 'explanation') return false;
+    return typeof segment.visualizationScore === 'number' && segment.visualizationScore < scoreThreshold;
+  };
+
+  let result: MotionSegmentDirective[] | null = null;
+  let downgraded = 0;
+  carrierPlan.forEach((directive, index) => {
+    const segment = segmentById.get(directive.segmentId);
+    if (
+      !segment
+      || segment.visualType === 'image'
+      || directive.preferredVariant === ANCHOR_CARD_VARIANT
+      || !TEXT_CARRIERS.has(directive.preferredCarrier ?? '')
+      || !isWeak(segment)
+    ) {
+      return;
+    }
+    if (!result) result = carrierPlan.map((item) => ({ ...item }));
+    result[index] = {
+      ...result[index],
+      preferredCarrier: CONCEPT_CARRIER,
+      preferredVariant: ANCHOR_CARD_VARIANT,
+      reason: `${result[index].reason}（弱卡降级：→concept/anchor 关键词锚点）`,
+    };
+    downgraded += 1;
+  });
+  return { carrierPlan: result ?? carrierPlan, downgraded };
+}
+
 export function buildDeterministicMotionBible(input: {
   summary?: string;
   keywords?: string[];
   segments: AISegment[];
   warning?: string;
 }): MotionBible {
-  const carrierPlan = normalizeCarrierPlan([], input.segments);
+  const { carrierPlan: rebalancedPlan, rebalanced } = rebalanceCarrierPlan(
+    normalizeCarrierPlan([], input.segments),
+    input.segments,
+  );
+  // 弱卡降级在 rebalance 之后：chapter-transition / 低收益叙述段改派 concept+anchor。
+  const { carrierPlan, downgraded } = downgradeWeakCarrierPlan(rebalancedPlan, input.segments);
   const heavySegments = carrierPlan.filter((item) => item.intensity === 3).map((item) => item.segmentId);
   const quietSegments = carrierPlan.filter((item) => item.intensity === 1).map((item) => item.segmentId);
   const warnings: MotionBibleIssue[] = input.warning
@@ -123,6 +307,8 @@ export function buildDeterministicMotionBible(input: {
       quietSegments,
     },
     carrierPlan,
+    carrierRebalanceCount: rebalanced,
+    carrierDowngradeCount: downgraded,
     styleRules: {
       paletteUse: '沿用当前 motion tokens，只在重点拍使用系统蓝强调，避免额外装饰色。',
       typographyUse: '标题短、数字重、说明轻；保持同一字号层级与 tabular 数字。',
@@ -155,10 +341,19 @@ export function normalizeMotionBible(value: unknown, segments: AISegment[]): Mot
     ? (transitionRules.default as MotionBibleTransition)
     : 'crossfade';
 
+  const { carrierPlan: rebalancedPlan, rebalanced } = rebalanceCarrierPlan(
+    normalizeCarrierPlan(value.carrierPlan, segments),
+    segments,
+  );
+  // 弱卡降级在 rebalance 之后：chapter-transition / 低收益叙述段改派 concept+anchor。
+  const { carrierPlan, downgraded } = downgradeWeakCarrierPlan(rebalancedPlan, segments);
+
   return {
     visualThesis: cleanText(value.visualThesis, '用统一的信息动效组织整期观点。'),
     rhythm: { density, heavySegments, quietSegments },
-    carrierPlan: normalizeCarrierPlan(value.carrierPlan, segments),
+    carrierPlan,
+    carrierRebalanceCount: rebalanced,
+    carrierDowngradeCount: downgraded,
     styleRules: {
       paletteUse: cleanText(styleRules.paletteUse, '沿用当前 motion tokens。'),
       typographyUse: cleanText(styleRules.typographyUse, '保持短标题、强数字、轻说明。'),
@@ -232,7 +427,7 @@ export function buildMotionBibleDirectiveBlock(
     `节奏密度：${bible.rhythm.density}`,
     `风格规则：${bible.styleRules.paletteUse}；${bible.styleRules.typographyUse}`,
     directive
-      ? `本段 directive：segment=${directive.segmentId}，carrier=${directive.preferredCarrier ?? '未指定'}，intensity=${directive.intensity}，reason=${directive.reason}`
+      ? `本段 directive：segment=${directive.segmentId}，carrier=${directive.preferredCarrier ?? '未指定'}${directive.preferredVariant && directive.preferredCarrier === 'concept' ? `(${directive.preferredVariant})` : ''}，intensity=${directive.intensity}，reason=${directive.reason}`
       : '本段 directive：无，按单卡语义选择。',
   ].join('\n');
 }

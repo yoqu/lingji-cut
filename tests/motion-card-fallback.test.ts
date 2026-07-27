@@ -50,6 +50,21 @@ describe('buildFallbackCardTsx（分镜确定性兜底渲染）', () => {
     expect(tsx).toContain('<MotionSlot name="main" role="focus">');
   });
 
+  it('asset-led 与 asset-aside 同款降级：素材物化失败退回载体默认布局，其余情况保留', () => {
+    const led: MotionStoryboard = { ...SB, layout: 'asset-led' };
+    const kept = buildFallbackCardTsx(led, TOKENS_JSON, { assetsResolved: true });
+    expect(kept).toContain('variant="asset-led"');
+    expect(lintMotionCardTsx(kept).ok).toBe(true);
+
+    const passthrough = buildFallbackCardTsx(led, TOKENS_JSON);
+    expect(passthrough).toContain('variant="asset-led"');
+
+    const degraded = buildFallbackCardTsx(led, TOKENS_JSON, { assetsResolved: false });
+    // data-hero 载体默认布局 title-hero；卡片仍是完整纯文字卡
+    expect(degraded).toContain('variant="title-hero"');
+    expect(lintMotionCardTsx(degraded).ok).toBe(true);
+  });
+
   it('6 拍长文本分镜：hero + 列表限额后通过完整布局探针（含字幕安全区）', async () => {
     const long: MotionStoryboard = {
       claim: '欧洲高温下美的空调销量暴涨引发行业震动',

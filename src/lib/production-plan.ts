@@ -39,9 +39,9 @@ function fallbackBible(): MotionBible {
 
 function inferPurpose(segment: AISegment | undefined, card: AICard): VisualShotPurpose {
   const analyzed = segment as AISegmentAnalysis | undefined;
-  if (card.type === 'quote') return 'emphasis';
-  if (card.type === 'data') return 'evidence';
-  if (card.type === 'chapter') return 'transition';
+  const carrier = card.motionCard?.storyboard?.carrier;
+  if (carrier === 'quote') return 'emphasis';
+  if (carrier === 'data-hero' || carrier === 'table' || carrier === 'trend') return 'evidence';
   if (analyzed?.semanticType === 'chapter-transition') return 'transition';
   if (analyzed?.semanticType === 'data') return 'evidence';
   if (analyzed?.pacingNeed === 'accent') return 'emphasis';

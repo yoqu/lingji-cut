@@ -11,6 +11,7 @@ import {
   type TimingBeatRole,
 } from '../types/motion';
 import type { StoryboardAssetRequest } from '../types/assets';
+import type { AISegmentSemanticType } from '../types/ai';
 
 export const STORYBOARD_CARRIERS = [
   'data-hero',
@@ -30,7 +31,42 @@ export const STORYBOARD_CARRIERS = [
 ] as const;
 export type StoryboardCarrier = (typeof STORYBOARD_CARRIERS)[number];
 
+/** 载体展示元信息（唯一中文标签真源；UI / 预览分组统一从这里取）。 */
+export const CARRIER_META: Record<StoryboardCarrier, { label: string; description: string }> = {
+  'data-hero': { label: '数据大字', description: '一个核心数字直接证明论点' },
+  comparison: { label: '对比', description: 'A/B 两方或多指标对照' },
+  table: { label: '数据表', description: '多行多列结构化数据' },
+  trend: { label: '趋势', description: '随时间变化的趋势与关键拐点' },
+  'list-build': { label: '列表', description: '并列要点逐条建立' },
+  process: { label: '流程', description: '步骤与因果的依次连接' },
+  quote: { label: '引用', description: '金句、来源引用与重点标注' },
+  concept: { label: '概念', description: '术语定义与概念拆解' },
+  timeline: { label: '时间线', description: '历史阶段与版本演进' },
+  matrix: { label: '象限', description: '二维定位与优先级判断' },
+  funnel: { label: '漏斗', description: '层层筛选与转化收窄' },
+  network: { label: '关系网', description: '人物 / 组织 / 概念关系' },
+  'before-after': { label: '前后对照', description: '旧 vs 新、误区 vs 事实' },
+  'stacked-composition': { label: '堆叠构成', description: '占比与层级堆叠' },
+};
+
 export const STORYBOARD_EMPHASES = MOTION_EMPHASIS_KINDS;
+
+/** 强调动效中文标签（UI 统一从这里取）。 */
+export const EMPHASIS_LABELS: Record<MotionEmphasisKind, string> = {
+  'countup-settle': '数字落定',
+  slam: '重锤',
+  'underline-sweep': '下划线',
+  brighten: '提亮',
+};
+
+/** 节拍角色中文标签（UI 统一从这里取）。 */
+export const BEAT_ROLE_LABELS: Record<TimingBeatRole, string> = {
+  anticipation: '预备',
+  reveal: '揭示',
+  emphasis: '强调',
+  hold: '保持',
+  resolve: '收束',
+};
 
 export type StoryboardBeatKind = 'build' | 'transform' | 'accent';
 export const STORYBOARD_BEAT_ROLES = ['anticipation', 'reveal', 'emphasis', 'hold', 'resolve'] as const;
@@ -41,6 +77,8 @@ export const STORYBOARD_LAYOUTS = [
   'chart-with-kicker',
   'list-with-kicker',
   'asset-aside',
+  'asset-led',
+  'corner-anchor',
 ] as const;
 export type StoryboardLayout = (typeof STORYBOARD_LAYOUTS)[number];
 export type StoryboardElementRole = 'focus' | 'support' | 'asset' | 'decorative';
@@ -70,6 +108,46 @@ export interface StoryboardCapacityBudget {
   maxHeightRatio: number;
 }
 
+/* ---------- 叙事运镜与指示标注：导演只声明意图，kit / 编译器确定性落地 ---------- */
+
+export const STORYBOARD_CAMERA_MOVES = ['push-in', 'pull-out', 'pan-left', 'pan-right', 'focus'] as const;
+export type StoryboardCameraMove = (typeof STORYBOARD_CAMERA_MOVES)[number];
+
+/** 整卡运镜上限：超过就晕，normalize 直接截断。 */
+export const MAX_CAMERA_SHOTS = 2;
+
+export interface StoryboardCameraShot {
+  /** 该运镜发生在第几拍（beats 下标） */
+  beat: number;
+  move: StoryboardCameraMove;
+  /** focus / push-in 的目标槽位 */
+  target?: 'header' | 'main' | 'asset';
+}
+
+export const STORYBOARD_ANNOTATE_KINDS = [
+  'circle',
+  'box',
+  'underline',
+  'highlight',
+  'strike',
+  'arrow',
+  'spotlight',
+] as const;
+export type StoryboardAnnotateKind = (typeof STORYBOARD_ANNOTATE_KINDS)[number];
+
+/** 整卡标注上限：指多了等于没指。 */
+export const MAX_ANNOTATIONS = 2;
+
+export interface StoryboardAnnotation {
+  /** 标注出现在第几拍（beats 下标） */
+  beat: number;
+  kind: StoryboardAnnotateKind;
+  /** 被指的槽位；只有 main / header 可标 */
+  target?: 'main' | 'header';
+  /** arrow 的指入方向 */
+  side?: 'left' | 'right' | 'top' | 'bottom';
+}
+
 export interface StoryboardBeat {
   /** 讲出该拍内容的句索引（对应运行时 cues[k]）；第 0 拍可为 null（入场） */
   cue: number | null;
@@ -86,9 +164,29 @@ export interface StoryboardBeat {
   lifecycle?: StoryboardLifecycle;
 }
 
+/**
+ * 偏离整片 bible 指定载体的正当理由（枚举，防自由发挥）。
+ * 只有写了理由，"图形载体 → 文字载体"的降密度偏离才放行。
+ */
+export const CARRIER_DEVIATION_REASONS = ['no-data', 'data-not-comparable', 'transcript-mismatch'] as const;
+export type CarrierDeviationReason = (typeof CARRIER_DEVIATION_REASONS)[number];
+
+/**
+ * 信息密度分级——闸门只拦"图形 → 纯文字"这一类塌陷。
+ * 实测（152 张真实卡）：整片 bible 规划 37 张趋势图，单段导演一张没画，
+ * 全部改写成一个大数字或一句概念；83% 的段落偏离了指令且方向高度一致。
+ */
+const STRUCTURED_CARRIERS = new Set<string>([
+  'trend', 'table', 'comparison', 'matrix', 'funnel', 'network',
+  'timeline', 'stacked-composition', 'before-after', 'list-build', 'process',
+]);
+const NARRATIVE_CARRIERS = new Set<string>(['concept', 'quote']);
+
 export interface MotionStoryboard {
   claim: string;
   carrier: StoryboardCarrier;
+  /** 偏离 bible 指定载体时必须给的理由；只在"图形 → 文字"降密度偏离时被检查。 */
+  carrierDeviation?: { reason: CarrierDeviationReason; note?: string };
   layout?: StoryboardLayout;
   elements?: StoryboardElement[];
   capacity?: StoryboardCapacityBudget;
@@ -96,6 +194,10 @@ export interface MotionStoryboard {
   /** 本卡需要的可复用视觉资产；由资产解析器优先匹配已有素材，缺失进入待生成队列。 */
   assets?: StoryboardAssetRequest[];
   focus?: { beat: number; emphasis?: MotionEmphasisKind };
+  /** 叙事运镜（可选，≤2 次）：把镜头推向正在讲的那块内容。 */
+  camera?: StoryboardCameraShot[];
+  /** 指示标注（可选，≤2 个）：圈 / 框 / 划 / 指 / 聚光，讲解者的手。 */
+  annotate?: StoryboardAnnotation[];
   beats: StoryboardBeat[];
   /**
    * 模板化结构化数据（可选）：有 data 时上屏内容以 data 为准，编译器直接映射为原语 props；
@@ -118,7 +220,7 @@ export interface StoryboardComparisonData {
   left?: { label: string; value: string };
   right?: { label: string; value: string };
   items?: Array<{ label: string; value: number; display?: string }>;
-  variant?: 'column';
+  variant?: 'column' | 'horizontal-bars' | 'bar';
 }
 export interface StoryboardTableData {
   columns: string[];
@@ -132,7 +234,10 @@ export interface StoryboardTrendData {
 }
 export interface StoryboardListData {
   items: string[];
-  variant?: 'rank' | 'check';
+  /** keyword-scan = 条目逐条揭示后条内关键词变色点亮（keywords 与 items 按下标配对）。 */
+  variant?: 'rank' | 'check' | 'keyword-scan';
+  /** keyword-scan 变体的条内关键词（可选；keywords[i] 属于 items[i]，空串 = 该条不点亮）。 */
+  keywords?: string[];
 }
 export interface StoryboardProcessData {
   steps: string[];
@@ -141,15 +246,28 @@ export interface StoryboardProcessData {
 export interface StoryboardQuoteData {
   text: string;
   source?: string;
+  /** citation 变体的可核验出处日期（如 "2024.12"）。 */
+  date?: string;
+  /** citation = 来源引用卡（CitationCard），必须带 source；word-pop = 正文按语义块逐词弹入（WordPop），必须带 words。 */
+  variant?: 'citation' | 'word-pop';
+  /** word-pop 变体的语义块切分（2~8 块，由导演切分，编译器不再分词）。 */
+  words?: string[];
 }
 export interface StoryboardConceptData {
   term?: string;
   definition?: string;
+  /** anchor 变体的多关键词形态：1~3 个关键词（每个 ≤6 字），与 term 二选一。 */
+  keywords?: string[];
   hint?: string;
   index?: string;
   title?: string;
   subtitle?: string;
-  variant?: 'section';
+  /**
+   * section = 章节标题卡（SectionTitle）；typewriter = 标题逐字上屏打字机（TypewriterText），definition 打完后淡入；
+   * anchor = 关键词锚点卡：term（≤6 字）或 keywords（1~3 个）二选一，不允许 definition——
+   * 只做角落小字强调（编译为 corner-anchor 布局 + WordPop），让观众聚焦口播。
+   */
+  variant?: 'section' | 'typewriter' | 'anchor';
 }
 export interface StoryboardTimelineData {
   items: string[];
@@ -421,6 +539,213 @@ function collectDataNumbers(data: Record<string, unknown>): string[] {
   return [...new Set(numbers)];
 }
 
+/* ---------- 文字防复述（卡面文字不得整段复述口播，底部已有完整字幕通道） ---------- */
+
+/** 触发复述判定的重合比例：卡面文字被逐字稿覆盖超过该比例即复述。 */
+export const REPETITION_OVERLAP_RATIO = 0.7;
+/** 触发复述判定的最少重合字符数（低于此属于短文本噪声，豁免）。 */
+export const REPETITION_MIN_MATCHED_CHARS = 14;
+/** kicker 级短标签豁免上限：归一化后 ≤ 该字数的文案不参与重合度计算。 */
+export const REPETITION_KICKER_MAX_CHARS = 6;
+
+/**
+ * 复述检测适用的纯文字阐述类载体。quote 豁免（金句本来就是原话上屏）；
+ * 图形 / 数据载体（data-hero / comparison / table / trend / matrix / funnel /
+ * network / before-after / stacked-composition）提供的是结构化增量，不查。
+ */
+const REPETITION_CHECK_CARRIERS: ReadonlySet<string> = new Set(['concept', 'list-build', 'process', 'timeline']);
+
+/**
+ * 重合度归一化：先剥离数字（数字防编造已强制数字出自原文，是合法引用，不计入复述），
+ * 再去掉全部空白 / 标点 / 符号，只留下可比对的字面字符。
+ */
+function normalizeForOverlap(text: string): string {
+  return text
+    .replace(/[0-9０-９]+(?:[.,，%％‰][0-9０-９]+)*/g, '')
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/** 文本与逐字稿的最长公共子串（跳过已覆盖字符）；供贪心覆盖循环使用。 */
+function longestCommonRun(text: string, covered: boolean[], transcript: string): { start: number; length: number } {
+  let best = 0;
+  let bestEnd = 0;
+  let prev = new Array<number>(transcript.length + 1).fill(0);
+  for (let i = 1; i <= text.length; i += 1) {
+    const curr = new Array<number>(transcript.length + 1).fill(0);
+    if (!covered[i - 1]) {
+      for (let j = 1; j <= transcript.length; j += 1) {
+        if (text[i - 1] === transcript[j - 1]) {
+          curr[j] = prev[j - 1] + 1;
+          if (curr[j] > best) {
+            best = curr[j];
+            bestEnd = i;
+          }
+        }
+      }
+    }
+    prev = curr;
+  }
+  return { start: bestEnd - best, length: best };
+}
+
+/** 单条文案被逐字稿覆盖的字符数：贪心摘取 ≥2 字的最长公共子串，直到无可摘。 */
+function coveredByTranscript(text: string, transcript: string): number {
+  const covered = new Array<boolean>(text.length).fill(false);
+  let total = 0;
+  for (;;) {
+    const run = longestCommonRun(text, covered, transcript);
+    if (run.length < 2) break;
+    for (let i = run.start; i < run.start + run.length; i += 1) covered[i] = true;
+    total += run.length;
+  }
+  return total;
+}
+
+export interface TranscriptOverlap {
+  /** 参与计算的卡面字符数（已剥离数字 / 标点，并剔除 kicker 级短标签）。 */
+  totalChars: number;
+  /** 其中能在逐字稿里匹配到的字符数。 */
+  matchedChars: number;
+  /** matchedChars / totalChars（totalChars 为 0 时为 0）。 */
+  ratio: number;
+}
+
+/**
+ * 卡面文字与逐字稿的字符级重合度（纯函数，供单测）：多条上屏文案合并计算——
+ * 重合比例 > REPETITION_OVERLAP_RATIO 且重合字符 > REPETITION_MIN_MATCHED_CHARS
+ * 即构成「复述口播」。transcript 归一化为空时返回全 0（跳过检测）。
+ */
+export function measureTranscriptOverlap(texts: string[], transcript: string): TranscriptOverlap {
+  const haystack = normalizeForOverlap(transcript ?? '');
+  if (!haystack) return { totalChars: 0, matchedChars: 0, ratio: 0 };
+  let totalChars = 0;
+  let matchedChars = 0;
+  for (const raw of texts) {
+    const text = normalizeForOverlap(raw ?? '');
+    if (text.length <= REPETITION_KICKER_MAX_CHARS) continue;
+    totalChars += text.length;
+    matchedChars += coveredByTranscript(text, haystack);
+  }
+  return { totalChars, matchedChars, ratio: totalChars > 0 ? matchedChars / totalChars : 0 };
+}
+
+/** 收集卡面上屏文案：claim + data 内上屏字段；term / keywords / source 等锚点与出处字段豁免。 */
+function collectScreenTexts(sb: MotionStoryboard): string[] {
+  const texts: string[] = [sb.claim ?? ''];
+  const data = asRecord(sb.data);
+  if (!data) return texts;
+  const pushAll = (value: unknown) => {
+    for (const item of asArray(value)) if (typeof item === 'string') texts.push(item);
+  };
+  switch (sb.carrier) {
+    case 'concept':
+      // term / keywords 是关键词锚点（专名豁免），不参与复述计算。
+      if (typeof data.definition === 'string') texts.push(data.definition);
+      if (typeof data.hint === 'string') texts.push(data.hint);
+      if (typeof data.title === 'string') texts.push(data.title);
+      if (typeof data.subtitle === 'string') texts.push(data.subtitle);
+      break;
+    case 'list-build':
+      pushAll(data.items);
+      break;
+    case 'process':
+      pushAll(data.steps);
+      break;
+    case 'timeline':
+      pushAll(data.items);
+      break;
+    default:
+      break;
+  }
+  return texts;
+}
+
+/**
+ * 文字防复述：阐述类卡的卡面文字不得整段复述口播（底部字幕通道已覆盖原文），
+ * 卡面必须给字幕没有的增量——数据 / 结构 / 出处；关键词锚点仅限章节路标与系统弱卡
+ * （见下方 anchor 硬闸门），不是复述的通用逃生出口。
+ */
+function checkTranscriptRepetition(sb: MotionStoryboard, transcript?: string): string[] {
+  if (!transcript?.trim() || !REPETITION_CHECK_CARRIERS.has(sb.carrier)) return [];
+  const { matchedChars, totalChars, ratio } = measureTranscriptOverlap(collectScreenTexts(sb), transcript);
+  if (matchedChars > REPETITION_MIN_MATCHED_CHARS && ratio > REPETITION_OVERLAP_RATIO) {
+    return [
+      `卡面文字复述口播（与逐字稿重合 ${matchedChars}/${totalChars} 字，${Math.round(ratio * 100)}%）：` +
+        `优先提炼增量（数据 / 结构 / 出处）或改用图形 / 素材载体；` +
+        `关键词锚点仅当该段是章节路标或系统已标弱卡时可用，不得作为复述的逃生出口`,
+    ];
+  }
+  return [];
+}
+
+/* ---------- anchor 使用硬闸门（角落小字仅限章节路标 / 系统降级标记段） ---------- */
+
+/** anchor 硬闸门的段级上下文：由编排器从 planning（semanticType）与 Motion Bible carrierPlan 注入。 */
+export interface AnchorGateContext {
+  /** 段语义类型（planning 产出）；不可得（缺省）时闸门放行，避免卡死手动选段 / 旧项目等异常路径。 */
+  semanticType?: AISegmentSemanticType;
+  /** 本段 bible carrierPlan directive；缺省或无 preferredVariant 按「未标记」处理。 */
+  bibleDirective?: {
+    preferredCarrier?: string;
+    preferredVariant?: string;
+    intensity?: number;
+  };
+}
+
+/**
+ * 载体塌陷闸门：bible 规划了图形化载体，分镜却塌陷成纯文字载体（concept / quote）时，
+ * 要求给出枚举理由。第 1 轮回喂纠正，之后降级为提醒——绝不因为这条把卡片打没。
+ */
+export function checkCarrierCollapse(
+  sb: MotionStoryboard,
+  ctx: AnchorGateContext & { attempt?: number },
+): { errors: string[]; warnings: string[] } {
+  const planned = ctx.bibleDirective?.preferredCarrier;
+  if (!planned || !STRUCTURED_CARRIERS.has(planned)) return { errors: [], warnings: [] };
+  if (!NARRATIVE_CARRIERS.has(sb.carrier)) return { errors: [], warnings: [] };
+  const reason = sb.carrierDeviation?.reason;
+  if (reason && (CARRIER_DEVIATION_REASONS as readonly string[]).includes(reason)) {
+    return { errors: [], warnings: [] };
+  }
+  const message =
+    `整片 bible 为本段规划了 carrier="${planned}"（图形化表达），分镜却塌陷成 "${sb.carrier}"（纯文字）。`
+    + `两条出路二选一：① 按规划做 ${planned}——本段逐字稿里的数字 / 时间序列 / 多项对照就是它的数据；`
+    + `② 本段确实没有可上屏的结构化数据，则保留当前载体并补字段 `
+    + `"carrierDeviation":{"reason":"no-data|data-not-comparable|transcript-mismatch"}。`;
+  return (ctx.attempt ?? 0) > 0 ? { errors: [], warnings: [message] } : { errors: [message], warnings: [] };
+}
+
+/**
+ * 分镜是否使用了关键词锚点形态：concept 载体的 anchor 变体，或直接声明 corner-anchor
+ * 布局（该布局专配 anchor 变体，编译器对 anchor 卡强制此布局，见 motion-card-templates）。
+ */
+export function storyboardUsesAnchor(sb: MotionStoryboard): boolean {
+  if (sb.layout === 'corner-anchor') return true;
+  if (sb.carrier !== 'concept') return false;
+  return asRecord(sb.data)?.variant === 'anchor';
+}
+
+/**
+ * anchor 硬闸门：concept(anchor) / corner-anchor 是「右上角小字」弱卡形态，仅放行——
+ * (a) 章节路标段（semanticType=chapter-transition）；
+ * (b) 系统弱卡降级标记段（bible directive preferredVariant='anchor'）。
+ * 其余段打回：错误文案指出 bible 指定的载体与 intensity，要求产出满版增量卡，
+ * 防止导演无视 directive 自选锚点（尤其复述打回后拿锚点当逃生出口）。
+ */
+export function checkAnchorGate(sb: MotionStoryboard, ctx: AnchorGateContext): string[] {
+  if (!storyboardUsesAnchor(sb)) return [];
+  if (!ctx.semanticType) return [];
+  if (ctx.semanticType === 'chapter-transition') return [];
+  if (ctx.bibleDirective?.preferredVariant === 'anchor') return [];
+  const carrier = ctx.bibleDirective?.preferredCarrier ?? '未指定';
+  const intensity = ctx.bibleDirective?.intensity;
+  return [
+    `关键词锚点（concept 的 anchor 变体 / corner-anchor 布局）仅限章节路标段或系统标记的弱卡使用；` +
+      `本段 bible directive 指定 carrier=${carrier}${intensity != null ? `、intensity=${intensity}` : ''}，` +
+      `请按 directive 产出满版增量卡（数据 / 图形 / 素材），不得以锚点逃避信息增量`,
+  ];
+}
+
 /**
  * 逐 carrier 校验可选 data 字段：形状 / 条数上限 / 文本长度 / 数字忠于逐字稿。
  * data 校验失败的 error 与 cue / 容量 error 一样回喂导演重出。
@@ -430,6 +755,8 @@ export function validateStoryboardData(
   ctx: { transcript?: string },
 ): { errors: string[] } {
   const errors: string[] = [];
+  // 文字防复述：只依赖 claim / carrier / transcript，无 data 的回落路径同样要查。
+  errors.push(...checkTranscriptRepetition(sb, ctx.transcript));
   const data = asRecord(sb.data);
   if (!sb.data) return { errors };
   if (!data) {
@@ -466,13 +793,14 @@ export function validateStoryboardData(
     }
     case 'comparison': {
       const variant = data.variant as StoryboardComparisonData['variant'];
-      if (variant != null && variant !== 'column') {
-        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 column）`);
+      if (variant != null && !['column', 'horizontal-bars', 'bar'].includes(variant)) {
+        errors.push(`data.variant "${String(variant)}" 不合法（column | horizontal-bars | bar）`);
       }
-      if (variant === 'column' || Array.isArray(data.items)) {
+      if (variant != null || Array.isArray(data.items)) {
         const items = asArray(data.items);
-        if (items.length < 2 || items.length > 6) {
-          errors.push(`comparison items 需要 2~6 项，当前 ${items.length}`);
+        const limit = variant === 'bar' ? 4 : variant === 'horizontal-bars' ? 5 : 6;
+        if (items.length < 2 || items.length > limit) {
+          errors.push(`comparison items 需要 2~${limit} 项，当前 ${items.length}`);
         }
         items.forEach((item, i) => {
           const record = asRecord(item);
@@ -529,15 +857,22 @@ export function validateStoryboardData(
     }
     case 'list-build': {
       const variant = data.variant as StoryboardListData['variant'];
-      if (variant != null && !['rank', 'check'].includes(variant)) {
-        errors.push(`data.variant "${String(variant)}" 不合法（rank | check）`);
+      if (variant != null && !['rank', 'check', 'keyword-scan'].includes(variant)) {
+        errors.push(`data.variant "${String(variant)}" 不合法（rank | check | keyword-scan）`);
       }
-      const limit = variant ? 5 : 4;
+      const limit = variant === 'rank' || variant === 'check' ? 5 : 4;
       const items = asArray(data.items);
       if (items.length < 1 || items.length > limit) {
-        errors.push(`list-build items 需要 1~${limit} 条${variant ? '' : '（rank/check 变体可到 5）'}，当前 ${items.length}`);
+        errors.push(`list-build items 需要 1~${limit} 条${limit === 5 ? '' : '（rank/check 变体可到 5）'}，当前 ${items.length}`);
       }
       items.forEach((item, i) => checkDataText(item, DATA_TEXT_MAX, `items[${i}]`, errors));
+      if (variant === 'keyword-scan' && data.keywords != null) {
+        const keywords = asArray(data.keywords);
+        if (keywords.length > items.length) {
+          errors.push(`keyword-scan keywords ${keywords.length} 个超过 items ${items.length} 条（按下标配对）`);
+        }
+        keywords.forEach((kw, i) => checkOptionalDataText(kw, 8, `keywords[${i}]`, errors));
+      }
       break;
     }
     case 'process': {
@@ -553,19 +888,56 @@ export function validateStoryboardData(
       break;
     }
     case 'quote': {
+      const variant = data.variant as StoryboardQuoteData['variant'];
+      if (variant != null && !['citation', 'word-pop'].includes(variant)) {
+        errors.push(`data.variant "${String(variant)}" 不合法（citation | word-pop）`);
+      }
       checkDataText(data.text, DATA_LONG_TEXT_MAX, 'text', errors);
-      checkOptionalDataText(data.source, DATA_TEXT_MAX, 'source', errors);
+      if (variant === 'citation') {
+        // 来源引用卡：出处必填，日期可选（可核验性是该变体的存在意义）。
+        checkDataText(data.source, DATA_TEXT_MAX, 'source', errors);
+        checkOptionalDataText(data.date, DATA_TEXT_MAX, 'date', errors);
+      } else if (variant === 'word-pop') {
+        // 逐词弹入：语义块由导演切分（2~8 块），编译器不再分词。
+        const words = asArray(data.words);
+        if (words.length < 2 || words.length > 8) {
+          errors.push(`word-pop words 需要 2~8 个语义块，当前 ${words.length}`);
+        }
+        words.forEach((word, i) => checkDataText(word, 10, `words[${i}]`, errors));
+        checkOptionalDataText(data.source, DATA_TEXT_MAX, 'source', errors);
+      } else {
+        checkOptionalDataText(data.source, DATA_TEXT_MAX, 'source', errors);
+      }
       break;
     }
     case 'concept': {
       const variant = data.variant as StoryboardConceptData['variant'];
-      if (variant != null && variant !== 'section') {
-        errors.push(`data.variant "${String(variant)}" 不合法（仅支持 section）`);
+      if (variant != null && !['section', 'typewriter', 'anchor'].includes(variant)) {
+        errors.push(`data.variant "${String(variant)}" 不合法（section | typewriter | anchor）`);
       }
       if (variant === 'section') {
         checkDataText(data.title, DATA_TITLE_MAX, 'title', errors);
         checkOptionalDataText(data.subtitle, DATA_TEXT_MAX, 'subtitle', errors);
         checkOptionalDataText(data.index, 4, 'index', errors);
+      } else if (variant === 'anchor') {
+        // 关键词锚点：term（≤6 字）或 keywords（1~3 个、每个 ≤6 字）二选一；
+        // 不允许 definition（锚点无释义，只做「叮一下」的强调）。
+        if (typeof data.definition === 'string' && data.definition.trim()) {
+          errors.push('anchor 变体不允许 definition（锚点只做关键词强调，无释义）');
+        }
+        const keywords = asArray(data.keywords).filter((kw): kw is string => typeof kw === 'string' && Boolean(kw.trim()));
+        const hasTerm = typeof data.term === 'string' && Boolean(data.term.trim());
+        if (keywords.length > 0 && hasTerm) {
+          errors.push('anchor 变体 term 与 keywords 二选一（单关键词用 term，多关键词用 keywords）');
+        }
+        if (keywords.length > 0) {
+          if (keywords.length > 3) errors.push(`anchor keywords 需要 1~3 个，当前 ${keywords.length}`);
+          keywords.forEach((kw, i) => checkDataText(kw, REPETITION_KICKER_MAX_CHARS, `keywords[${i}]`, errors));
+        } else if (hasTerm) {
+          checkDataText(data.term, REPETITION_KICKER_MAX_CHARS, 'term', errors);
+        } else {
+          errors.push('anchor 变体需要 term（≤6 字关键词）或 keywords（1~3 个，每个 ≤6 字）');
+        }
       } else {
         checkDataText(data.term, DATA_TITLE_MAX, 'term', errors);
         checkDataText(data.definition, DATA_LONG_TEXT_MAX, 'definition', errors);
@@ -688,6 +1060,8 @@ function normalizeStoryboard(raw: MotionStoryboard): MotionStoryboard {  if (!ra
   };
   return {
     ...raw,
+    camera: normalizeCameraShots(raw.camera, raw.beats.length),
+    annotate: normalizeAnnotations(raw.annotate, raw.beats.length),
     beats: raw.beats.map((beat, i) => {
       if (!beat || typeof beat !== 'object') return beat;
       const b = beat as unknown as Record<string, unknown>;
@@ -700,6 +1074,62 @@ function normalizeStoryboard(raw: MotionStoryboard): MotionStoryboard {  if (!ra
       };
     }),
   };
+}
+
+/**
+ * 运镜归一化：非法 move / 越界拍号直接丢弃，同拍去重，超上限截断。
+ * 导演写错不打回（不值得为增强项增加重出率），机器夹到合法即可。
+ */
+function normalizeCameraShots(raw: unknown, beatCount: number): StoryboardCameraShot[] | undefined {
+  if (!Array.isArray(raw) || beatCount <= 0) return undefined;
+  const seen = new Set<number>();
+  const shots: StoryboardCameraShot[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const s = item as Record<string, unknown>;
+    const move = String(s.move ?? '');
+    if (!(STORYBOARD_CAMERA_MOVES as readonly string[]).includes(move)) continue;
+    const beat = Number(s.beat);
+    if (!Number.isInteger(beat) || beat < 0 || beat >= beatCount || seen.has(beat)) continue;
+    seen.add(beat);
+    const target = String(s.target ?? '');
+    shots.push({
+      beat,
+      move: move as StoryboardCameraMove,
+      ...(target === 'header' || target === 'main' || target === 'asset' ? { target } : {}),
+    });
+  }
+  if (!shots.length) return undefined;
+  return shots.sort((a, b) => a.beat - b.beat).slice(0, MAX_CAMERA_SHOTS);
+}
+
+/** 标注归一化：规则同运镜；target 缺省指 main。 */
+function normalizeAnnotations(raw: unknown, beatCount: number): StoryboardAnnotation[] | undefined {
+  if (!Array.isArray(raw) || beatCount <= 0) return undefined;
+  const items: StoryboardAnnotation[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const a = item as Record<string, unknown>;
+    const kind = String(a.kind ?? '');
+    if (!(STORYBOARD_ANNOTATE_KINDS as readonly string[]).includes(kind)) continue;
+    const beat = Number(a.beat);
+    if (!Number.isInteger(beat) || beat < 0 || beat >= beatCount) continue;
+    const target = a.target === 'header' ? 'header' : 'main';
+    const side = a.side;
+    items.push({
+      beat,
+      kind: kind as StoryboardAnnotateKind,
+      target,
+      ...(side === 'left' || side === 'right' || side === 'top' || side === 'bottom' ? { side } : {}),
+    });
+  }
+  if (!items.length) return undefined;
+  // 同一槽位只保留最后一个标注：叠加标注会互相遮挡
+  const byTarget = new Map<string, StoryboardAnnotation>();
+  for (const item of items) byTarget.set(item.target ?? 'main', item);
+  return Array.from(byTarget.values())
+    .sort((a, b) => a.beat - b.beat)
+    .slice(0, MAX_ANNOTATIONS);
 }
 
 /** 从 start 起扫描字符串感知的平衡 {...}，返回闭合下标；未闭合返回 -1。 */
@@ -795,7 +1225,13 @@ function extractCheckableNumbers(text: string): string[] {
 
 export function validateStoryboard(
   sb: MotionStoryboard | null,
-  ctx: { cueCount: number; transcript?: string; requireCapacityModel?: boolean },
+  ctx: {
+    cueCount: number;
+    transcript?: string;
+    requireCapacityModel?: boolean;
+    /** 已重出轮次；>0 时载体塌陷闸门降级为提醒，避免为一条软规则耗尽预算把卡片打没。 */
+    attempt?: number;
+  } & AnchorGateContext,
 ): StoryboardValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -809,6 +1245,12 @@ export function validateStoryboard(
   if (!sb.scene || typeof sb.scene !== 'string') warnings.push('缺少 scene（终态画面描述）');
   validateCapacityModel(sb, ctx.requireCapacityModel === true, errors, warnings);
   errors.push(...validateStoryboardData(sb, { transcript: ctx.transcript }).errors);
+  // anchor 硬闸门：导演自选 concept(anchor) / corner-anchor 只放行章节路标与系统降级标记段。
+  errors.push(...checkAnchorGate(sb, ctx));
+  // 载体塌陷闸门：bible 规划图形化载体却写成纯文字时纠正一次（实测 83% 段落有此塌陷）。
+  const collapse = checkCarrierCollapse(sb, ctx);
+  errors.push(...collapse.errors);
+  warnings.push(...collapse.warnings);
   if (sb.assets != null) {
     if (!Array.isArray(sb.assets)) {
       errors.push('assets 必须是数组');

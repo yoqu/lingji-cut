@@ -56,6 +56,16 @@ describe('AI persistence helpers', () => {
     expect(persisted).toBeNull();
   });
 
+  it('migrates legacy text card types (summary/data/...) to motion on load', () => {
+    const persisted = parsePersistedAIState({
+      version: 3,
+      analysisResult: baseAnalysisResult,
+      coverCandidates: [],
+    });
+
+    expect(persisted?.analysisResult?.cards[0]?.type).toBe('motion');
+  });
+
   it('round-trips the persisted ai state with cover candidates under version 3', () => {
     const persisted = createPersistedAIState(baseAnalysisResult, [
       {

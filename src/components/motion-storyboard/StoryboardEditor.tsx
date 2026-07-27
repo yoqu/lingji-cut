@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
 import {
+  CARRIER_META,
+  EMPHASIS_LABELS,
   STORYBOARD_CARRIERS,
   STORYBOARD_EMPHASES,
   parseStoryboard,
@@ -7,21 +9,21 @@ import {
   type MotionStoryboard,
   type StoryboardBeat,
 } from '../../lib/motion-storyboard';
-import { Button, Input, NumberField, PillGroup, Textarea, type PillGroupItem } from '../../ui';
+import { Button, Input, NumberField, PillGroup, Select, Textarea, type PillGroupItem, type SelectOption } from '../../ui';
 import { AppIcon } from '../AppIcon';
 import { BeatList } from './BeatList';
 import type { StoryboardCueOption } from './CuePicker';
 import type { MotionEmphasisKind } from '../../types/motion';
 import styles from './StoryboardEditor.module.css';
 
-const CARRIER_ITEMS: Array<PillGroupItem<string>> = STORYBOARD_CARRIERS.map((carrier) => ({
+const CARRIER_OPTIONS: SelectOption[] = STORYBOARD_CARRIERS.map((carrier) => ({
   value: carrier,
-  label: carrier,
+  label: `${CARRIER_META[carrier].label} · ${carrier}`,
 }));
 
 const EMPHASIS_ITEMS: Array<PillGroupItem<MotionEmphasisKind>> = STORYBOARD_EMPHASES.map((emphasis) => ({
   value: emphasis,
-  label: emphasis,
+  label: EMPHASIS_LABELS[emphasis],
 }));
 
 function stringifyStoryboard(storyboard: MotionStoryboard): string {
@@ -93,15 +95,15 @@ export function StoryboardEditor({
     <div className={styles.editor} data-motion-storyboard-editor="true">
       <div className={styles.grid}>
         <label className={styles.field}>
-          <span className={styles.label}>Claim</span>
-          <Input
-            size="sm"
-            value={storyboard.claim}
-            onChange={(event) => patch({ claim: event.target.value })}
+          <span className={styles.label}>载体</span>
+          <Select
+            value={storyboard.carrier}
+            options={CARRIER_OPTIONS}
+            onChange={(event) => patch({ carrier: event.target.value as MotionStoryboard['carrier'] })}
           />
         </label>
         <label className={styles.field}>
-          <span className={styles.label}>Focus</span>
+          <span className={styles.label}>焦点拍</span>
           <NumberField
             value={storyboard.focus?.beat ?? 0}
             min={0}
@@ -113,20 +115,10 @@ export function StoryboardEditor({
           />
         </label>
       </div>
+      <span className={styles.hint}>{CARRIER_META[storyboard.carrier]?.description}</span>
 
       <label className={styles.field}>
-        <span className={styles.label}>Carrier</span>
-        <PillGroup
-          items={CARRIER_ITEMS}
-          value={storyboard.carrier}
-          onChange={(carrier) => patch({ carrier: carrier as MotionStoryboard['carrier'] })}
-          size="sm"
-          fullWidth
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.label}>Emphasis</span>
+        <span className={styles.label}>强调动效</span>
         <PillGroup
           items={EMPHASIS_ITEMS}
           value={storyboard.focus?.emphasis ?? 'brighten'}
@@ -139,7 +131,16 @@ export function StoryboardEditor({
       </label>
 
       <label className={styles.field}>
-        <span className={styles.label}>Scene</span>
+        <span className={styles.label}>论点（claim）</span>
+        <Input
+          size="sm"
+          value={storyboard.claim}
+          onChange={(event) => patch({ claim: event.target.value })}
+        />
+      </label>
+
+      <label className={styles.field}>
+        <span className={styles.label}>场景描述（scene）</span>
         <Textarea
           size="sm"
           rows={2}
@@ -149,13 +150,16 @@ export function StoryboardEditor({
         />
       </label>
 
-      <BeatList
-        beats={storyboard.beats}
-        cueCount={cueCount}
-        cueOptions={cueOptions}
-        onPatchBeat={patchBeat}
-        onRemoveBeat={removeBeat}
-      />
+      <div className={styles.field}>
+        <span className={styles.label}>节拍（beats）</span>
+        <BeatList
+          beats={storyboard.beats}
+          cueCount={cueCount}
+          cueOptions={cueOptions}
+          onPatchBeat={patchBeat}
+          onRemoveBeat={removeBeat}
+        />
+      </div>
 
       <div className={styles.actions}>
         <Button

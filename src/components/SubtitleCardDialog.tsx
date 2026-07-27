@@ -11,16 +11,17 @@ import {
   Textarea,
   useToast,
 } from '../ui';
-import type { AICardType } from '../types/ai';
 import type { SubtitleCardDraftInput } from '../lib/ai-analysis';
 import { generateAndInsertSingleCardFromSubtitles } from '../lib/single-card-generation';
 import { createManualMediaCard } from '../lib/manual-media-card';
 import {
-  MANUAL_CARD_CONTENT_TYPE_OPTIONS,
+  MANUAL_CARD_CARRIER_OPTIONS,
   MANUAL_CARD_KIND_OPTIONS,
-  type ManualCardContentType,
   type ManualCardKind,
 } from '../lib/manual-card-types';
+import type { StoryboardCarrier } from '../lib/motion-storyboard';
+
+type ManualCardCarrier = StoryboardCarrier | 'auto';
 
 interface SubtitleCardDialogProps {
   open: boolean;
@@ -30,7 +31,7 @@ interface SubtitleCardDialogProps {
     startMs: number;
     endMs: number;
     kind?: ManualCardKind;
-    contentType?: ManualCardContentType;
+    carrier?: ManualCardCarrier;
     promptHint?: string;
     title?: string;
     insertToTimeline?: boolean;
@@ -91,7 +92,7 @@ function SubtitleCardDialogBody({
     startMs: number;
     endMs: number;
     kind?: ManualCardKind;
-    contentType?: ManualCardContentType;
+    carrier?: ManualCardCarrier;
     promptHint?: string;
     title?: string;
     insertToTimeline?: boolean;
@@ -109,9 +110,7 @@ function SubtitleCardDialogBody({
     formatMs(Math.max(1000, initial.endMs - initial.startMs)),
   );
   const [cardKind, setCardKind] = useState<ManualCardKind>(initial.kind ?? 'motion');
-  const [contentType, setContentType] = useState<ManualCardContentType>(
-    initial.contentType ?? 'summary',
-  );
+  const [carrier, setCarrier] = useState<ManualCardCarrier>(initial.carrier ?? 'auto');
   const [promptHint, setPromptHint] = useState(initial.promptHint ?? '');
   const [submitting, setSubmitting] = useState(false);
   const allowedKindSet = useMemo(
@@ -129,11 +128,11 @@ function SubtitleCardDialogBody({
     setEndMsInput(formatMs(initial.endMs));
     setDurationInput(formatMs(Math.max(1000, initial.endMs - initial.startMs)));
     setCardKind(initial.kind ?? cardKindOptions[0]?.kind ?? 'motion');
-    setContentType(initial.contentType ?? 'summary');
+    setCarrier(initial.carrier ?? 'auto');
     setPromptHint(initial.promptHint ?? '');
   }, [
     cardKindOptions,
-    initial.contentType,
+    initial.carrier,
     initial.endMs,
     initial.kind,
     initial.promptHint,
@@ -180,7 +179,8 @@ function SubtitleCardDialogBody({
       startMs,
       endMs,
       displayDurationMs: durationMs,
-      type: contentType as AICardType,
+      type: 'motion',
+      preferredCarrier: carrier === 'auto' ? undefined : carrier,
       promptHint: promptHint.trim() || undefined,
     };
     onOpenChange(false);
@@ -191,11 +191,7 @@ function SubtitleCardDialogBody({
               mediaType: cardKind,
               segmentId: `manual:subtitle:${Date.now()}`,
               title: initial.title?.trim() || (cardKind === 'image' ? '手选图片卡' : '手选视频卡'),
-              prompt: [
-                `内容维度：${MANUAL_CARD_CONTENT_TYPE_OPTIONS.find((item) => item.value === contentType)?.label ?? contentType}`,
-                promptHint.trim(),
-                text.trim(),
-              ].filter(Boolean).join('\n\n'),
+              prompt: [promptHint.trim(), text.trim()].filter(Boolean).join('\n\n'),
               startMs,
               endMs,
               displayDurationMs: durationMs,
@@ -220,7 +216,7 @@ function SubtitleCardDialogBody({
     endMs,
     durationMs,
     cardKind,
-    contentType,
+    carrier,
     initial.insertToTimeline,
     initial.title,
     promptHint,
@@ -234,7 +230,7 @@ function SubtitleCardDialogBody({
       <DialogHeader>
         <DialogTitle>创建内容卡片</DialogTitle>
         <p className="mt-1 text-sm text-mac-text-muted">
-          基于选中字幕二次编辑后创建单张卡片；卡片类型决定载体，内容维度决定表达方向。
+          基于选中字幕二次编辑后创建单张卡片；卡片类型决定形态，载体倾向决定表达方式。
         </p>
       </DialogHeader>
       <DialogBody className="space-y-4">
@@ -311,16 +307,18 @@ function SubtitleCardDialogBody({
           />
         </div>
 
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-mac-text-muted">
-            内容维度
-          </label>
-          <Select
-            value={contentType}
-            options={MANUAL_CARD_CONTENT_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            onChange={(event) => setContentType(event.target.value as ManualCardContentType)}
-          />
-        </div>
+        {cardKind === 'motion' ? (
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-mac-text-muted">
+              载体倾向
+            </label>
+            <Select
+              value={carrier}
+              options={MANUAL_CARD_CARRIER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              onChange={(event) => setCarrier(event.target.value as ManualCardCarrier)}
+            />
+          </div>
+        ) : null}
 
         <div className="space-y-1">
           <label className="text-xs font-medium text-mac-text-muted">

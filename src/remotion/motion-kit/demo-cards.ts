@@ -6,7 +6,7 @@
  * 与 MOTION_KIT_API_DOC、cards.segment v24 的载体→原语映射同区维护：
  * 新增 / 改名原语时必须同步本清单；tests/motion-demo-cards.test.ts 做漂移比对。
  */
-import type { StoryboardCarrier } from '../../lib/motion-storyboard';
+import { CARRIER_META, STORYBOARD_CARRIERS, type StoryboardCarrier } from '../../lib/motion-storyboard';
 
 export interface MotionDemoCard {
   id: string;
@@ -27,26 +27,13 @@ export interface MotionDemoCard {
   supplementary?: boolean;
 }
 
-/** 载体分组展示元信息（顺序即面板分组顺序） */
+/** 载体分组展示元信息（顺序即面板分组顺序）；标签真源在 CARRIER_META。 */
 export const MOTION_DEMO_CARRIER_META: Array<{
   carrier: StoryboardCarrier | 'supplementary';
   label: string;
   description: string;
 }> = [
-  { carrier: 'data-hero', label: '数据大字', description: '一个核心数字直接证明论点' },
-  { carrier: 'comparison', label: '对比', description: 'A/B 两方或多指标对照' },
-  { carrier: 'table', label: '数据表', description: '多行多列结构化数据' },
-  { carrier: 'trend', label: '趋势', description: '随时间变化的趋势与关键拐点' },
-  { carrier: 'list-build', label: '列表', description: '并列要点逐条建立' },
-  { carrier: 'process', label: '流程', description: '步骤与因果的依次连接' },
-  { carrier: 'quote', label: '引用', description: '金句、来源引用与重点标注' },
-  { carrier: 'concept', label: '概念', description: '术语定义与概念拆解' },
-  { carrier: 'timeline', label: '时间线', description: '历史阶段与版本演进' },
-  { carrier: 'matrix', label: '象限', description: '二维定位与优先级判断' },
-  { carrier: 'funnel', label: '漏斗', description: '层层筛选与转化收窄' },
-  { carrier: 'network', label: '关系网', description: '人物 / 组织 / 概念关系' },
-  { carrier: 'before-after', label: '前后对照', description: '旧 vs 新、误区 vs 事实' },
-  { carrier: 'stacked-composition', label: '堆叠构成', description: '占比与层级堆叠' },
+  ...STORYBOARD_CARRIERS.map((carrier) => ({ carrier, ...CARRIER_META[carrier] })),
   { carrier: 'supplementary', label: '补充原语', description: 'kit 可用但未被分镜载体直接映射' },
 ];
 
@@ -60,21 +47,38 @@ function cardTsx(opts: {
   layout?: 'title-hero' | 'split-compare' | 'chart-with-kicker' | 'list-with-kicker' | 'single-focus';
   /** useBeats 的 anchors 字面量，默认两拍 [null, 0] */
   anchors?: string;
+  /** CardStage 叙事运镜字面量（含则同时输出 layout 属性） */
+  shots?: string;
+  /** 包住 main 槽内容的 Annotate 属性片段，如 `kind="circle" beat={beats[1]}` */
+  annotate?: string;
 }): string {
-  return `import { CardStage, SafeLayout, MotionSlot, useBeats, Kicker, ${opts.primitives.join(', ')} } from '@lingji/motion-kit';
+  const layout = opts.layout ?? 'chart-with-kicker';
+  const imports = [
+    'CardStage',
+    'SafeLayout',
+    'MotionSlot',
+    ...(opts.annotate ? ['Annotate'] : []),
+    'useBeats',
+    'Kicker',
+    ...opts.primitives,
+  ].join(', ');
+  const main = opts.annotate
+    ? `          <Annotate ${opts.annotate}>\n${opts.main}\n          </Annotate>`
+    : opts.main;
+  return `import { ${imports} } from '@lingji/motion-kit';
 
 const TOKENS = __TOKENS__;
 
 export default function Card({ cues = [] }) {
   const beats = useBeats(cues, ${opts.anchors ?? '[null, 0]'});
   return (
-    <CardStage tokens={TOKENS}>
-      <SafeLayout variant="${opts.layout ?? 'chart-with-kicker'}">
+    <CardStage tokens={TOKENS}${opts.shots ? ` layout="${layout}" shots={${opts.shots}}` : ''}>
+      <SafeLayout variant="${layout}">
         <MotionSlot name="header" role="support" lifecycle={{ enter: beats[0] }}>
           <Kicker text=${JSON.stringify(opts.kicker)} beat={beats[0]} />
         </MotionSlot>
         <MotionSlot name="main" role="focus" lifecycle={{ enter: beats[1] }}>
-${opts.main}
+${main}
         </MotionSlot>
       </SafeLayout>
     </CardStage>
@@ -571,6 +575,40 @@ export const MOTION_DEMO_CARDS: MotionDemoCard[] = [
       kicker: '各内容形式占比',
       anchors: B3.anchors,
       main: `          <BarChart items={[{ label: '图文', value: 32, display: '32%' }, { label: '短视频', value: 68, display: '68%' }, { label: '直播', value: 45, display: '45%' }]} beat={beats[1]} focusIndex={1} emphasis="slam" />`,
+    }),
+  },
+  {
+    id: 'annotate-circle',
+    carrier: 'data-hero',
+    supplementary: true,
+    primitive: 'Annotate',
+    summary: '指示标注：圈出正在讲的那块内容（讲解者的手）',
+    motionHint: '分镜写 annotate:[{beat,kind:"circle",target:"main"}]',
+    cues: B3.cues,
+    durationInFrames: B3.duration,
+    tsx: cardTsx({
+      primitives: ['StatHero'],
+      kicker: '硕士报名',
+      anchors: B3.anchors,
+      annotate: 'kind="circle" beat={beats[2]}',
+      main: `            <StatHero value={28842} unit="人" label="今年报名" beat={beats[1]} max={40000} emphasis="countup-settle" />`,
+    }),
+  },
+  {
+    id: 'camera-focus',
+    carrier: 'trend',
+    supplementary: true,
+    primitive: 'CardStage.shots',
+    summary: '叙事运镜：焦点拍推近到主槽，收束拍拉开看全局',
+    motionHint: '分镜写 camera:[{beat,move:"focus",target:"main"}]',
+    cues: B3.cues,
+    durationInFrames: B3.duration,
+    tsx: cardTsx({
+      primitives: ['TrendLine'],
+      kicker: '三年增速',
+      anchors: B3.anchors,
+      shots: `[{ beat: beats[1], move: 'focus', target: 'main' }, { beat: beats[2], move: 'pull-out' }]`,
+      main: `          <TrendLine points={[12, 18, 41]} beat={beats[1]} startLabel="2023" endLabel="2025" fill emphasis="countup-settle" />`,
     }),
   },
 ];

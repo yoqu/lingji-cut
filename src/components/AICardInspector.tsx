@@ -4,10 +4,17 @@ import { listStylePresets } from '../lib/card-style-presets';
 import { toFileSrc } from '../lib/utils';
 import { getVideoProvider } from '../lib/video-gen/registry';
 import { loadAISettings, useAIStore } from '../store/ai';
-import type { AICard, AICardType, MediaCardContent, VideoProvider } from '../types/ai';
+import type { AICard, MediaCardContent, VideoProvider } from '../types/ai';
 import type { AssetRecord, CardAssetBinding } from '../types/assets';
 import type { MotionCardProductionIssue, MotionCardProductionReport } from '../types/motion';
-import { parseStoryboard } from '../lib/motion-storyboard';
+import {
+  BEAT_ROLE_LABELS,
+  CARRIER_META,
+  EMPHASIS_LABELS,
+  parseStoryboard,
+  validateStoryboard,
+} from '../lib/motion-storyboard';
+import { applyStoryboardToCard, canRecompileFromStoryboard } from '../lib/apply-card-storyboard';
 import { Alert, Button, Input, NumberField, PillGroup, Select, type PillGroupItem, Textarea } from '../ui';
 import { AppIcon } from './AppIcon';
 import { StoryboardEditor } from './motion-storyboard/StoryboardEditor';
@@ -40,14 +47,6 @@ interface AICardInspectorProps {
   storyboardCueOptions?: StoryboardCueOption[];
   onOpenAssetCenter?: (assetId?: string) => void;
 }
-
-const CARD_TYPES: Array<PillGroupItem<AICardType>> = [
-  { value: 'summary', label: '摘要' },
-  { value: 'data', label: '数据' },
-  { value: 'insight', label: '观点' },
-  { value: 'chapter', label: '章节' },
-  { value: 'quote', label: '金句' },
-];
 
 // PillGroup 需要受控的非空值，用哨兵值表示「跟随项目 / 全局」（实际持久化为 undefined）。
 const STYLE_INHERIT = '__inherit__';
@@ -107,15 +106,19 @@ export function AICardInspector({
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [cardPrompt, setCardPrompt] = useState('');
-  const [animationDirection, setAnimationDirection] = useState('');
   const [isGeneratingDirection, setIsGeneratingDirection] = useState(false);
   const [isSculpting, setIsSculpting] = useState(false);
-  const [type, setType] = useState<AICardType>('summary');
+  const [showStoryboardJson, setShowStoryboardJson] = useState(false);
+  // 分镜编辑态：草稿只存内存，唯一出口是「生成动画」；取消 / 切卡直接丢弃。
+  const [storyboardEditing, setStoryboardEditing] = useState(false);
+  const [storyboardDraft, setStoryboardDraft] = useState('');
+  const [storyboardApplyError, setStoryboardApplyError] = useState<string | null>(null);
   const [stylePresetId, setStylePresetId] = useState<string | undefined>(undefined);
   const [displayMode, setDisplayMode] = useState<'fullscreen' | 'pip'>('fullscreen');
   const [displayDurationMs, setDisplayDurationMs] = useState(5_000);
   const [motionAssets, setMotionAssets] = useState<AssetRecord[]>([]);
   const currentProjectDir = useAIStore((state) => state.currentProjectDir);
+  const projectStylePresetId = useAIStore((state) => state.projectStylePresetId);
 
   useEffect(() => {
     if (!card) {
@@ -127,12 +130,10 @@ export function AICardInspector({
       typeof card.content === 'string' ? card.content : JSON.stringify(card.content, null, 2),
     );
     setCardPrompt(card.cardPrompt ?? '');
-    setAnimationDirection(
-      card.animationDirection ?? (
-        card.motionCard?.storyboard ? JSON.stringify(card.motionCard.storyboard, null, 2) : ''
-      ),
-    );
-    setType(card.type);
+    setStoryboardEditing(false);
+    setStoryboardDraft('');
+    setStoryboardApplyError(null);
+    setShowStoryboardJson(false);
     setStylePresetId(card.stylePresetId);
     setDisplayMode(card.displayMode);
     setDisplayDurationMs(card.displayDurationMs);
@@ -178,8 +179,9 @@ export function AICardInspector({
     );
   }
 
+  // 内容原本是结构化对象（如 DataContent）时尝试按 JSON 解析用户编辑结果，失败则保留原值。
   const parsedContent =
-    type === 'data'
+    typeof card.content === 'object'
       ? (() => {
           try {
             return JSON.parse(content);
@@ -189,25 +191,28 @@ export function AICardInspector({
         })()
       : content;
 
-  const parsedStoryboard = parseStoryboard(animationDirection);
-  const draftMotionCard = card.motionCard
-    ? {
-        ...card.motionCard,
-        ...(parsedStoryboard ? { storyboard: parsedStoryboard } : {}),
-      }
-    : undefined;
+  // 持久化态分镜（只读展示与资产重生依据）；分镜草稿只在编辑态存在。
+  const persistedStoryboard =
+    card.motionCard?.storyboard ?? parseStoryboard(card.animationDirection ?? '');
+  const persistedDirection =
+    card.animationDirection ??
+    (persistedStoryboard ? JSON.stringify(persistedStoryboard, null, 2) : '');
 
+  const draftStoryboard = storyboardEditing ? parseStoryboard(storyboardDraft) : null;
+  const draftValidation = draftStoryboard
+    ? validateStoryboard(draftStoryboard, { cueCount: storyboardCueOptions?.length ?? 0 })
+    : null;
+  const canApplyStoryboard = Boolean(draftValidation?.ok);
+  const recompilable = canRecompileFromStoryboard(card);
+
+  // 通用「保存」只负责文字内容 / 风格 / 展示设置，不触碰分镜与动画。
   const draftUpdates: Partial<AICard> = {
     title,
     content: parsedContent,
-    type,
     stylePresetId,
     displayMode,
     displayDurationMs,
     cardPrompt: cardPrompt.trim() || undefined,
-    animationDirection: animationDirection.trim() || undefined,
-    motionCard: draftMotionCard,
-    template: `${type}-default`,
   };
 
   const motion = card.motionCard;
@@ -238,14 +243,56 @@ export function AICardInspector({
     }
   };
 
+  const handleEnterStoryboardEdit = () => {
+    setStoryboardDraft(persistedDirection);
+    setStoryboardApplyError(null);
+    setStoryboardEditing(true);
+  };
+
+  const handleCancelStoryboardEdit = () => {
+    setStoryboardEditing(false);
+    setStoryboardDraft('');
+    setStoryboardApplyError(null);
+  };
+
+  // 生成分镜（LLM）：产出进入编辑态草稿，由用户确认后再「生成动画」。
   const handleGenerateDirection = async () => {
     if (!card || !onGenerateAnimationDirection) return;
     setIsGeneratingDirection(true);
     try {
       const text = await onGenerateAnimationDirection(card);
-      setAnimationDirection(text);
+      setStoryboardDraft(text);
+      setStoryboardApplyError(null);
+      setStoryboardEditing(true);
     } finally {
       setIsGeneratingDirection(false);
+    }
+  };
+
+  // 唯一出口：模板卡确定性重编译（即时生效）；精雕卡落盘草案后走精雕管线。
+  const handleApplyStoryboard = async () => {
+    if (!draftStoryboard) {
+      setStoryboardApplyError('分镜 JSON 解析失败，无法生成动画');
+      return;
+    }
+    try {
+      const result = applyStoryboardToCard(card, draftStoryboard, stylePresetId ?? projectStylePresetId);
+      setStoryboardEditing(false);
+      setStoryboardDraft('');
+      setStoryboardApplyError(null);
+      if (result.mode === 'recompiled') {
+        onSave(card.id, result.updates);
+        return;
+      }
+      onSave(card.id, result.updates);
+      setIsSculpting(true);
+      try {
+        await onRegenerate(result.updates, { refineExistingMotion: true });
+      } finally {
+        setIsSculpting(false);
+      }
+    } catch (error) {
+      setStoryboardApplyError(error instanceof Error ? error.message : '生成动画失败');
     }
   };
 
@@ -254,14 +301,13 @@ export function AICardInspector({
     if (!last || !card.motionCard) return;
     const restoredDirection = last.storyboard
       ? JSON.stringify(last.storyboard, null, 2)
-      : animationDirection;
+      : persistedDirection;
     const restoredMotionCard = {
       ...card.motionCard,
       ...(last.tsx ? { tsx: last.tsx } : {}),
       ...(last.storyboard ? { storyboard: last.storyboard } : {}),
       storyboardHistory: storyboardHistory.slice(0, -1),
     };
-    setAnimationDirection(restoredDirection);
     onSave(card.id, {
       animationDirection: restoredDirection,
       motionCard: restoredMotionCard,
@@ -290,19 +336,17 @@ export function AICardInspector({
   };
 
   const regenerateAssetBinding = async (binding: CardAssetBinding) => {
-    if (!parsedStoryboard?.assets?.length) return;
+    if (!persistedStoryboard?.assets?.length) return;
     const storyboard = {
-      ...parsedStoryboard,
-      assets: parsedStoryboard.assets.map((request) => request.slot === binding.slot
+      ...persistedStoryboard,
+      assets: persistedStoryboard.assets.map((request) => request.slot === binding.slot
         ? { ...request, reusePolicy: 'always-generate' as const }
         : request),
     };
-    const nextDirection = JSON.stringify(storyboard, null, 2);
-    setAnimationDirection(nextDirection);
     await onRegenerate({
       ...draftUpdates,
-      animationDirection: nextDirection,
-      motionCard: draftMotionCard ? { ...draftMotionCard, storyboard } : undefined,
+      animationDirection: JSON.stringify(storyboard, null, 2),
+      motionCard: card.motionCard ? { ...card.motionCard, storyboard } : undefined,
     });
   };
 
@@ -312,15 +356,6 @@ export function AICardInspector({
 
       <div className={styles.section} data-ai-card-section="text-content">
         <span className={styles.sectionTitle}>文字内容</span>
-
-        <PillGroup
-          items={CARD_TYPES}
-          value={type}
-          onChange={setType}
-          size="sm"
-          className={styles.pillRow}
-          itemClassName={styles.pillItem}
-        />
 
         <label className={styles.fieldStack}>
           <span className={styles.fieldLabel}>卡片风格</span>
@@ -369,46 +404,148 @@ export function AICardInspector({
           />
         </label>
 
-        <label className={styles.fieldStack}>
-          <span className={styles.fieldLabel}>分镜（storyboard）</span>
-          <Textarea
-            size="sm"
-            value={animationDirection}
-            rows={6}
-            resize="none"
-            className={styles.promptArea}
-            placeholder="描述镜头、节奏和转场；也可以先生成分镜，再生成动画卡片。"
-            onChange={(event) => setAnimationDirection(event.target.value)}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<AppIcon name="sparkles" size={12} />}
-            disabled={isGeneratingDirection}
-            onClick={() => {
-              void handleGenerateDirection();
-            }}
-          >
-            {isGeneratingDirection ? '生成分镜中…' : '生成分镜'}
-          </Button>
-        </label>
+      </div>
 
-        <StoryboardEditor
-          value={animationDirection}
-          cueCount={storyboardCueOptions?.length}
-          cueOptions={storyboardCueOptions}
-          onChange={setAnimationDirection}
-        />
-        {storyboardHistory.length > 0 ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<AppIcon name="refresh-cw" size={12} />}
-            onClick={handleRestoreStoryboard}
-          >
-            回退上一版分镜
-          </Button>
-        ) : null}
+      <div className={styles.section} data-ai-card-section="storyboard">
+        <div className={styles.sectionHeaderRow}>
+          <span className={styles.sectionTitle}>分镜</span>
+          {!storyboardEditing ? (
+            <div className={styles.sectionHeaderActions}>
+              {storyboardHistory.length > 0 ? (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  leftIcon={<AppIcon name="refresh-cw" size={12} />}
+                  onClick={handleRestoreStoryboard}
+                >
+                  回退上一版
+                </Button>
+              ) : null}
+              <Button
+                variant="secondary"
+                size="xs"
+                leftIcon={<AppIcon name="sparkles" size={12} />}
+                disabled={isGeneratingDirection}
+                onClick={() => {
+                  void handleGenerateDirection();
+                }}
+              >
+                {isGeneratingDirection ? '生成分镜中…' : '生成分镜'}
+              </Button>
+              <Button
+                variant="secondary"
+                size="xs"
+                leftIcon={<AppIcon name="pencil-line" size={12} />}
+                onClick={handleEnterStoryboardEdit}
+              >
+                编辑分镜
+              </Button>
+            </div>
+          ) : null}
+        </div>
+
+        {!storyboardEditing ? (
+          persistedStoryboard ? (
+            <div className={styles.storyboardSummary} data-storyboard-view="summary">
+              <div className={styles.summaryMetaRow}>
+                <span className={styles.summaryCarrier}>
+                  {CARRIER_META[persistedStoryboard.carrier]?.label ?? persistedStoryboard.carrier}
+                </span>
+                <span className={styles.summaryMeta}>{persistedStoryboard.carrier}</span>
+                {persistedStoryboard.focus?.emphasis ? (
+                  <span className={styles.summaryMeta}>
+                    强调 {EMPHASIS_LABELS[persistedStoryboard.focus.emphasis]}
+                  </span>
+                ) : null}
+              </div>
+              {persistedStoryboard.claim ? (
+                <p className={styles.summaryClaim}>{persistedStoryboard.claim}</p>
+              ) : null}
+              {persistedStoryboard.scene ? (
+                <p className={styles.summaryScene}>{persistedStoryboard.scene}</p>
+              ) : null}
+              <div className={styles.summaryBeats}>
+                {persistedStoryboard.beats.map((beat, index) => (
+                  <div className={styles.summaryBeat} key={index}>
+                    <span className={styles.summaryBeatIndex}>#{index}</span>
+                    <span className={styles.summaryBeatRole}>
+                      {beat.role ? BEAT_ROLE_LABELS[beat.role] : '—'}
+                    </span>
+                    <span className={styles.summaryBeatText}>{beat.adds || beat.motion || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className={styles.summaryEmpty}>
+              尚未生成分镜；可先「生成分镜」，或「编辑分镜」手动编写。
+            </p>
+          )
+        ) : (
+          <>
+            <StoryboardEditor
+              value={storyboardDraft}
+              cueCount={storyboardCueOptions?.length}
+              cueOptions={storyboardCueOptions}
+              onChange={setStoryboardDraft}
+            />
+
+            <div className={styles.jsonSource}>
+              <Button
+                variant="ghost"
+                size="xs"
+                className={styles.jsonToggle}
+                leftIcon={<AppIcon name={showStoryboardJson ? 'chevron-down' : 'chevron-right'} size={12} />}
+                onClick={() => setShowStoryboardJson((open) => !open)}
+              >
+                JSON 源码
+              </Button>
+              {showStoryboardJson ? (
+                <Textarea
+                  size="sm"
+                  value={storyboardDraft}
+                  rows={8}
+                  resize="vertical"
+                  className={styles.promptArea}
+                  placeholder="分镜 JSON；一般通过上方结构化编辑器修改，仅调试时直接编辑。"
+                  onChange={(event) => setStoryboardDraft(event.target.value)}
+                />
+              ) : null}
+            </div>
+
+            {storyboardApplyError ? (
+              <Alert variant="error" description={storyboardApplyError} />
+            ) : null}
+
+            <div className={styles.actions}>
+              <Button
+                variant="primary"
+                size="sm"
+                className={styles.actionBtn}
+                leftIcon={<AppIcon name="sparkles" size={12} />}
+                disabled={!canApplyStoryboard || isSculpting || isRegenerating}
+                title={
+                  recompilable
+                    ? '按当前分镜确定性重编译动画，立即生效'
+                    : '此卡动画经过精雕，将按新分镜重新精雕（耗时较长）'
+                }
+                onClick={() => {
+                  void handleApplyStoryboard();
+                }}
+              >
+                {isSculpting ? '正在生成…' : recompilable ? '生成动画' : '生成并精雕'}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                className={styles.actionBtn}
+                onClick={handleCancelStoryboardEdit}
+              >
+                取消
+              </Button>
+            </div>
+          </>
+        )}
       </div>
 
       <div className={styles.section} data-ai-card-section="display-settings">

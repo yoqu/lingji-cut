@@ -12,6 +12,30 @@ import { msToFrames } from '../remotion/frames';
 
 export const TIMING_PAUSE_THRESHOLD_MS = 400;
 
+/**
+ * 音画重音吸附容差：emphasis 拍的落地帧只在这个窗口内向最近重音帧对齐，
+ * 避免节拍被拉离分镜/字幕锚点太远。与停顿阈值同量级（30fps 下 12 帧）。
+ */
+export const ACCENT_SNAP_TOLERANCE_MS = 400;
+
+/**
+ * 把 frame 吸附到容差内最近的重音帧；等距时强度高者优先，再等距取更早帧。
+ * 无候选（无 accents / 全部超出容差）时原样返回——无重音数据时产物与旧版逐帧一致。
+ */
+export function snapFrameToAccents(frame: number, accents: TimingAccent[], toleranceFrames: number): number {
+  let best: TimingAccent | undefined;
+  let bestDistance = Infinity;
+  for (const accent of accents) {
+    const distance = Math.abs(accent.frame - frame);
+    if (distance > toleranceFrames) continue;
+    if (!best || distance < bestDistance || (distance === bestDistance && accent.strength > best.strength)) {
+      best = accent;
+      bestDistance = distance;
+    }
+  }
+  return best ? best.frame : frame;
+}
+
 export interface BuildTimingPlanInput {
   srt: SrtEntry[];
   startMs: number;
@@ -146,7 +170,9 @@ function buildBeats(
   storyboard: MotionStoryboard | null | undefined,
   cues: number[],
   pauses: TimingPause[],
+  accents: TimingAccent[],
   durationFrames: number,
+  snapToleranceFrames: number,
 ): TimingBeat[] {
   const sourceBeats = storyboard?.beats?.length
     ? storyboard.beats
@@ -160,7 +186,11 @@ function buildBeats(
     const cueIndex = beat.cue;
     const hasCue = cueIndex != null && cueIndex >= 0 && cueIndex < cues.length;
     const rawLand = hasCue ? cues[cueIndex] : fallbackLand(index, sourceBeats.length, durationFrames);
-    const landFrame = clampFrame(rawLand, durationFrames);
+    // 音画对齐：emphasis 拍的落地帧（slam/brighten/underline-sweep 的触发帧）
+    // 在容差内向最近重音帧吸附，让视觉强调打在读出重音的那一帧。
+    const snappedLand =
+      role === 'emphasis' ? snapFrameToAccents(rawLand, accents, snapToleranceFrames) : rawLand;
+    const landFrame = clampFrame(snappedLand, durationFrames);
     const startFrame = clampFrame(Math.max(previousStart, landFrame - roleLead(role)), durationFrames);
     previousStart = startFrame;
     const pause = role === 'hold' || role === 'resolve' ? findPauseAfter(pauses, landFrame) : undefined;
@@ -183,17 +213,25 @@ export function buildTimingPlan(input: BuildTimingPlanInput): TimingPlan {
     frame: clampFrame(pause.frame, durationFrames),
     durationFrames: Math.max(1, Math.min(pause.durationFrames, durationFrames)),
   }));
+  const accents = mergeAccents([
+    ...detectAccents(entries).map((accent) => ({
+      ...accent,
+      frame: clampFrame(accent.frame, durationFrames),
+    })),
+    ...metadataAccents(input, durationFrames),
+  ]);
   return {
     fps: input.fps,
     cues,
     pauses,
-    accents: mergeAccents([
-      ...detectAccents(entries).map((accent) => ({
-        ...accent,
-        frame: clampFrame(accent.frame, durationFrames),
-      })),
-      ...metadataAccents(input, durationFrames),
-    ]),
-    beats: buildBeats(input.storyboard, cues, pauses, durationFrames),
+    accents,
+    beats: buildBeats(
+      input.storyboard,
+      cues,
+      pauses,
+      accents,
+      durationFrames,
+      msToFrames(ACCENT_SNAP_TOLERANCE_MS, input.fps),
+    ),
   };
 }

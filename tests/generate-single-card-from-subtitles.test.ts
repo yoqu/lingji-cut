@@ -35,7 +35,8 @@ describe('generateSingleCardFromSubtitles', () => {
         startMs: 500,
         endMs: 3_000,
         displayDurationMs: 2_500,
-        type: 'summary',
+        type: 'motion',
+        preferredCarrier: 'data-hero',
         promptHint: '突出核心数字',
       },
       settings,
@@ -52,6 +53,7 @@ describe('generateSingleCardFromSubtitles', () => {
     const cardPrompt = motionCaller.mock.calls[0]?.[0]?.buildCardPrompt(undefined) ?? '';
     expect(cardPrompt).toContain('突出核心数字');
     expect(cardPrompt).toContain('motion-card');
+    expect(cardPrompt).toContain('data-hero');
   });
 
   it('rejects empty text draft', async () => {
@@ -63,7 +65,7 @@ describe('generateSingleCardFromSubtitles', () => {
           startMs: 0,
           endMs: 1_000,
           displayDurationMs: 1_000,
-          type: 'summary',
+          type: 'motion',
         },
         settings,
         { generateMotionCard: vi.fn() },
@@ -80,7 +82,7 @@ describe('generateSingleCardFromSubtitles', () => {
           startMs: 1_000,
           endMs: 1_000,
           displayDurationMs: 2_000,
-          type: 'summary',
+          type: 'motion',
         },
         settings,
         { generateMotionCard: vi.fn() },
@@ -101,7 +103,7 @@ describe('generateSingleCardFromSubtitles', () => {
           startMs: 0,
           endMs: 2_000,
           displayDurationMs: 2_000,
-          type: 'insight',
+          type: 'motion',
         },
         settings,
         { generateMotionCard: motionCaller },
@@ -122,7 +124,7 @@ describe('generateSingleCardFromSubtitles', () => {
           startMs: 0,
           endMs: 3_000,
           displayDurationMs: 3_000,
-          type: 'insight',
+          type: 'motion',
         },
         settings,
         { generateMotionCard: motionCaller },
@@ -139,7 +141,7 @@ describe('generateSingleCardFromSubtitles', () => {
           startMs: 0,
           endMs: 2_000,
           displayDurationMs: 2_000,
-          type: 'insight',
+          type: 'motion',
         },
         settings,
         {},

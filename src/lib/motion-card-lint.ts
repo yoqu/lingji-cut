@@ -117,6 +117,42 @@ export function lintMotionCardTsx(
     }
   }
 
+  // 指示标注是"讲解者的手"，指多了等于没指：整卡最多 2 个，且必须包住真正的焦点。
+  const annotateCount = source.match(/<Annotate\b/g)?.length ?? 0;
+  if (annotateCount > 2) {
+    issues.push({
+      severity: 'error',
+      code: 'too-many-annotations',
+      message: `检测到 ${annotateCount} 个 Annotate 标注；整卡最多 2 个，只标真正的焦点，其余删掉。`,
+    });
+  }
+
+  // 运镜必须与 SafeLayout 的 variant 同源，否则 target 槽位定位偏到别处。
+  const stageLayout = source.match(/<CardStage[^>]*\blayout=["']([a-z-]+)["']/)?.[1];
+  const safeVariant = source.match(/<SafeLayout[^>]*\bvariant=["']([a-z-]+)["']/)?.[1];
+  if (stageLayout && safeVariant && stageLayout !== safeVariant) {
+    issues.push({
+      severity: 'error',
+      code: 'camera-layout-mismatch',
+      message: `CardStage layout="${stageLayout}" 与 SafeLayout variant="${safeVariant}" 不一致，运镜会推到错误位置。`,
+    });
+  }
+  if (/\bshots=\{/.test(source) && !stageLayout) {
+    issues.push({
+      severity: 'warn',
+      code: 'camera-missing-layout',
+      message: '声明了 shots 但 CardStage 未给 layout，target 槽位将按 single-focus 定位。',
+    });
+  }
+  const shotCount = source.match(/move\s*:\s*['"](?:push-in|pull-out|pan-left|pan-right|focus)['"]/g)?.length ?? 0;
+  if (shotCount > 2) {
+    issues.push({
+      severity: 'error',
+      code: 'too-many-camera-shots',
+      message: `检测到 ${shotCount} 次运镜；整卡最多 2 次，多了会晕。`,
+    });
+  }
+
   for (const spec of collectImports(source)) {
     if (!ALLOWED_IMPORTS.has(spec)) {
       issues.push({
