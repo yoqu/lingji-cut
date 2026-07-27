@@ -73,4 +73,16 @@ describe('AutoRunLauncher 制作模式入口', () => {
     expect(source).toContain('起始阶段');
     expect(source).toContain('launch(configParams, startStep)');
   });
+
+  it('配置弹窗暴露动效模式选择器，绑定 AISettings.motionCardMode 并持久化', () => {
+    const source = readFileSync(
+      new URL('../src/components/AutoRunLauncher.tsx', import.meta.url),
+      'utf8',
+    );
+    // 与系统设置「提示词配置 → Motion Card 出卡模式」同一字段；保存走 saveAISettings（settings.json）
+    expect(source).toContain('aiSettings?.motionCardMode');
+    expect(source).toContain('saveAISettings({ ...aiSettings, motionCardMode: next })');
+    expect(source).toContain('motionCardMode={motionCardMode}');
+    expect(source).toContain('onChangeMotionCardMode=');
+  });
 });

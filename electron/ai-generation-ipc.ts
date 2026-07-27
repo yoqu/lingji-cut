@@ -9,6 +9,7 @@ import {
   materializeImageCard,
   regenerateAICard,
   regenerateCoverPrompt,
+  type MotionCardAgentProvider,
   type ResolveCardAssetsFn,
   type SegmentPlanningResult,
   type SubtitleCardDraftInput,
@@ -16,6 +17,7 @@ import {
 import { resolveStylePresetId } from '../src/lib/card-style';
 import { assertCardRenders } from './remotion/smoke-render';
 import { createMotionCardAgentProvider, resolveMotionCardModels } from './pipeline/motion-agent-run';
+import { buildHybridSelectionFromPlan, type HybridSegmentDecision } from './pipeline/motion-hybrid';
 import { makeAgentFeedCallback } from './pipeline/agent-feed';
 import { generateCoverCandidates } from '../src/lib/cover-generation';
 import {
@@ -122,6 +124,21 @@ function makeMotionCardProvider(
     onAgentEvent: makeAgentFeedCallback(feedId),
     ...models,
   });
+}
+
+/**
+ * hybrid 批量预选注入：按段把决议塞进 ctx.hybridDecision（含每期上限截断结果），
+ * 保留 ctx.motionCardMode='hybrid' 让编排器遥测 / 里程碑带上分流原因（motionPathReason）。
+ * 段不在预选表内（如方案外补生成）时原样透传，由编排器按单卡规则兜底。
+ */
+function wrapWithHybridSelection(
+  provider: MotionCardAgentProvider,
+  selection: Map<string, HybridSegmentDecision>,
+): MotionCardAgentProvider {
+  return async (mctx) => {
+    const decision = selection.get(mctx.segmentId);
+    return provider(decision ? { ...mctx, hybridDecision: decision } : mctx);
+  };
 }
 
 async function imageToBuffer(img: {
@@ -242,12 +259,13 @@ function makeAssetResolver(params: {
 }): ResolveCardAssetsFn | undefined {
   const { projectDir } = params;
   if (!projectDir) return undefined;
-  return ({ requests, sourceCardId, signal }) =>
+  return ({ requests, sourceCardId, signal, layout }) =>
     resolveAssetRequestsForProject({
       projectDir,
       requests,
       sourceCardId,
       signal,
+      layout,
       generateMissing: makeAssetImageGenerator({
         projectDir,
         settings: params.settings,
@@ -399,13 +417,21 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           writeAppLog,
           telemetry,
         });
-        const generateMotionCard = makeMotionCardProvider(
+        const baseMotionCardProvider = makeMotionCardProvider(
           args.projectDir,
           args.settings,
           args.projectBindings ?? null,
           undefined,
           args.feedId,
         );
+        // hybrid 模式：批量预选（含每期上限）依赖批准后的导演方案全量段 + Motion Bible，
+        // 这里按调用时读取的引用懒注入，与 headless analyze-run 的装配同款；
+        // 非 hybrid 或方案未就绪时原样透传，由编排器按单卡规则兜底。
+        let hybridSelection: Map<string, HybridSegmentDecision> | null = null;
+        const generateMotionCard: MotionCardAgentProvider = async (mctx) => {
+          const decision = hybridSelection?.get(mctx.segmentId);
+          return baseMotionCardProvider(decision ? { ...mctx, hybridDecision: decision } : mctx);
+        };
         const commonCardOptions = {
           stylePresetId: resolveStylePresetId({
             project: projectStylePresetId,
@@ -451,6 +477,10 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             kind: 'approve-draft', expectedRevision: revision, taskId,
           });
           const approvedPlan = approved.approvedPlan!;
+          if (args.settings.motionCardMode === 'hybrid') {
+            // hybrid 预选：与 headless analyze-run 共用同一构建（规则 + 每期上限截断）。
+            hybridSelection = buildHybridSelectionFromPlan(approvedPlan);
+          }
           await generateWorkTitle?.({
             segments: approvedPlan.segments,
             coverPrompts: approvedPlan.coverDirection.prompt ? [approvedPlan.coverDirection.prompt] : [],
@@ -719,6 +749,22 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           projectDir: args.projectDir,
         });
         const projectStylePresetId = await loadProjectStylePresetId(args.projectDir);
+        // hybrid 模式：一键 / 导演四轨的逐段生成走这里——从项目 approvedPlan 做批量预选
+        //（与 analyze-run 同一构建，含每期上限），把本段决议注入编排器；
+        // 方案缺失或本段不在方案内时原样透传，由编排器按单卡规则兜底。
+        const segmentHybridSelection = args.settings.motionCardMode === 'hybrid' && args.projectDir
+          ? await loadProjectFile(args.projectDir)
+              .then((project) => project.production?.approvedPlan ?? null)
+              .then((plan) => (plan ? buildHybridSelectionFromPlan(plan) : null))
+              .catch(() => null)
+          : null;
+        const baseSegmentProvider = makeMotionCardProvider(
+          args.projectDir,
+          args.settings,
+          args.projectBindings ?? null,
+          undefined,
+          args.feedId,
+        );
         let card = await generateCardForSegment(
           args.entries,
           {
@@ -747,13 +793,9 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
               projectBindings: args.projectBindings ?? null,
               writeAppLog,
             }),
-            generateMotionCard: makeMotionCardProvider(
-              args.projectDir,
-              args.settings,
-              args.projectBindings ?? null,
-              undefined,
-              args.feedId,
-            ),
+            generateMotionCard: segmentHybridSelection
+              ? wrapWithHybridSelection(baseSegmentProvider, segmentHybridSelection)
+              : baseSegmentProvider,
             validateMotionSource: assertCardRenders,
             segmentIndex: args.segmentIndex,
             totalSegments: args.totalSegments,

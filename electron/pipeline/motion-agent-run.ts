@@ -43,6 +43,7 @@ import {
 import { lintMotionCardTsx, formatLintIssues } from '../../src/lib/motion-card-lint';
 import { buildFallbackCardTsx } from '../../src/lib/motion-card-fallback';
 import { compileMotionCardFromStoryboard } from '../../src/lib/motion-card-templates';
+import { resolveMotionCardPath } from './motion-hybrid';
 import { buildMotionCardProductionReport } from '../../src/lib/motion-production-report';
 import { inspectResolvedCardAssets } from '../../src/lib/asset-resolution';
 import { motionAssetSignature } from '../../src/lib/motion-asset-layer';
@@ -329,9 +330,12 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         attempt: 0,
         durationMs: Date.now() - phaseStartedAt,
         ok,
+        ...motionPathExtra,
         ...extra,
       });
     };
+    // 出卡路径决议的 telemetry 附加字段；在分支点赋值，分支后的 emit / card.compile.* 携带。
+    let motionPathExtra: Record<string, unknown> = {};
     // 传输层容错：provider 截断 / 网络抖动（如 "Unexpected end of JSON input"）重试一次，
     // 不让单次瞬时故障直接判死整张卡。
     const promptWithRetry = async (
@@ -356,6 +360,8 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         cueCount: ctx.cueCount ?? 0,
         transcript: ctx.segmentTranscript,
         requireCapacityModel: true,
+        semanticType: ctx.semanticType,
+        bibleDirective: ctx.motionBibleDirective,
       });
       if (ctx.reuseStoryboardDraft && storyboardDraft && storyboardDraftVerdict.ok) {
         setPhase('复用分镜', 'director');
@@ -393,9 +399,12 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
           throwIfAborted();
           const storyboard = parseStoryboard(reply);
           const verdictSb = validateStoryboard(storyboard, {
+            attempt: semanticRounds,
             cueCount: ctx.cueCount ?? 0,
             transcript: ctx.segmentTranscript,
             requireCapacityModel: true,
+            semanticType: ctx.semanticType,
+            bibleDirective: ctx.motionBibleDirective,
           });
           if (verdictSb.ok && storyboard) {
             direction = JSON.stringify(storyboard, null, 2);
@@ -477,6 +486,8 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             requests: storyboardForAssets.assets,
             sourceCardId: ctx.sourceCardId ?? `${ctx.segmentId}-card-1`,
             signal,
+            // layout 穿透：asset-aside / asset-led 的主资产 placement 与编译器网格资产格严格对齐。
+            layout: storyboardForAssets.layout,
           });
           assetResolution = assetResult;
           resolvedAssetBindings = assetResult.bindings;
@@ -516,6 +527,16 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
       }
 
       const storyboard = storyboardForAssets ?? parseStoryboard(direction);
+      // 素材物化结果挂到既有 card.compile 事件 extra（不新造日志）：
+      // 物化失败 → assetsResolved=false → 编译器退回纯文字布局，此处让降级可观测。
+      const assetsResolved = resolvedAssetBindings.length > 0;
+      const assetTelemetryExtra = storyboard?.assets?.length
+        ? {
+            assetRequested: storyboard.assets.length,
+            assetResolved: resolvedAssetBindings.length,
+            assetUnresolved: assetResolution.unresolved.length + assetResolution.generationRequests.length,
+          }
+        : {};
       const durationInFrames = ctx.timingInput
         ? Math.max(1, Math.round((ctx.timingInput.durationMs / 1000) * ctx.timingInput.fps))
         : 150;
@@ -547,8 +568,23 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
 
       // ── 2. 出卡路径分支 ─────────────────────────────────────────────────────────
       // template（默认）：storyboard 确定性编译 → 机械质检一次，不经 LLM 雕刻/审查；
-      // agent：LLM 雕刻 → 修复循环 → 审查（精雕 existingTsx 或显式 agent 模式）。
-      const templateMode = (ctx.motionCardMode ?? 'template') === 'template' && !ctx.existingTsx;
+      // agent：LLM 雕刻 → 修复循环 → 审查（精雕 existingTsx 或显式 agent 模式）；
+      // hybrid：重点段 agent、普通段 template——批量预选决议（含每期上限）优先，
+      // 单卡路径（重生成/转换/手动选段）按段信号规则兜底，缺信号回落 template。
+      const pathDecision = resolveMotionCardPath(ctx);
+      const templateMode = pathDecision.path === 'template';
+      const motionPathReason = pathDecision.reasons.join('；');
+      motionPathExtra = {
+        motionPath: pathDecision.path,
+        ...(ctx.motionCardMode === 'hybrid'
+          ? { motionPathReason: motionPathReason || '未命中精雕规则' }
+          : {}),
+      };
+      if (ctx.motionCardMode === 'hybrid') {
+        milestone(
+          `hybrid 判定：本段走${pathDecision.path === 'agent' ? ' Agent 精雕' : '模板编译'}（${motionPathReason || '未命中精雕规则'}）`,
+        );
+      }
 
       // 两条路径共享的状态。
       const readTsx = async (): Promise<string> => {
@@ -580,7 +616,7 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         try {
           const storyboard = parseStoryboard(direction);
           if (!storyboard) return false;
-          const fallbackTsx = buildFallbackCardTsx(storyboard, ctx.presetMotionTokens ?? '{}');
+          const fallbackTsx = buildFallbackCardTsx(storyboard, ctx.presetMotionTokens ?? '{}', { assetsResolved });
           const lint = lintMotionCardTsx(fallbackTsx, { requireSafeLayout: ctx.qualityMode !== 'director' });
           if (!lint.ok) {
             emit('fallback', false, { error: formatLintIssues(lint.issues).slice(0, 200) });
@@ -694,13 +730,13 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
         // ── 模板编译主路径：storyboard → 确定性 TSX，不创建雕刻/审查会话 ──
         setPhase('模板编译', 'sculpt');
         const compileStartedAt = Date.now();
-        ctx.telemetry?.emit('card.compile.start', { segmentId: ctx.segmentId, carrier: storyboard?.carrier });
+        ctx.telemetry?.emit('card.compile.start', { segmentId: ctx.segmentId, carrier: storyboard?.carrier, ...motionPathExtra });
         let compileProblem: string | null = null;
         if (!storyboard) {
           compileProblem = '分镜解析失败，无法模板编译';
         } else {
           try {
-            tsx = compileMotionCardFromStoryboard(storyboard, ctx.presetMotionTokens ?? '{}');
+            tsx = compileMotionCardFromStoryboard(storyboard, ctx.presetMotionTokens ?? '{}', { assetsResolved });
             const lint = lintMotionCardTsx(tsx, { requireSafeLayout: ctx.qualityMode !== 'director' });
             latestLintIssues = lint.issues;
             if (!lint.ok) {
@@ -731,6 +767,8 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             durationMs: Date.now() - compileStartedAt,
             ok: false,
             error: compileProblem.slice(0, 300),
+            ...motionPathExtra,
+            ...assetTelemetryExtra,
           });
           milestone(`模板编译未通过（${storyboard?.carrier ?? 'unknown'}），切换确定性兜底`);
           setPhase('兜底出卡', 'sculpt');
@@ -744,6 +782,8 @@ export function createMotionCardAgentProvider(opts: MotionAgentProviderOptions):
             carrier: storyboard?.carrier,
             durationMs: Date.now() - compileStartedAt,
             ok: true,
+            ...motionPathExtra,
+            ...assetTelemetryExtra,
           });
           milestone(`已由分镜确定性编译（${storyboard?.carrier}），跳过雕刻与审查`);
         }

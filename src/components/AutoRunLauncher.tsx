@@ -21,7 +21,7 @@ import {
   type ResumableAutoRunStep,
 } from '../lib/auto-run-resume';
 import type { AutoWorkflowParams } from '../store/ai';
-import { loadAISettings, useAIStore } from '../store/ai';
+import { loadAISettings, saveAISettings, useAIStore } from '../store/ai';
 import { useScriptStore } from '../store/script';
 import { getAllRoles } from '../lib/script-templates';
 import { normalizeTTSSettings } from '../lib/tts-settings';
@@ -209,6 +209,28 @@ export function AutoRunLauncher({
     setDismissed(true);
   }, [projectDir]);
 
+  /**
+   * Motion Card 动效模式：与系统设置「提示词配置 → Motion Card 出卡模式」同一字段
+   *（AISettings.motionCardMode）。一键流程开跑时会从磁盘重读设置（validation.ts），
+   * 这里保存到全局 settings.json 即对本次与后续运行生效；同时同步本地 state 保持 UI 一致。
+   */
+  const motionCardMode =
+    aiSettings?.motionCardMode === 'agent' || aiSettings?.motionCardMode === 'hybrid'
+      ? aiSettings.motionCardMode
+      : 'template';
+  const handleMotionCardModeChange = useCallback(
+    async (next: 'template' | 'agent' | 'hybrid') => {
+      if (!aiSettings) return;
+      try {
+        await saveAISettings({ ...aiSettings, motionCardMode: next });
+        setAiSettings({ ...aiSettings, motionCardMode: next });
+      } catch (error) {
+        console.warn('[auto-run-launcher] 保存动效模式失败', error);
+      }
+    },
+    [aiSettings],
+  );
+
   if (dismissed || !resumable) return null;
 
   const isRestart = resumable.restart === true;
@@ -341,6 +363,8 @@ export function AutoRunLauncher({
                 modelBinding={modelBinding}
                 onChangeModelBinding={setModelBinding}
                 modelHint={modelHint}
+                motionCardMode={motionCardMode}
+                onChangeMotionCardMode={(next) => void handleMotionCardModeChange(next)}
               />
             ) : null}
           </DialogBody>

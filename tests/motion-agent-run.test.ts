@@ -337,6 +337,8 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
       requests: expect.arrayContaining([expect.objectContaining({ slot: 'archive_prop' })]),
       sourceCardId: 'card-asset',
       signal: undefined,
+      // layout 穿透：分镜声明的编译布局随资产解析传递（placement 与网格对齐用）
+      layout: 'title-hero',
     });
     expect(prompts.find((p) => p.role === '雕刻')!.text).toContain('archive_prop');
     expect(result.assetBindings?.[0]?.assetId).toBe('asset-archive');
@@ -1082,5 +1084,323 @@ describe('template 模式：storyboard 确定性编译，不经 LLM 雕刻/审�
     expect(result.productionReport?.fallbackUsed).toBe(true);
     expect(result.productionReport?.compiled).not.toBe(true);
     expect(result.tsx).toContain('<StatHero value={28842}');
+  });
+});
+
+
+describe('hybrid 模式：按段信号分流 agent / template', () => {
+  it('无预选决议时按单卡规则兜底：高分段走 agent 精雕', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const result = await provider(
+      makeCtx({ motionCardMode: 'hybrid', visualizationScore: 88, validate: vi.fn() }),
+    );
+    expect(sessions.map((s) => s.role)).toEqual(['导演', '雕刻', '审查']);
+    expect(result.productionReport?.compiled).not.toBe(true);
+  });
+
+  it('普通段（未命中规则）回落 template 编译，不创建雕刻/审查会话', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'hybrid',
+        visualizationScore: 40,
+        semanticType: 'narration',
+        validate: vi.fn(),
+      }),
+    );
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.compiled).toBe(true);
+  });
+
+  it('批量预选决议优先：hybridDecision 判 template 时高分段也走编译', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'hybrid',
+        visualizationScore: 99,
+        hybridDecision: { agent: false, reasons: ['超出每期 agent 上限 2，回落 template'] },
+        validate: vi.fn(),
+      }),
+    );
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.compiled).toBe(true);
+  });
+
+  it('判定结果写入既有 telemetry 通道（card.compile.* 带 motionPath/reason）', async () => {
+    const { provider } = providerWith({
+      reply: async (role) => (role === '导演' ? STORYBOARD : '不应被调用'),
+    });
+    const events: Array<{ kind: string; extra?: Record<string, unknown> }> = [];
+    await provider(
+      makeCtx({
+        motionCardMode: 'hybrid',
+        visualizationScore: 40,
+        validate: vi.fn(),
+        telemetry: { emit: (kind, extra) => events.push({ kind, extra }) },
+      }),
+    );
+    const compileStart = events.find((e) => e.kind === 'card.compile.start');
+    expect(compileStart?.extra?.motionPath).toBe('template');
+    expect(String(compileStart?.extra?.motionPathReason)).toContain('未命中精雕规则');
+    const compileEnd = events.find((e) => e.kind === 'card.compile.end');
+    expect(compileEnd?.extra?.motionPath).toBe('template');
+  });
+
+  it('agent 路径的 llm.end 事件携带 motionPath=agent 与判定原因', async () => {
+    const { provider } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const events: Array<{ kind: string; extra?: Record<string, unknown> }> = [];
+    await provider(
+      makeCtx({
+        motionCardMode: 'hybrid',
+        semanticType: 'data',
+        validate: vi.fn(),
+        telemetry: { emit: (kind, extra) => events.push({ kind, extra }) },
+      }),
+    );
+    const reviewEnd = events.find(
+      (e) => e.kind === 'llm.end' && String(e.extra?.label ?? '').endsWith(':review'),
+    );
+    expect(reviewEnd?.extra?.motionPath).toBe('agent');
+    expect(String(reviewEnd?.extra?.motionPathReason)).toContain('semanticType=data');
+  });
+});
+
+describe('anchor 使用硬闸门（导演不得无视 bible 自选角落小字）', () => {
+  /** 除闸门外机器校验全过的关键词锚点分镜（容量模型严格模式下同样合法）。 */
+  const ANCHOR_STORYBOARD = JSON.stringify({
+    claim: '供应链关键词',
+    carrier: 'concept',
+    layout: 'corner-anchor',
+    scene: '右上角关键词小字',
+    elements: [
+      { id: 'anchor', role: 'focus', slot: 'main', content: '光模块', heightRatio: 0.1 },
+    ],
+    capacity: { maxVisible: 1, maxHeightRatio: 0.2 },
+    focus: { beat: 1 },
+    data: { variant: 'anchor', term: '光模块' },
+    beats: [
+      { cue: null, kind: 'build', adds: '锚点入场', motion: '淡入', lifecycle: {} },
+      { cue: 1, kind: 'accent', adds: '关键词点亮', motion: '逐词弹入', lifecycle: { enter: ['anchor'] } },
+    ],
+  });
+
+  it('重点段（bible 指定 quote/intensity=3）自选 anchor 被语义打回，回喂文案含指定载体与 intensity', async () => {
+    let directorTurn = 0;
+    const { provider, prompts, phases } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') {
+          directorTurn += 1;
+          return directorTurn === 1 ? ANCHOR_STORYBOARD : STORYBOARD;
+        }
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        return '{"pass": true, "issues": []}';
+      },
+    });
+    const result = await provider(
+      makeCtx({
+        semanticType: 'quote',
+        motionBibleDirective: { segmentId: 'seg-1', preferredCarrier: 'quote', intensity: 3, reason: '测试' },
+        validate: vi.fn(),
+      }),
+    );
+    expect(directorTurn).toBe(2);
+    expect(phases).toContain(`分镜重出 1/${MAX_STORYBOARD_ITER}`);
+    const retryPrompt = prompts.filter((p) => p.role === '导演')[1]!.text;
+    expect(retryPrompt).toContain('关键词锚点');
+    expect(retryPrompt).toContain('carrier=quote');
+    expect(retryPrompt).toContain('intensity=3');
+    expect(retryPrompt).toContain('增量卡');
+    expect(result.animationDirection).toContain('"carrier": "data-hero"');
+  });
+
+  it('闸门在 template 路径同样生效（两路径共用导演分镜校验环）', async () => {
+    let directorTurn = 0;
+    const { provider, sessions } = providerWith({
+      reply: async (role) => {
+        if (role === '导演') {
+          directorTurn += 1;
+          return directorTurn === 1 ? ANCHOR_STORYBOARD : STORYBOARD;
+        }
+        return '不应被调用';
+      },
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        semanticType: 'quote',
+        motionBibleDirective: { segmentId: 'seg-1', preferredCarrier: 'quote', intensity: 3, reason: '测试' },
+        validate: vi.fn(),
+      }),
+    );
+    expect(directorTurn).toBe(2);
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.compiled).toBe(true);
+    expect(result.tsx).toContain('<StatHero value={28842}');
+  });
+
+  it('chapter-transition 段的 anchor 分镜放行（template 直接编译，编译路径不受影响）', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? ANCHOR_STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        semanticType: 'chapter-transition',
+        motionBibleDirective: { segmentId: 'seg-1', preferredCarrier: 'concept', intensity: 1, reason: '测试' },
+        validate: vi.fn(),
+      }),
+    );
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.compiled).toBe(true);
+    expect(result.animationDirection).toContain('"variant": "anchor"');
+  });
+
+  it('directive 标 preferredVariant=anchor 的系统弱卡段放行', async () => {
+    const { provider, sessions } = providerWith({
+      reply: async (role) => (role === '导演' ? ANCHOR_STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        semanticType: 'narration',
+        motionBibleDirective: {
+          segmentId: 'seg-1',
+          preferredCarrier: 'concept',
+          preferredVariant: 'anchor',
+          intensity: 1,
+          reason: '测试',
+        },
+        validate: vi.fn(),
+      }),
+    );
+    expect(sessions.map((s) => s.role)).toEqual(['导演']);
+    expect(result.productionReport?.compiled).toBe(true);
+  });
+});
+
+describe('template 模式素材管线：asset 占位格与失败降级', () => {
+  const baseStoryboard = JSON.parse(STORYBOARD);
+  const ASSET_STORYBOARD = JSON.stringify({
+    ...baseStoryboard,
+    layout: 'asset-aside',
+    elements: [
+      ...baseStoryboard.elements,
+      { id: 'archive', role: 'asset', slot: 'asset', assetSlot: 'archive_prop', content: '旧档案袋', heightRatio: 0.25 },
+    ],
+    capacity: { maxVisible: 3, maxHeightRatio: 0.72 },
+    beats: [
+      { ...baseStoryboard.beats[0], lifecycle: { enter: ['title', 'archive'] } },
+      { ...baseStoryboard.beats[1], lifecycle: { enter: ['hero'], collapse: ['title', 'archive'] } },
+    ],
+    assets: [
+      {
+        slot: 'archive_prop',
+        query: '旧档案袋',
+        role: 'object',
+        importance: 'primary',
+        reusePolicy: 'generate-if-missing',
+        visualTreatment: 'editorial-realist-cutout',
+        placementHint: '右侧',
+      },
+    ],
+  });
+  const archiveBinding = {
+    slot: 'archive_prop',
+    assetId: 'asset-archive',
+    filePath: '/tmp/archive.png',
+    treatment: {
+      profile: 'editorial-realist-cutout' as const,
+      lighting: 'soft-left',
+      palette: 'low-saturation',
+      shadow: 'soft-ground',
+      perspective: 'front-3q',
+    },
+    placement: { x: 1260, y: 210, width: 540, depth: 'foreground' as const },
+  };
+
+  it('素材解析成功：编译保留 asset-aside 并补发 asset 占位格，card.compile.end 带素材计数', async () => {
+    const resolveAssets = vi.fn(async () => ({
+      bindings: [archiveBinding],
+      generationRequests: [],
+      unresolved: [],
+    }));
+    const events: Array<{ kind: string; extra?: Record<string, unknown> }> = [];
+    const { provider } = providerWith({
+      reply: async (role) => (role === '导演' ? ASSET_STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        sourceCardId: 'card-asset',
+        resolveAssets,
+        validate: vi.fn(),
+        telemetry: { emit: (kind, extra) => events.push({ kind, extra }) },
+      }),
+    );
+    expect(result.productionReport?.compiled).toBe(true);
+    expect(result.tsx).toContain('variant="asset-aside"');
+    expect(result.tsx).toContain('<MotionSlot name="asset" role="asset"');
+    expect(result.assetBindings?.[0]?.assetId).toBe('asset-archive');
+    const compileEnd = events.find((e) => e.kind === 'card.compile.end');
+    expect(compileEnd?.extra?.ok).toBe(true);
+    expect(compileEnd?.extra?.assetRequested).toBe(1);
+    expect(compileEnd?.extra?.assetResolved).toBe(1);
+    expect(compileEnd?.extra?.assetUnresolved).toBe(0);
+  });
+
+  it('素材物化失败：asset-aside 退回纯文字布局，卡片仍编译出卡，失败计数进 card 事件 extra', async () => {
+    const resolveAssets = vi.fn(async () => ({
+      bindings: [],
+      generationRequests: [{ id: 'asset_gen_fail', slot: 'archive_prop', status: 'failed' }],
+      unresolved: [],
+    }));
+    const events: Array<{ kind: string; extra?: Record<string, unknown> }> = [];
+    const { provider } = providerWith({
+      reply: async (role) => (role === '导演' ? ASSET_STORYBOARD : '不应被调用'),
+    });
+    const result = await provider(
+      makeCtx({
+        motionCardMode: 'template',
+        sourceCardId: 'card-asset',
+        resolveAssets,
+        validate: vi.fn(),
+        telemetry: { emit: (kind, extra) => events.push({ kind, extra }) },
+      }),
+    );
+    expect(result.productionReport?.compiled).toBe(true);
+    // 退回 data-hero 载体默认布局；不留 asset 死空格；主内容完整
+    expect(result.tsx).toContain('variant="title-hero"');
+    expect(result.tsx).not.toContain('name="asset"');
+    expect(result.tsx).toContain('<StatHero value={28842}');
+    expect(result.assetBindings ?? []).toHaveLength(0);
+    const compileEnd = events.find((e) => e.kind === 'card.compile.end');
+    expect(compileEnd?.extra?.assetRequested).toBe(1);
+    expect(compileEnd?.extra?.assetResolved).toBe(0);
+    expect(compileEnd?.extra?.assetUnresolved).toBe(1);
   });
 });

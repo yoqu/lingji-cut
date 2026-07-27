@@ -40,6 +40,14 @@ export interface AutoModeSectionProps {
   onChangeModelBinding?: (next: AutoModeModelBinding | null) => void;
   /** 写稿模型字段的 hint 文案 */
   modelHint?: string;
+
+  /**
+   * Motion Card 动效模式（绑定 AISettings.motionCardMode，与系统设置里
+   * 「提示词配置 → Motion Card 出卡模式」是同一个字段）。
+   * 提供 onChangeMotionCardMode 时才渲染该选择器；不传则保持旧调用方 UI 不变。
+   */
+  motionCardMode?: 'template' | 'agent' | 'hybrid';
+  onChangeMotionCardMode?: (next: 'template' | 'agent' | 'hybrid') => void;
 }
 
 function encodeBinding(binding: AutoModeModelBinding | null | undefined): string {
@@ -64,6 +72,8 @@ export function AutoModeSection({
   modelBinding,
   onChangeModelBinding,
   modelHint,
+  motionCardMode,
+  onChangeMotionCardMode,
 }: AutoModeSectionProps) {
   const expanded = mode === 'always' ? true : enabled;
   const showModelField = Array.isArray(modelOptions) && modelOptions.length > 0;
@@ -180,6 +190,25 @@ export function AutoModeSection({
               onChange={(productionMode) => update({ productionMode })}
             />
           </Field>
+          {onChangeMotionCardMode ? (
+            <Field
+              label="动效模式"
+              hint="模板编译最快最省（推荐）；混合仅对重点段落走 Agent 精雕，每期精雕段数有上限；Agent 多轮视觉自由度更高但更慢更贵。对单卡的精雕修改始终走 Agent。"
+            >
+              <Select
+                aria-label="动效模式"
+                value={motionCardMode ?? 'template'}
+                options={[
+                  { value: 'template', label: '模板编译（推荐，省 token）' },
+                  { value: 'hybrid', label: '混合：重点段落精雕' },
+                  { value: 'agent', label: 'Agent 多轮雕刻（旧链路）' },
+                ]}
+                onChange={(e) =>
+                  onChangeMotionCardMode(e.target.value as 'template' | 'agent' | 'hybrid')
+                }
+              />
+            </Field>
+          ) : null}
           <div style={headerStyle}>
             <Checkbox
               checked={params.bgmEnabled !== false}

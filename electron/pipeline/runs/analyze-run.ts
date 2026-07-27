@@ -8,6 +8,7 @@ import { createPersistedAIState } from '../../../src/lib/ai-persistence';
 import { handleGenerateCardImage } from '../../card-media-handlers';
 import { assertCardRenders } from '../../remotion/smoke-render';
 import { createMotionCardAgentProvider } from '../motion-agent-run';
+import { buildHybridSelectionFromPlan, type HybridSegmentDecision } from '../motion-hybrid';
 import { makeAgentFeedCallback } from '../agent-feed';
 import type { MotionCardAgentProvider, SegmentPlanningResult } from '../../../src/lib/ai-analysis';
 import { loadFullHeadlessAISettings, loadHeadlessProjectBindings } from '../headless-settings';
@@ -77,6 +78,10 @@ export async function runAnalyzeHeadless(
     ]);
   const projectStylePresetId = (await loadProjectFile(projectPath)).stylePresetId;
 
+  // hybrid 模式：批准方案后按全量段做每期上限预选（下方 else 分支赋值），
+  // wrapper 按段把决议注入 ctx.hybridDecision，编排器据此分流 agent / template。
+  let hybridSelection: Map<string, HybridSegmentDecision> | null = null;
+
   // Motion TSX 多 agent provider（懒构造 electron 依赖，vitest 下 deps.analyze mock 不触达）。
   const generateMotionCard: MotionCardAgentProvider = async (mctx) => {
     const { app } = await import('electron');
@@ -90,7 +95,10 @@ export async function runAnalyzeHeadless(
       // 观测面板关联键与统一进度条的 bridgeId 同值（pipeline:<taskId>）。
       onAgentEvent: makeAgentFeedCallback(`pipeline:${handle.taskId}`),
     });
-    return provider(mctx);
+    const hybrid = hybridSelection?.get(mctx.segmentId);
+    // 保留 motionCardMode='hybrid'：编排器优先消费 hybridDecision，且遥测 / 里程碑
+    // 能带上分流决议原因（motionPathReason）；覆盖成 agent/template 会丢掉这些观测信号。
+    return provider(hybrid ? { ...mctx, hybridDecision: hybrid } : mctx);
   };
 
   // 作品标题：planning 完成后生成（fill-if-empty），落盘 meta + publish（title 镜像）。
@@ -169,6 +177,11 @@ export async function runAnalyzeHeadless(
         })();
     const approvedPlan = approvedState?.approvedPlan;
     if (!approvedPlan) throw new GenerationError('director_approval_required', '导演方案批准失败。');
+    if (settings.motionCardMode === 'hybrid') {
+      // hybrid 预选：与 analyze-srt IPC / generate-ai-card-for-segment 共用同一构建函数，
+      // 只对启用的 motion 段按规则 + 每期上限截断。
+      hybridSelection = buildHybridSelectionFromPlan(approvedPlan);
+    }
     await generateWorkTitle({
       segments: approvedPlan.segments,
       coverPrompts: approvedPlan.coverDirection.prompt ? [approvedPlan.coverDirection.prompt] : [],

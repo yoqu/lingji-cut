@@ -494,10 +494,13 @@ export function PromptsConfigTab() {
     [aiSettings, refreshAISettings, showToast],
   );
 
-  /** Motion Card 出卡路径：template 确定性编译（省 token）/ agent 旧 LLM 雕刻链路 */
-  const motionCardModeValue = aiSettings?.motionCardMode === 'agent' ? 'agent' : 'template';
+  /** Motion Card 出卡路径：template 确定性编译（省 token）/ agent 旧 LLM 雕刻链路 / hybrid 重点段精雕 */
+  const motionCardModeValue =
+    aiSettings?.motionCardMode === 'agent' || aiSettings?.motionCardMode === 'hybrid'
+      ? aiSettings.motionCardMode
+      : 'template';
   const handleMotionCardModeChange = useCallback(
-    async (next: 'template' | 'agent') => {
+    async (next: 'template' | 'agent' | 'hybrid') => {
       if (!aiSettings) return;
       try {
         await saveAISettings({ ...aiSettings, motionCardMode: next });
@@ -998,17 +1001,18 @@ export function PromptsConfigTab() {
                   </Field>
                   <Field
                     label="Motion Card 出卡模式"
-                    hint="模板编译（默认）：导演出结构化分镜后由确定性模板直接出卡，每张卡只需 1 次导演 LLM 调用，无雕刻/审查多轮循环，token 消耗最低；Agent 多轮：旧的 LLM 雕刻+审查链路，视觉自由度更高但更慢更贵。精雕（详情页针对性修改）始终走 Agent。"
+                    hint="模板编译（默认）：导演出结构化分镜后由确定性模板直接出卡，每张卡只需 1 次导演 LLM 调用，无雕刻/审查多轮循环，token 消耗最低；混合：重点段（可视化收益分高、数据/引用语义、导演标注最高强度）走 Agent 精雕，其余段走模板编译，每期精雕段数有上限；Agent 多轮：旧的 LLM 雕刻+审查链路，视觉自由度更高但更慢更贵。精雕（详情页针对性修改）始终走 Agent。"
                   >
                     <Select
                       options={[
                         { value: 'template', label: '模板编译（推荐，省 token）' },
+                        { value: 'hybrid', label: '混合：重点段落精雕' },
                         { value: 'agent', label: 'Agent 多轮雕刻（旧链路）' },
                       ]}
                       value={motionCardModeValue}
                       disabled={!aiSettings}
                       onChange={(e) => {
-                        void handleMotionCardModeChange(e.target.value as 'template' | 'agent');
+                        void handleMotionCardModeChange(e.target.value as 'template' | 'agent' | 'hybrid');
                       }}
                     />
                   </Field>

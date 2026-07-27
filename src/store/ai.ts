@@ -1217,7 +1217,8 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
     defaultVideoModel: raw.defaultVideoModel ?? null,
     promptBindings: raw.promptBindings ?? {},
     cardGenerationConcurrency: normalizeCardGenerationConcurrency(raw.cardGenerationConcurrency),
-    motionCardMode: raw.motionCardMode === 'agent' ? 'agent' : 'template',
+    motionCardMode:
+      raw.motionCardMode === 'agent' || raw.motionCardMode === 'hybrid' ? raw.motionCardMode : 'template',
     defaultStylePresetId:
       typeof raw.defaultStylePresetId === 'string' && raw.defaultStylePresetId.trim()
         ? raw.defaultStylePresetId

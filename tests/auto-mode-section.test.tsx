@@ -203,4 +203,43 @@ describe('AutoModeSection', () => {
       voiceId: 'female-shaonv',
     });
   });
+
+  it('未传 onChangeMotionCardMode 时不渲染动效模式字段（向后兼容）', () => {
+    const html = renderToStaticMarkup(
+      <AutoModeSection {...makeBaseProps({ enabled: true })} />,
+    );
+    expect(html).not.toContain('动效模式');
+  });
+
+  it('传入 motionCardMode 时渲染动效模式选择器，并通过 onChangeMotionCardMode 回传', () => {
+    const onChangeMotionCardMode = vi.fn();
+    const props = makeBaseProps({
+      mode: 'always',
+      motionCardMode: 'hybrid',
+      onChangeMotionCardMode,
+    });
+    const html = renderToStaticMarkup(<AutoModeSection {...props} />);
+    expect(html).toContain('动效模式');
+    expect(html).toContain('模板编译');
+    expect(html).toContain('混合');
+
+    const tree = AutoModeSection(props);
+    const select = findByAriaLabel(tree, '动效模式');
+    expect(select).not.toBeNull();
+    expect((select!.props as { value: string }).value).toBe('hybrid');
+    const onChange = (select!.props as {
+      onChange: (e: { target: { value: string } }) => void;
+    }).onChange;
+    onChange({ target: { value: 'agent' } });
+    expect(onChangeMotionCardMode).toHaveBeenCalledWith('agent');
+  });
+
+  it('motionCardMode 缺省时动效模式选择器回退显示 template', () => {
+    const tree = AutoModeSection(
+      makeBaseProps({ mode: 'always', onChangeMotionCardMode: vi.fn() }),
+    );
+    const select = findByAriaLabel(tree, '动效模式');
+    expect(select).not.toBeNull();
+    expect((select!.props as { value: string }).value).toBe('template');
+  });
 });
