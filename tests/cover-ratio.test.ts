@@ -84,8 +84,8 @@ describe('resolvePublishRatioPrompt', () => {
 });
 
 describe('cover prompt authority and history', () => {
-  it('优先使用当前选中的 16:9 候选提示词', () => {
-    expect(resolveCoverStudioBasePrompt('被规划覆盖的提示词', [
+  it('导演台更新的分析提示词优先于选中候选的历史提示词', () => {
+    expect(resolveCoverStudioBasePrompt('导演台最新提示词', [
       {
         id: 'wide', prompt: '第一版 16:9 提示词', imageUrl: '/wide.png',
         selected: true, aspectRatio: '16:9',
@@ -93,6 +93,15 @@ describe('cover prompt authority and history', () => {
       {
         id: 'vertical', prompt: '竖版提示词', imageUrl: '/vertical.png',
         selected: false, aspectRatio: '3:4',
+      },
+    ])).toBe('导演台最新提示词');
+  });
+
+  it('旧项目缺少分析提示词时回退选中的 16:9 候选提示词', () => {
+    expect(resolveCoverStudioBasePrompt(null, [
+      {
+        id: 'wide', prompt: '第一版 16:9 提示词', imageUrl: '/wide.png',
+        selected: true, aspectRatio: '16:9',
       },
     ])).toBe('第一版 16:9 提示词');
   });

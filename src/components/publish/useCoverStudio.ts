@@ -64,6 +64,7 @@ export function groupCoverCandidatesByRatio(
   return out;
 }
 
+/** 导演台维护的分析提示词是封面描述真源；仅旧项目缺失时回退选中 16:9 候选的历史提示词。 */
 export function resolveCoverStudioBasePrompt(
   analysisPrompt: string | null,
   candidates: CoverCandidate[],
@@ -73,7 +74,7 @@ export function resolveCoverStudioBasePrompt(
     && coverAspectRatio(candidate) === '16:9'
     && candidate.prompt.trim().length > 0
   ))?.prompt.trim();
-  return selectedWidePrompt || analysisPrompt?.trim() || null;
+  return analysisPrompt?.trim() || selectedWidePrompt || null;
 }
 
 export function appendCoverGenerationHistory(
