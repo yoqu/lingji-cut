@@ -5,6 +5,7 @@ import {
   chromiumOptionsForPlatform,
   classifyGpuRenderer,
   createH264TsFfmpegOverride,
+  type ChunkVideoEncoder,
   type ExportQualityPreset,
 } from './gpu-runtime';
 
@@ -14,6 +15,8 @@ export interface RemotionRenderParams {
   timeline: TimelineData;
   srtEntries: SrtEntry[];
   compiledCards: Record<string, string>;
+  /** 项目级视觉主题预设 id（project.json 的 stylePresetId）；字幕 followTheme 渲染用。 */
+  themePresetId?: string;
   /**
    * 缩放比例：React 树仍按 timeline 原始 width/height 渲染，
    * 导出拍照时按 scale 像素化（最终导出尺寸 = 原始尺寸 × scale）。
@@ -71,6 +74,7 @@ export async function renderRemotionVideo(
     timeline: params.timeline,
     srtEntries: params.srtEntries,
     compiledCards: params.compiledCards,
+    themePresetId: params.themePresetId,
   };
 
   const browserLogs = createBrowserLogCollector();
@@ -238,7 +242,7 @@ export interface RemotionChunkRenderParams {
   audioBitrate: string;
   jpegQuality: number;
   concurrency: number;
-  encoder: 'h264_nvenc' | 'libx264';
+  encoder: ChunkVideoEncoder;
   binariesDirectory?: string;
   browserExecutable?: string;
   platform?: NodeJS.Platform;
@@ -294,8 +298,8 @@ export async function renderRemotionChunk(
     audioBitrate: params.audioBitrate as `${number}k`,
     // h264-ts has no native Remotion HW path; the tested override below owns encoder choice.
     hardwareAcceleration: 'disable',
-    ...(params.encoder === 'h264_nvenc'
-      ? { ffmpegOverride: createH264TsFfmpegOverride(params.quality) }
+    ...(params.encoder !== 'libx264'
+      ? { ffmpegOverride: createH264TsFfmpegOverride(params.encoder, params.quality) }
       : {}),
     binariesDirectory: params.binariesDirectory ?? null,
     browserExecutable: params.browserExecutable,

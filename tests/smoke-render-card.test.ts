@@ -232,6 +232,16 @@ export default function Card() {
   </AbsoluteFill>;
 }`;
 
+// 瞬态重叠样本：前 15 帧两元素叠在同一位置（模拟 emphasis 弹簧 / 入场滑入的瞬时交叠），之后分开。
+const TRANSIENT_OVERLAP = `import { AbsoluteFill, useCurrentFrame } from 'remotion';
+export default function Card() {
+  const frame = useCurrentFrame();
+  return <AbsoluteFill style={{ background: '#101820' }}>
+    <span style={{ position: 'absolute', left: 120, top: 260, fontSize: 64, color: '#fff' }}>元素甲</span>
+    <span style={{ position: 'absolute', left: frame < 15 ? 120 : 1200, top: 260, fontSize: 64, color: '#fff' }}>元素乙</span>
+  </AbsoluteFill>;
+}`;
+
 describe('逐帧语义碰撞探针', () => {
   it('同一帧文字区块明显重叠 -> semantic-occlusion error', async () => {
     const result = await validateMotionCardTsx(OVERLAPPING_TEXT, {
@@ -261,6 +271,27 @@ describe('逐帧语义碰撞探针', () => {
       frames: [0, 30], durationInFrames: 60, checkRenderedLayout: true,
     });
     expect(result.issues.filter((issue) => issue.code === 'semantic-occlusion')).toEqual([]);
+  }, 120_000);
+
+  it('多采样帧持续重叠 -> 仍判 semantic-occlusion error（持续性规则不削弱真遮挡）', async () => {
+    const result = await validateMotionCardTsx(OVERLAPPING_TEXT, {
+      frames: [0, 30, 59], durationInFrames: 60, checkRenderedLayout: true,
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'semantic-occlusion', severity: 'error' }),
+    ]));
+    expect(result.ok).toBe(false);
+  }, 120_000);
+
+  it('单帧瞬态重叠且落定帧无重叠 -> 降级 warning，不阻断', async () => {
+    const result = await validateMotionCardTsx(TRANSIENT_OVERLAP, {
+      frames: [0, 30, 59], durationInFrames: 60, checkRenderedLayout: true,
+    });
+    const occlusions = result.issues.filter((issue) => issue.code === 'semantic-occlusion');
+    expect(occlusions.length).toBeGreaterThan(0);
+    expect(occlusions.every((issue) => issue.severity === 'warning')).toBe(true);
+    expect(result.issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+    expect(result.ok).toBe(true);
   }, 120_000);
 
   it('前景资产覆盖文字 -> semantic-occlusion error', async () => {

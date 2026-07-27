@@ -66,7 +66,7 @@ export async function runChunkPool<T>(
 
 export interface ChunkRenderAttempt {
   concurrency: number;
-  encoder: 'h264_nvenc' | 'libx264';
+  encoder: ChunkVideoEncoder;
   useAngle: boolean;
 }
 
@@ -77,7 +77,9 @@ function errorMessage(error: unknown): string {
 }
 
 function isEncoderFailure(error: unknown): boolean {
-  return /nvenc|encoder|preset|cuda|unsupported param/i.test(errorMessage(error));
+  return /nvenc|videotoolbox|compression session|encoder|preset|cuda|unsupported param/i.test(
+    errorMessage(error),
+  );
 }
 
 function isGpuFailure(error: unknown): boolean {
@@ -102,7 +104,7 @@ export async function renderChunkWithFallback<T>(
         fallbacks.push('single-page');
         continue;
       }
-      if (attempt.encoder === 'h264_nvenc' && isEncoderFailure(error)) {
+      if (attempt.encoder !== 'libx264' && isEncoderFailure(error)) {
         attempt = { ...attempt, encoder: 'libx264' };
         fallbacks.push('cpu-encoder');
         continue;
@@ -137,7 +139,7 @@ export interface ChunkedVideoRenderParams {
   videoBitrate: string;
   audioBitrate: string;
   jpegQuality: number;
-  encoder: 'h264_nvenc' | 'libx264';
+  encoder: ChunkVideoEncoder;
   ffprobePath: string;
   binariesDirectory?: string;
   browserExecutable?: string;
@@ -372,4 +374,4 @@ import {
   type BrowserLogSummary,
   type SelectedRemotionComposition,
 } from './render';
-import { probeChunkMedia, type ExportQualityPreset } from './gpu-runtime';
+import { probeChunkMedia, type ChunkVideoEncoder, type ExportQualityPreset } from './gpu-runtime';

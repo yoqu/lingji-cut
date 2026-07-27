@@ -12,6 +12,8 @@ export interface ChunkRenderInput {
   timeline: TimelineData;
   srtEntries: SrtEntry[];
   compiledCards: Record<string, string>;
+  /** 项目级视觉主题预设 id；字幕 followTheme 渲染用，切 chunk 时原样透传。 */
+  themePresetId?: string;
 }
 
 export function planRenderChunks(
@@ -136,5 +138,6 @@ export function sliceChunkInput(
     },
     srtEntries,
     compiledCards,
+    themePresetId: input.themePresetId,
   };
 }

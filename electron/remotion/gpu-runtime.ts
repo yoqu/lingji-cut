@@ -1,6 +1,12 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 export type ExportQualityPreset = 'speed' | 'balanced' | 'quality';
+
+export type HardwareVideoEncoder = 'h264_nvenc' | 'h264_videotoolbox';
+export type ChunkVideoEncoder = HardwareVideoEncoder | 'libx264';
 
 export interface ProcessResult {
   code: number;
@@ -9,7 +15,9 @@ export interface ProcessResult {
 }
 
 interface ProbeDependencies {
-  run?: (executable: string, args: string[]) => Promise<ProcessResult>;
+  /** cwd matters: the bundled ffmpeg/ffprobe reference their dylibs by bare name, resolvable only from their own dir. */
+  run?: (executable: string, args: string[], options?: { cwd?: string }) => Promise<ProcessResult>;
+  platform?: NodeJS.Platform;
 }
 
 export interface MediaProbeStream {
@@ -31,10 +39,11 @@ export interface MediaProbeResult {
 
 export interface FfmpegEncoderProbe {
   ffmpegVersion: string;
-  nvencAdvertised: boolean;
-  nvencSmokeOk: boolean;
-  encoder: 'h264_nvenc' | 'libx264';
-  /** h264-ts is rejected by Remotion's native hardwareAcceleration gate; NVENC is applied below it via ffmpegOverride. */
+  candidate: HardwareVideoEncoder | null;
+  advertised: boolean;
+  smokeOk: boolean;
+  encoder: ChunkVideoEncoder;
+  /** h264-ts is rejected by Remotion's native hardwareAcceleration gate; HW encoders are applied below it via ffmpegOverride. */
   remotionHardwareAcceleration: 'disable';
   usesFfmpegOverride: boolean;
   fallbackReason?: string;
@@ -46,11 +55,20 @@ const NVENC_PRESETS: Record<ExportQualityPreset, string> = {
   quality: 'p6',
 };
 
-async function runProcess(executable: string, args: string[]): Promise<ProcessResult> {
+/** 256x256 solid-black grayscale PNG (141 bytes) used as the smoke-encode input frame. */
+const SMOKE_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAAAAAB5Gfe6AAAAVElEQVR42u3BAQEAAACAkP6v7ggKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGAEPAAEccgnDAAAAAElFTkSuQmCC';
+
+async function runProcess(
+  executable: string,
+  args: string[],
+  options?: { cwd?: string },
+): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: options?.cwd,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -101,65 +119,101 @@ function parseFfmpegVersion(output: string): string {
   return match?.[1] ?? 'unknown';
 }
 
+function hardwareEncoderCandidate(platform: NodeJS.Platform): HardwareVideoEncoder | null {
+  if (platform === 'win32') return 'h264_nvenc';
+  if (platform === 'darwin') return 'h264_videotoolbox';
+  return null;
+}
+
 export async function probeFfmpegEncoder(
   ffmpegPath: string,
   deps: ProbeDependencies = {},
 ): Promise<FfmpegEncoderProbe> {
+  const platform = deps.platform ?? process.platform;
+  const candidate = hardwareEncoderCandidate(platform);
+  if (!candidate) {
+    return {
+      ffmpegVersion: 'unknown',
+      candidate: null,
+      advertised: false,
+      smokeOk: false,
+      encoder: 'libx264',
+      remotionHardwareAcceleration: 'disable',
+      usesFfmpegOverride: false,
+      fallbackReason: `No hardware encoder candidate on ${platform}`,
+    };
+  }
+
   const run = deps.run ?? runProcess;
-  const version = await run(ffmpegPath, ['-version']);
-  const encoderList = await run(ffmpegPath, ['-hide_banner', '-encoders']);
+  const cwd = path.dirname(ffmpegPath);
+  const version = await run(ffmpegPath, ['-version'], { cwd });
+  const encoderList = await run(ffmpegPath, ['-hide_banner', '-encoders'], { cwd });
   const ffmpegVersion = parseFfmpegVersion(`${version.stdout}\n${version.stderr}`);
-  const nvencAdvertised = encoderList.code === 0 && /\bh264_nvenc\b/.test(
+  const advertised = encoderList.code === 0 && new RegExp(`\\b${candidate}\\b`).test(
     `${encoderList.stdout}\n${encoderList.stderr}`,
   );
 
-  if (!nvencAdvertised) {
+  if (!advertised) {
     return {
       ffmpegVersion,
-      nvencAdvertised: false,
-      nvencSmokeOk: false,
+      candidate,
+      advertised: false,
+      smokeOk: false,
       encoder: 'libx264',
       remotionHardwareAcceleration: 'disable',
       usesFfmpegOverride: false,
       fallbackReason: encoderList.code === 0
-        ? 'FFmpeg does not advertise h264_nvenc'
+        ? `FFmpeg does not advertise ${candidate}`
         : firstUsefulLine(encoderList.stderr) || `ffmpeg -encoders exited ${encoderList.code}`,
     };
   }
 
-  const smoke = await run(ffmpegPath, [
-    '-hide_banner',
-    '-loglevel',
-    'error',
-    '-f',
-    'lavfi',
-    '-i',
-    'color=c=black:s=256x256:r=30:d=0.54',
-    '-frames:v',
-    '16',
-    '-c:v',
-    'h264_nvenc',
-    '-preset',
-    'p4',
-    '-pix_fmt',
-    'yuv420p',
-    '-f',
-    'null',
-    '-',
-  ]);
-  const nvencSmokeOk = smoke.code === 0;
+  // The bundled trimmed ffmpeg has no usable lavfi source (`color`/`nullsrc` need the absent
+  // wrapped_avframe decoder), so loop a tiny embedded PNG through image2 instead.
+  // VideoToolbox has no -preset option; its quality tiers ride on bitrate alone.
+  const smokeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lingji-encoder-smoke-'));
+  const smokeInput = path.join(smokeDir, 'smoke.png');
+  let smoke: ProcessResult;
+  try {
+    await fs.writeFile(smokeInput, Buffer.from(SMOKE_PNG_BASE64, 'base64'));
+    smoke = await run(ffmpegPath, [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-loop',
+      '1',
+      '-framerate',
+      '30',
+      '-i',
+      smokeInput,
+      '-frames:v',
+      '16',
+      '-c:v',
+      candidate,
+      ...(candidate === 'h264_nvenc' ? ['-preset', 'p4'] : ['-b:v', '1000k']),
+      '-pix_fmt',
+      'yuv420p',
+      '-f',
+      'null',
+      '-',
+    ], { cwd });
+  } finally {
+    await fs.rm(smokeDir, { recursive: true, force: true });
+  }
+  const smokeOk = smoke.code === 0;
   return {
     ffmpegVersion,
-    nvencAdvertised: true,
-    nvencSmokeOk,
-    encoder: nvencSmokeOk ? 'h264_nvenc' : 'libx264',
+    candidate,
+    advertised: true,
+    smokeOk,
+    encoder: smokeOk ? candidate : 'libx264',
     remotionHardwareAcceleration: 'disable',
-    usesFfmpegOverride: nvencSmokeOk,
-    ...(nvencSmokeOk
+    usesFfmpegOverride: smokeOk,
+    ...(smokeOk
       ? {}
       : {
           fallbackReason:
-            firstUsefulLine(smoke.stderr) || `NVENC smoke encode exited ${smoke.code}`,
+            firstUsefulLine(smoke.stderr) || `${candidate} smoke encode exited ${smoke.code}`,
         }),
   };
 }
@@ -177,7 +231,7 @@ export async function probeMediaFile(
     '-of',
     'json',
     mediaPath,
-  ]);
+  ], { cwd: path.dirname(ffprobePath) });
   if (result.code !== 0) {
     return {
       ok: false,
@@ -229,7 +283,10 @@ export async function probeChunkMedia(
   };
 }
 
-export function createH264TsFfmpegOverride(quality: ExportQualityPreset): (info: {
+export function createH264TsFfmpegOverride(
+  encoder: HardwareVideoEncoder,
+  quality: ExportQualityPreset,
+): (info: {
   type: 'pre-stitcher' | 'stitcher';
   args: string[];
 }) => string[] {
@@ -240,11 +297,14 @@ export function createH264TsFfmpegOverride(quality: ExportQualityPreset): (info:
       (entry, index) => entry === '-c:v' && next[index + 1] === 'libx264',
     );
     if (codecIndex === -1) {
-      throw new Error('Cannot enable NVENC: Remotion stitcher did not select libx264');
+      throw new Error(`Cannot enable ${encoder}: Remotion stitcher did not select libx264`);
     }
-    next[codecIndex + 1] = 'h264_nvenc';
+    next[codecIndex + 1] = encoder;
     const presetIndex = next.indexOf('-preset');
-    if (presetIndex >= 0 && presetIndex + 1 < next.length) {
+    if (encoder === 'h264_videotoolbox') {
+      // VideoToolbox rejects -preset; quality tiers are carried by the existing -b:v alone.
+      if (presetIndex >= 0) next.splice(presetIndex, 2);
+    } else if (presetIndex >= 0 && presetIndex + 1 < next.length) {
       next[presetIndex + 1] = NVENC_PRESETS[quality];
     } else {
       next.splice(codecIndex + 2, 0, '-preset', NVENC_PRESETS[quality]);

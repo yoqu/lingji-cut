@@ -276,6 +276,27 @@ describe('chunk scheduling', () => {
     expect(result.fallbacks).toEqual(['single-page', 'cpu-encoder']);
   });
 
+  it('disables VideoToolbox after a matching encoder failure', async () => {
+    const attempts: Array<{ concurrency: number; encoder: string; useAngle: boolean }> = [];
+    const result = await renderChunkWithFallback(
+      { concurrency: 1, encoder: 'h264_videotoolbox', useAngle: false },
+      async (attempt) => {
+        attempts.push(attempt);
+        if (attempt.encoder === 'h264_videotoolbox') {
+          throw new Error('Error while opening encoder h264_videotoolbox');
+        }
+        return 'ok';
+      },
+    );
+
+    expect(result.value).toBe('ok');
+    expect(attempts).toEqual([
+      { concurrency: 1, encoder: 'h264_videotoolbox', useAngle: false },
+      { concurrency: 1, encoder: 'libx264', useAngle: false },
+    ]);
+    expect(result.fallbacks).toEqual(['cpu-encoder']);
+  });
+
   it('disables ANGLE after a GPU process failure without retrying forever', async () => {
     const attempts: Array<{ concurrency: number; encoder: string; useAngle: boolean }> = [];
     const result = await renderChunkWithFallback(

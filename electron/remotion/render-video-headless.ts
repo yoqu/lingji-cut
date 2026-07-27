@@ -372,6 +372,20 @@ export async function renderVideoHeadless(
         ? parseSrt(await fs.readFile(timelineData.podcast.srtPath, 'utf-8'))
         : [];
 
+  // 字幕「跟随视觉主题」需要项目级 stylePresetId（与预览端同一字段）。
+  // quality 模式上面已读过 project.json 直接复用；其余档位补一次轻量读取，
+  // 读不到（无项目目录 / 文件损坏）不阻断导出，字幕按预设自身配色渲染。
+  let projectStylePresetId = qualityProject?.stylePresetId;
+  if (!projectStylePresetId && qualityProjectDir) {
+    try {
+      const projectPath = path.join(qualityProjectDir, 'project.json');
+      const project = JSON.parse(await fs.readFile(projectPath, 'utf-8')) as ProjectData;
+      projectStylePresetId = project.stylePresetId;
+    } catch {
+      projectStylePresetId = undefined;
+    }
+  }
+
   const cpuCount = os.cpus().length;
   // 帧渲染是 Chromium 截图主导的 CPU 任务；cpu-2 给系统留一点喘息，避免输入卡顿。
   // LINGJI_EXPORT_CONCURRENCY（正整数）供性能对比实验覆盖默认值。
@@ -598,8 +612,9 @@ export async function renderVideoHeadless(
       } catch (error) {
         encoderProbe = {
           ffmpegVersion: 'unknown',
-          nvencAdvertised: false,
-          nvencSmokeOk: false,
+          candidate: null,
+          advertised: false,
+          smokeOk: false,
           encoder: 'libx264',
           remotionHardwareAcceleration: 'disable',
           usesFfmpegOverride: false,
@@ -609,8 +624,9 @@ export async function renderVideoHeadless(
     } else {
       encoderProbe = {
         ffmpegVersion: 'unknown',
-        nvencAdvertised: false,
-        nvencSmokeOk: false,
+        candidate: null,
+        advertised: false,
+        smokeOk: false,
         encoder: 'libx264',
         remotionHardwareAcceleration: 'disable',
         usesFfmpegOverride: false,
@@ -645,6 +661,7 @@ export async function renderVideoHeadless(
           timeline: { ...renderTimeline, overlays: [], subtitleHighlights: [] },
           srtEntries: [],
           compiledCards: {},
+          themePresetId: projectStylePresetId,
         },
         binariesDirectory,
         browserExecutable,
@@ -661,7 +678,7 @@ export async function renderVideoHeadless(
           composition,
           serveUrl,
           outputPath: temporaryOutputPath,
-          input: { timeline: renderTimeline, srtEntries, compiledCards },
+          input: { timeline: renderTimeline, srtEntries, compiledCards, themePresetId: projectStylePresetId },
           framesPerChunk,
           workers: execution.workers,
           concurrency: execution.concurrency,
@@ -691,6 +708,7 @@ export async function renderVideoHeadless(
           timeline: renderTimeline,
           srtEntries,
           compiledCards,
+          themePresetId: projectStylePresetId,
           scale: exportScale,
           jpegQuality: renderConfig.jpegQuality,
           x264Preset: renderConfig.x264Preset,

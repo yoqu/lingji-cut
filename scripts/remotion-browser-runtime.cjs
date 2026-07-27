@@ -37,7 +37,15 @@ function resolveRemotionBrowserTarget(platform, arch) {
 }
 
 async function downloadFile(url, destination) {
-  const response = await fetch(url, { redirect: 'follow' });
+  // Node 全局 fetch 不读代理环境变量，国内直连 googleapis 会 fetch failed
+  const proxy =
+    process.env.HTTPS_PROXY || process.env.https_proxy ||
+    process.env.HTTP_PROXY || process.env.http_proxy;
+  const { fetch: undiciFetch, ProxyAgent } = require('undici');
+  const response = await undiciFetch(url, {
+    redirect: 'follow',
+    ...(proxy ? { dispatcher: new ProxyAgent(proxy) } : {}),
+  });
   if (!response.ok || !response.body) {
     throw new Error(`下载 Remotion 浏览器失败：HTTP ${response.status} ${url}`);
   }

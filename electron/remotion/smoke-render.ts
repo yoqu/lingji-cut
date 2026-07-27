@@ -6,7 +6,7 @@ import * as JsxRuntime from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as Remotion from 'remotion';
 import { compileCardTsx } from './compile-card-node';
-import { createMotionKit, type MotionKitRemotion } from '../../src/remotion/motion-kit';
+import { createMotionKit, MOTION_CAMERA_MAX_SCALE, type MotionKitRemotion } from '../../src/remotion/motion-kit';
 import type { CardAssetBinding } from '../../src/types/assets';
 import type {
   MotionCardMechanicalValidation,
@@ -737,11 +737,13 @@ async function inspectLayoutRisks(
     }
     // 真裁切 = 元素自身 overflow 会剪内容（hidden/clip/scroll/auto）且滚动尺寸超出可视尺寸。
     // overflow: visible 的大字（如 lineHeight ≤1 的 hero 数字）scrollHeight 天然超出，但内容完整渲染，不算截断。
-    // 画布级容器（CardStage 根）允许 ≤3% 的镜头出血；超过即内容真装不下。
+    // 画布级容器（CardStage 根）允许运镜出血：推近本来就会把内容推出画布边缘，
+    // 容差直接绑定 kit 的运镜上限（同一真源），内容"真装不下"由 content-box-overflow 精确判定。
     const clipsSelf = (v: string) => v === 'hidden' || v === 'clip' || v === 'scroll' || v === 'auto';
     const isCanvasRoot = node.width >= 1912 && node.height >= 1072;
-    const overW = isCanvasRoot ? 1920 * 0.03 : 1;
-    const overH = isCanvasRoot ? 1080 * 0.03 : 1;
+    const bleed = MOTION_CAMERA_MAX_SCALE - 1;
+    const overW = isCanvasRoot ? 1920 * bleed : 1;
+    const overH = isCanvasRoot ? 1080 * bleed : 1;
     if (
       (node.text.length >= 18 || node.directText) &&
       ((clipsSelf(node.overflowX) && node.scrollWidth > node.clientWidth + overW) ||
@@ -800,6 +802,15 @@ async function inspectLayoutRisks(
     node.motionId ?? `${node.tag}${node.text ? `「${node.text.slice(0, 12)}」` : ''}`;
   const ignoredLayer = (node: LayoutProbe): boolean =>
     node.allowOverlap || node.motionLayer === 'decorative' || node.motionLayer === 'asset-underlay';
+  interface OverlapHit {
+    frame: number;
+    ratio: number;
+    certain: boolean;
+    labelA: string;
+    labelB: string;
+  }
+  // 先按元素对聚合全部采样帧的命中，再统一判定——单帧碰撞不能直接定级（见下方持续性规则）。
+  const overlapHits = new Map<string, OverlapHit[]>();
   for (let i = 0; i < layoutNodes.length; i += 1) {
     for (let j = i + 1; j < layoutNodes.length; j += 1) {
       const a = layoutNodes[i];
@@ -818,12 +829,49 @@ async function inspectLayoutRisks(
       const semanticBlocks = a.motionLayer === 'semantic' && b.motionLayer === 'semantic';
       const certainOcclusion = textText || foregroundAsset || semanticBlocks;
       if (!certainOcclusion && !(a.directText || b.directText || a.isMedia || b.isMedia)) continue;
+      const labelA = collisionLabel(a);
+      const labelB = collisionLabel(b);
+      const pairKey = labelA <= labelB ? `${labelA}↔${labelB}` : `${labelB}↔${labelA}`;
+      const hits = overlapHits.get(pairKey) ?? [];
+      hits.push({ frame: a.frame, ratio, certain: certainOcclusion, labelA, labelB });
+      overlapHits.set(pairKey, hits);
+    }
+  }
+  // 落定帧 = 采样集合的最后一帧（selectMotionCardProbeFrames / 默认帧集都保证含末帧）。
+  const settledFrame = layoutNodes.reduce((max, node) => Math.max(max, node.frame), 0);
+  for (const hits of overlapHits.values()) {
+    const worst = hits.reduce((max, hit) => (hit.ratio > max.ratio ? hit : max));
+    const hitFrames = new Set(hits.map((hit) => hit.frame));
+    // 持续遮挡才算布局问题：同一对元素在 ≥2 个采样帧重叠，或在落定帧仍重叠。
+    // 只命中单个采样帧且落定帧无重叠 = 入场滑入 / emphasis 落定弹簧的瞬时交叠
+    // （如 slam 的 translateY(-14px) scale(1.12) 只存在 land 后十余帧，静态槽位并无重叠），
+    // 降级 warning，不再回退卡。
+    const persistent = hitFrames.size >= 2 || hitFrames.has(settledFrame);
+    const pairText = `${worst.labelA} 与 ${worst.labelB}`;
+    const element = `${worst.labelA} ↔ ${worst.labelB}`;
+    if (worst.certain && persistent) {
       pushCappedIssue({
-        severity: certainOcclusion ? 'error' : 'warning',
-        code: certainOcclusion ? 'semantic-occlusion' : 'possible-occlusion',
-        message: `frame ${a.frame} 检测到 ${collisionLabel(a)} 与 ${collisionLabel(b)} 重叠 ${(ratio * 100).toFixed(1)}%，${certainOcclusion ? '已形成语义内容遮挡，必须调整槽位、删减内容或让旧元素退出' : '需确认是否为有意叠加'}。`,
-        frame: a.frame,
-        element: `${collisionLabel(a)} ↔ ${collisionLabel(b)}`,
+        severity: 'error',
+        code: 'semantic-occlusion',
+        message: `frame ${worst.frame} 检测到 ${pairText} 重叠 ${(worst.ratio * 100).toFixed(1)}%，已形成语义内容遮挡，必须调整槽位、删减内容或让旧元素退出。`,
+        frame: worst.frame,
+        element,
+      }, 5);
+    } else if (worst.certain) {
+      pushCappedIssue({
+        severity: 'warning',
+        code: 'semantic-occlusion',
+        message: `frame ${worst.frame} 检测到 ${pairText} 重叠 ${(worst.ratio * 100).toFixed(1)}%，仅命中单个采样帧且落定帧无重叠，判定为动画瞬态交叠（emphasis 弹簧 / 入场滑入），不按遮挡阻断；若成片可见持续穿帮再调整槽位。`,
+        frame: worst.frame,
+        element,
+      }, 5);
+    } else {
+      pushCappedIssue({
+        severity: 'warning',
+        code: 'possible-occlusion',
+        message: `frame ${worst.frame} 检测到 ${pairText} 重叠 ${(worst.ratio * 100).toFixed(1)}%，需确认是否为有意叠加。`,
+        frame: worst.frame,
+        element,
       }, 5);
     }
   }
