@@ -42,6 +42,9 @@ vi.mock("../src/store/ai", () => ({
     defaultProviderId: "provider-1",
     defaultModel: "model-1",
   })),
+  // 字幕风格区读取项目级视觉主题预设；测试无项目，返回 undefined（走内置默认主题）
+  useAIStore: (selector: (state: { projectStylePresetId: undefined }) => unknown) =>
+    selector({ projectStylePresetId: undefined }),
 }));
 
 vi.mock("../src/store/timeline", () => ({

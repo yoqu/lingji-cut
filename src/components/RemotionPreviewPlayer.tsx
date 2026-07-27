@@ -6,6 +6,7 @@ import { collectMotionCards } from '../remotion/collect-cards';
 import { hydrateAICardAssetPaths } from '../hyperframes/assets';
 import { shouldRefreshPreviewForExternalTime, shouldResyncPreviewSeek } from '../lib/playback';
 import { getPreviewAudioSources, preloadPreviewAudioSources } from '../remotion/preview-audio-preload';
+import { useAIStore } from '../store/ai';
 import type { SrtEntry, TimelineData } from '../types';
 
 export interface RemotionPreviewHandle {
@@ -69,6 +70,8 @@ const RemotionPreviewPlayerInner = forwardRef<RemotionPreviewHandle, RemotionPre
       [plan.audio, podcastRevision],
     );
     const previewAudioSourcesKey = previewAudioSources.join('\0');
+    // 项目级视觉主题：字幕 followTheme 时派生字体与高亮 accent（预览=导出同字段）。
+    const projectStylePresetId = useAIStore((s) => s.projectStylePresetId);
     const inputProps = useMemo(
       () => ({
         timeline: renderTimeline,
@@ -76,8 +79,9 @@ const RemotionPreviewPlayerInner = forwardRef<RemotionPreviewHandle, RemotionPre
         compiledCards,
         cardProjectDir: projectDir ?? undefined,
         podcastRevision,
+        themePresetId: projectStylePresetId,
       }),
-      [renderTimeline, srtEntries, compiledCards, projectDir, podcastRevision],
+      [renderTimeline, srtEntries, compiledCards, projectDir, podcastRevision, projectStylePresetId],
     );
     const playerStyle = useMemo(
       () => ({ width: '100%', height: '100%', background: 'var(--color-preview-bg)' }),

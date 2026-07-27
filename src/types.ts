@@ -98,6 +98,29 @@ export interface SubtitleStyle {
   maxCharsPerEntry: number;
   /** 是否启用自动切分。默认 true */
   autoResegment: boolean;
+
+  // ── 播客优雅字幕样式体系（全部可选，旧 project.json 加载时由默认值合并补齐）──
+  /** 字幕风格预设 id（见 src/lib/subtitle-style-presets.ts），默认 podcast-elegant */
+  presetId?: string;
+  /** 跟随项目视觉主题：字体与高亮 accent 渲染期取自 VisualStylePreset。默认 true */
+  followTheme?: boolean;
+  /** 显式字体栈（系统字体，不打网络字体包） */
+  fontFamily?: string;
+  fontWeight?: number;
+  /** 字距（px，与 TextOverlayData.letterSpacing 同约定） */
+  letterSpacing?: number;
+  /** 圆角 pill 背板；开启时替代 textShadow */
+  backdropEnabled?: boolean;
+  backdropColor?: string;
+  backdropRadius?: number;
+  backdropPaddingX?: number;
+  backdropPaddingY?: number;
+  /** 字幕本体进场动效；cut 保持硬切旧行为 */
+  enterAnimation?: 'fade-rise' | 'fade' | 'cut';
+  /** 出场最后几帧淡出 */
+  exitFade?: boolean;
+  /** 高亮形态：色块 / 文字变色（accent 加粗，无色块） */
+  highlightVariant?: 'block' | 'text';
 }
 
 export interface SubtitleHighlight {
@@ -259,20 +282,38 @@ export function createDefaultTimeline(): TimelineData {
   };
 }
 
+/**
+ * 默认字幕样式 = podcast-elegant 预设（播客优雅：pill 背板 + 字重 500 + fade-rise
+ * + accent 文字高亮）。src/lib/subtitle-style-presets.ts 的预设表与此保持一致，
+ * 由 tests/subtitle-style-presets.test.ts 约束；types 不反向 import lib，避免循环依赖。
+ */
 export function createDefaultSubtitleStyle(): SubtitleStyle {
   return {
-    fontSize: 48,
-    color: '#FFFFFF',
+    fontSize: 42,
+    color: '#F5F5F7',
     position: 'bottom',
     highlightEnabled: false,
-    highlightBackgroundColor: '#F8DC48',
+    highlightBackgroundColor: '#0A84FF',
     highlightTextColor: '#FFFFFF',
     highlightPaddingX: 10,
     highlightPaddingY: 4,
-    highlightRadius: 12,
-    highlightAnimation: 'pop',
+    highlightRadius: 10,
+    highlightAnimation: 'wipe',
     maxCharsPerEntry: 35,
     autoResegment: true,
+    presetId: 'podcast-elegant',
+    followTheme: true,
+    fontFamily: "'PingFang SC','HarmonicOS Sans SC','Source Han Sans SC','Microsoft YaHei',sans-serif",
+    fontWeight: 500,
+    letterSpacing: 0.84,
+    backdropEnabled: true,
+    backdropColor: 'rgba(8,10,14,0.52)',
+    backdropRadius: 16,
+    backdropPaddingX: 22,
+    backdropPaddingY: 10,
+    enterAnimation: 'fade-rise',
+    exitFade: true,
+    highlightVariant: 'text',
   };
 }
 

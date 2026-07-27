@@ -3,6 +3,7 @@ import {
   DEFAULT_VISUAL_TRACK_ID,
   DEFAULT_AI_CARDS_TRACK_ID,
   createDefaultTimeline,
+  createDefaultSubtitleStyle,
 } from '../src/types';
 import { useTimelineStore } from '../src/store/timeline';
 
@@ -17,20 +18,7 @@ describe('useTimelineStore', () => {
   });
 
   it('creates default subtitle highlight settings', () => {
-    expect(createDefaultTimeline().subtitle).toEqual({
-      fontSize: 48,
-      color: '#FFFFFF',
-      position: 'bottom',
-      highlightEnabled: false,
-      highlightBackgroundColor: '#F8DC48',
-      highlightTextColor: '#FFFFFF',
-      highlightPaddingX: 10,
-      highlightPaddingY: 4,
-      highlightRadius: 12,
-      highlightAnimation: 'pop',
-      maxCharsPerEntry: 35,
-      autoResegment: true,
-    });
+    expect(createDefaultTimeline().subtitle).toEqual(createDefaultSubtitleStyle());
     expect(createDefaultTimeline().subtitleHighlights).toEqual([]);
   });
 
@@ -443,7 +431,7 @@ describe('useTimelineStore', () => {
     expect(useTimelineStore.getState().timeline.subtitle).toMatchObject({
       highlightEnabled: true,
       highlightBackgroundColor: '#FFD400',
-      highlightAnimation: 'pop',
+      highlightAnimation: 'wipe',
     });
     expect(useTimelineStore.getState().canUndo).toBe(true);
   });
@@ -482,18 +470,10 @@ describe('useTimelineStore', () => {
     expect(timeline.tracks.map((track) => track.id)).toEqual(['audio', 'subtitle', 'visual-1']);
     expect(timeline.overlays[0]?.trackId).toBe(DEFAULT_VISUAL_TRACK_ID);
     expect(timeline.subtitle).toEqual({
+      ...createDefaultSubtitleStyle(),
       fontSize: 48,
       color: '#FFFFFF',
       position: 'bottom',
-      highlightEnabled: false,
-      highlightBackgroundColor: '#F8DC48',
-      highlightTextColor: '#FFFFFF',
-      highlightPaddingX: 10,
-      highlightPaddingY: 4,
-      highlightRadius: 12,
-      highlightAnimation: 'pop',
-      maxCharsPerEntry: 35,
-      autoResegment: true,
     });
     expect(timeline.subtitleHighlights).toEqual([]);
     expect(assets.map((asset) => asset.path)).toEqual([

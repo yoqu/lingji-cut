@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { getAISettingsIssue } from "../lib/ai-settings";
 import { generateSubtitleHighlights } from "../lib/subtitle-highlight-runner";
 import { filterValidSubtitleHighlights } from "../lib/subtitle-highlights";
+import { getStylePresetById } from "../lib/card-style";
+import {
+  applySubtitlePreset,
+  getSubtitlePresetById,
+  resolveSubtitleStyle,
+  SUBTITLE_FONT_STACK_OPTIONS,
+  SUBTITLE_STYLE_PRESETS,
+  type SubtitleStylePreset,
+} from "../lib/subtitle-style-presets";
 import { getFileNameFromPath } from "../lib/utils";
 import type { SubtitleStyle } from "../types";
-import { loadAISettings } from "../store/ai";
+import { loadAISettings, useAIStore } from "../store/ai";
 import { useTaskProgressStore } from "../store/task-progress";
 import { useTimelineStore } from "../store/timeline";
 import { Button, ColorField, NumberField, Select, Switch } from "../ui";
@@ -19,6 +28,83 @@ const HIGHLIGHT_ANIMATION_OPTIONS: Array<{
   { value: "wipe", label: "擦入 (wipe)" },
   { value: "none", label: "无动画 (none)" },
 ];
+
+const POSITION_OPTIONS: Array<{
+  value: SubtitleStyle["position"];
+  label: string;
+}> = [
+  { value: "top", label: "顶部" },
+  { value: "center", label: "居中" },
+  { value: "bottom", label: "底部" },
+];
+
+const ENTER_ANIMATION_OPTIONS: Array<{
+  value: NonNullable<SubtitleStyle["enterAnimation"]>;
+  label: string;
+}> = [
+  { value: "fade-rise", label: "浮入 (fade-rise)" },
+  { value: "fade", label: "淡入 (fade)" },
+  { value: "cut", label: "直接出现 (cut)" },
+];
+
+const HIGHLIGHT_VARIANT_OPTIONS: Array<{
+  value: NonNullable<SubtitleStyle["highlightVariant"]>;
+  label: string;
+}> = [
+  { value: "block", label: "色块" },
+  { value: "text", label: "文字变色" },
+];
+
+// ColorField 的原生 color input 只接受 #rrggbb；背板色是 rgba（含透明度），
+// 编辑时在 hex 与 rgba 之间互转并保留原 alpha。
+const BACKDROP_RGBA_PATTERN =
+  /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/;
+
+function backdropColorToHex(color: string): string {
+  const trimmed = color.trim();
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed;
+  const match = BACKDROP_RGBA_PATTERN.exec(trimmed);
+  if (!match) return "#080A14";
+  const channel = (value: string) => Number(value).toString(16).padStart(2, "0");
+  return `#${channel(match[1])}${channel(match[2])}${channel(match[3])}`;
+}
+
+function backdropColorWithHex(hex: string, previous: string): string {
+  const match = BACKDROP_RGBA_PATTERN.exec(previous.trim());
+  const alpha = match?.[4] !== undefined ? Number(match[4]) : 0.52;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** 预设卡片的小预览条：模拟背板/文字/高亮效果（缩放比例仅示意）。 */
+function presetPreviewTextStyle(preset: SubtitleStylePreset): CSSProperties {
+  const presetStyle = preset.style;
+  return {
+    fontFamily: presetStyle.fontFamily,
+    fontWeight: presetStyle.fontWeight,
+    letterSpacing: presetStyle.letterSpacing * 0.3,
+    color: presetStyle.color,
+    background: presetStyle.backdropEnabled ? presetStyle.backdropColor : "transparent",
+    borderRadius: presetStyle.backdropEnabled ? 8 : 0,
+    padding: presetStyle.backdropEnabled ? "3px 8px" : "0 2px",
+    textShadow: presetStyle.backdropEnabled ? "none" : "0 1px 3px rgba(0,0,0,.6)",
+  };
+}
+
+function presetPreviewHighlightStyle(preset: SubtitleStylePreset): CSSProperties {
+  const presetStyle = preset.style;
+  if (presetStyle.highlightVariant === "text") {
+    return { color: presetStyle.highlightBackgroundColor, fontWeight: 650 };
+  }
+  return {
+    background: presetStyle.highlightBackgroundColor,
+    color: presetStyle.highlightTextColor,
+    borderRadius: 3,
+    padding: "0 2px",
+  };
+}
 
 export function SubtitleInspector() {
   const [isGeneratingHighlights, setIsGeneratingHighlights] = useState(false);
@@ -54,6 +140,20 @@ export function SubtitleInspector() {
     0,
     storedSubtitleHighlightCount - validSubtitleHighlights.length,
   );
+
+  // 字幕风格：预设骨架 + 项目视觉主题派生（与预览/导出渲染同一解析路径）。
+  const projectStylePresetId = useAIStore((state) => state.projectStylePresetId);
+  const subtitleTheme = useMemo(
+    () => getStylePresetById(projectStylePresetId),
+    [projectStylePresetId],
+  );
+  const previewStyle = useMemo(
+    () => resolveSubtitleStyle(timeline.subtitle, subtitleTheme),
+    [timeline.subtitle, subtitleTheme],
+  );
+  const followTheme = timeline.subtitle.followTheme ?? true;
+  const backdropEnabled = timeline.subtitle.backdropEnabled ?? false;
+  const activeSubtitlePresetId = getSubtitlePresetById(timeline.subtitle.presetId).id;
 
   const handleGenerateSubtitleHighlights = useCallback(async () => {
     if (highlightInFlightRef.current) return;
@@ -131,6 +231,48 @@ export function SubtitleInspector() {
       updateSubtitleStyle(updates);
     },
     [updateSubtitleStyle],
+  );
+
+  // 预设即点即得：样式整体替换，仅切分设置由 applySubtitlePreset 保留。
+  const handlePresetSelect = useCallback(
+    (presetId: string) => {
+      handleSubtitleStyleUpdate(applySubtitlePreset(presetId, timeline.subtitle));
+    },
+    [handleSubtitleStyleUpdate, timeline.subtitle],
+  );
+
+  const handlePositionChange = useCallback(
+    (event: { target: { value: string } }) => {
+      handleSubtitleStyleUpdate({
+        position: event.target.value as SubtitleStyle["position"],
+      });
+    },
+    [handleSubtitleStyleUpdate],
+  );
+
+  const handleFontFamilyChange = useCallback(
+    (event: { target: { value: string } }) => {
+      handleSubtitleStyleUpdate({ fontFamily: event.target.value });
+    },
+    [handleSubtitleStyleUpdate],
+  );
+
+  const handleEnterAnimationChange = useCallback(
+    (event: { target: { value: string } }) => {
+      handleSubtitleStyleUpdate({
+        enterAnimation: event.target.value as SubtitleStyle["enterAnimation"],
+      });
+    },
+    [handleSubtitleStyleUpdate],
+  );
+
+  const handleHighlightVariantChange = useCallback(
+    (event: { target: { value: string } }) => {
+      handleSubtitleStyleUpdate({
+        highlightVariant: event.target.value as SubtitleStyle["highlightVariant"],
+      });
+    },
+    [handleSubtitleStyleUpdate],
   );
 
   const srtFileName = timeline.podcast.srtPath
@@ -211,6 +353,29 @@ export function SubtitleInspector() {
     [setSubtitleMaxChars],
   );
 
+  // 字号滑杆：与单条字数同一模式（本地即时反馈 + 防抖写 store，避免 undo 栈刷屏）
+  const [fontSizeSliderValue, setFontSizeSliderValue] = useState(timeline.subtitle.fontSize);
+
+  useEffect(() => {
+    setFontSizeSliderValue(timeline.subtitle.fontSize);
+  }, [timeline.subtitle.fontSize]);
+
+  const fontSizeDebounceRef = useRef<number | null>(null);
+
+  const handleFontSizeChange = useCallback(
+    (value: number) => {
+      setFontSizeSliderValue(value);
+      if (fontSizeDebounceRef.current !== null) {
+        window.clearTimeout(fontSizeDebounceRef.current);
+      }
+      fontSizeDebounceRef.current = window.setTimeout(() => {
+        handleSubtitleStyleUpdate({ fontSize: value });
+        fontSizeDebounceRef.current = null;
+      }, 300);
+    },
+    [handleSubtitleStyleUpdate],
+  );
+
   const handleResegmentNow = useCallback(() => {
     const { droppedHighlights } = resegmentSubtitles();
     if (droppedHighlights > 0) {
@@ -229,6 +394,9 @@ export function SubtitleInspector() {
       if (maxCharsDebounceRef.current !== null) {
         window.clearTimeout(maxCharsDebounceRef.current);
       }
+      if (fontSizeDebounceRef.current !== null) {
+        window.clearTimeout(fontSizeDebounceRef.current);
+      }
     };
   }, []);
 
@@ -244,6 +412,179 @@ export function SubtitleInspector() {
 
   return (
     <div className={styles.root}>
+      <section className={styles.section}>
+        <h3 className={styles.sectionTitle}>字幕风格</h3>
+
+        <div className={styles.presetGrid}>
+          {SUBTITLE_STYLE_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className={styles.presetCard}
+              data-selected={preset.id === activeSubtitlePresetId || undefined}
+              aria-pressed={preset.id === activeSubtitlePresetId}
+              onClick={() => handlePresetSelect(preset.id)}
+            >
+              <span className={styles.presetPreview} aria-hidden="true">
+                <span
+                  className={styles.presetPreviewText}
+                  style={presetPreviewTextStyle(preset)}
+                >
+                  播客字幕
+                  <span style={presetPreviewHighlightStyle(preset)}>示例</span>
+                </span>
+              </span>
+              <span className={styles.presetName}>{preset.name}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>跟随视觉主题</span>
+          <div className={styles.rowSpacer} />
+          <Switch
+            checked={followTheme}
+            onChange={(checked) =>
+              handleSubtitleStyleUpdate({ followTheme: checked })
+            }
+            className={styles.switchControl}
+          />
+        </div>
+      </section>
+
+      <div className={styles.separator} />
+
+      <section className={styles.section}>
+        <h3 className={styles.sectionTitle}>字幕样式</h3>
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>字号</span>
+          <input
+            type="range"
+            min={24}
+            max={96}
+            step={1}
+            value={fontSizeSliderValue}
+            onChange={(event) => handleFontSizeChange(Number(event.target.value))}
+            className={styles.maxCharsSlider}
+            aria-label="字幕字号"
+          />
+          <span className={styles.maxCharsValue}>{fontSizeSliderValue}</span>
+        </div>
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>位置</span>
+          <div className={styles.rowSpacer} />
+          <Select
+            value={timeline.subtitle.position}
+            onChange={handlePositionChange}
+            options={POSITION_OPTIONS}
+            aria-label="字幕位置"
+            controlClassName={styles.selectControl}
+          />
+        </div>
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>字体</span>
+          <div className={styles.rowSpacer} />
+          <Select
+            value={timeline.subtitle.fontFamily ?? SUBTITLE_FONT_STACK_OPTIONS[0].value}
+            onChange={handleFontFamilyChange}
+            options={SUBTITLE_FONT_STACK_OPTIONS}
+            disabled={followTheme}
+            aria-label="字幕字体"
+            controlClassName={styles.selectControl}
+          />
+        </div>
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>字重</span>
+          <div className={styles.rowSpacer} />
+          <NumberField
+            value={timeline.subtitle.fontWeight ?? 500}
+            min={300}
+            max={900}
+            step={50}
+            onChange={(value) => handleSubtitleStyleUpdate({ fontWeight: value })}
+            className={styles.numberFieldControl}
+          />
+        </div>
+
+        <div className={styles.dualRow}>
+          <ColorField
+            label="文字颜色"
+            value={timeline.subtitle.color}
+            onChange={(value) => handleSubtitleStyleUpdate({ color: value })}
+            showValue
+            formatValue={(value) => value.toUpperCase()}
+            className={styles.compactColorField}
+            labelClassName={styles.fieldCaption}
+          />
+          <div className={styles.fieldSpacer} aria-hidden="true" />
+        </div>
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>背板</span>
+          <div className={styles.rowSpacer} />
+          <Switch
+            checked={backdropEnabled}
+            onChange={(checked) =>
+              handleSubtitleStyleUpdate({ backdropEnabled: checked })
+            }
+            className={styles.switchControl}
+          />
+        </div>
+
+        {backdropEnabled ? (
+          <div className={styles.dualRow}>
+            <ColorField
+              label="背板颜色"
+              value={backdropColorToHex(
+                timeline.subtitle.backdropColor ?? "rgba(8,10,14,0.52)",
+              )}
+              onChange={(value) =>
+                handleSubtitleStyleUpdate({
+                  backdropColor: backdropColorWithHex(
+                    value,
+                    timeline.subtitle.backdropColor ?? "rgba(8,10,14,0.52)",
+                  ),
+                })
+              }
+              showValue
+              formatValue={(value) => value.toUpperCase()}
+              className={styles.compactColorField}
+              labelClassName={styles.fieldCaption}
+            />
+            <div className={styles.compactNumberField}>
+              <span className={styles.fieldCaption}>背板圆角 (px)</span>
+              <NumberField
+                value={timeline.subtitle.backdropRadius ?? 16}
+                min={0}
+                max={32}
+                onChange={(value) =>
+                  handleSubtitleStyleUpdate({ backdropRadius: value })
+                }
+                className={styles.numberFieldControl}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>进场动画</span>
+          <div className={styles.rowSpacer} />
+          <Select
+            value={timeline.subtitle.enterAnimation ?? "cut"}
+            onChange={handleEnterAnimationChange}
+            options={ENTER_ANIMATION_OPTIONS}
+            aria-label="字幕进场动画"
+            controlClassName={styles.selectControl}
+          />
+        </div>
+      </section>
+
+      <div className={styles.separator} />
+
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>字幕排版</h3>
 
@@ -350,6 +691,18 @@ export function SubtitleInspector() {
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>颜色与圆角</h3>
 
+        <div className={styles.inlineRow}>
+          <span className={styles.inlineLabel}>高亮形态</span>
+          <div className={styles.rowSpacer} />
+          <Select
+            value={timeline.subtitle.highlightVariant ?? "block"}
+            onChange={handleHighlightVariantChange}
+            options={HIGHLIGHT_VARIANT_OPTIONS}
+            aria-label="高亮形态"
+            controlClassName={styles.selectControl}
+          />
+        </div>
+
         <div className={styles.dualRow}>
           <ColorField
             label="底色"
@@ -436,13 +789,42 @@ export function SubtitleInspector() {
           <span
             className={styles.previewChip}
             style={{
-              background: timeline.subtitle.highlightBackgroundColor,
-              color: timeline.subtitle.highlightTextColor,
-              borderRadius: `${timeline.subtitle.highlightRadius}px`,
-              padding: `${timeline.subtitle.highlightPaddingY}px ${timeline.subtitle.highlightPaddingX}px`,
+              fontFamily: previewStyle.fontFamily,
+              fontWeight: previewStyle.fontWeight,
+              letterSpacing: previewStyle.letterSpacing,
+              color: previewStyle.color,
+              background: previewStyle.backdropEnabled
+                ? previewStyle.backdropColor
+                : "transparent",
+              borderRadius: previewStyle.backdropEnabled
+                ? `${Math.min(previewStyle.backdropRadius ?? 16, 12)}px`
+                : undefined,
+              padding: previewStyle.backdropEnabled
+                ? `${(previewStyle.backdropPaddingY ?? 10) * 0.5}px ${(previewStyle.backdropPaddingX ?? 22) * 0.5}px`
+                : "0 2px",
+              textShadow: previewStyle.backdropEnabled
+                ? "none"
+                : "0 1px 3px rgba(0,0,0,.5)",
             }}
           >
-            关键词高亮
+            示例字幕
+            <span
+              style={
+                previewStyle.highlightVariant === "text"
+                  ? {
+                      color: previewStyle.highlightBackgroundColor,
+                      fontWeight: 650,
+                    }
+                  : {
+                      background: previewStyle.highlightBackgroundColor,
+                      color: previewStyle.highlightTextColor,
+                      borderRadius: `${Math.min(previewStyle.highlightRadius, 8)}px`,
+                      padding: `${previewStyle.highlightPaddingY * 0.5}px ${previewStyle.highlightPaddingX * 0.5}px`,
+                    }
+              }
+            >
+              关键词
+            </span>
           </span>
         </div>
       </section>
