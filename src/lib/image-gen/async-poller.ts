@@ -20,6 +20,8 @@ export interface PollerOptions<T> {
 }
 
 const FAKE_PERCENT_STEPS = [10, 25, 45, 60, 75, 85, 92, 95];
+/** 轮询允许的最大连续网络失败次数；达到上限才视为真正失败，避免偶发 TLS 抖动杀掉已提交的任务 */
+const MAX_CONSECUTIVE_NETWORK_FAILURES = 5;
 
 export async function pollUntilDone<T>(opts: PollerOptions<T>): Promise<T> {
   const intervalMs = opts.intervalMs ?? 2000;
@@ -34,6 +36,7 @@ export async function pollUntilDone<T>(opts: PollerOptions<T>): Promise<T> {
   opts.onProgress({ percent: 8, phase: 'queued', message: '已入队，等待生成…' });
 
   let fakeStepIndex = 0;
+  let consecutiveNetworkFailures = 0;
 
   while (true) {
     ensureNotAborted(opts.signal, opts.providerType);
@@ -49,7 +52,15 @@ export async function pollUntilDone<T>(opts: PollerOptions<T>): Promise<T> {
     let status: PollerStatus<T>;
     try {
       status = await opts.fetchStatus(taskId);
+      consecutiveNetworkFailures = 0;
     } catch (err) {
+      if (err instanceof ImageGenerationError && err.code === 'network') {
+        consecutiveNetworkFailures++;
+        if (consecutiveNetworkFailures < MAX_CONSECUTIVE_NETWORK_FAILURES) {
+          await sleep(intervalMs, opts.signal, opts.providerType);
+          continue;
+        }
+      }
       if (err instanceof ImageGenerationError) throw err;
       throw new ImageGenerationError('network', opts.providerType, '轮询任务状态失败', err);
     }

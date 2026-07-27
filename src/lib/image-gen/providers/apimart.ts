@@ -32,6 +32,13 @@ const CAPABILITIES: ImageProviderCapabilities = {
 
 const INTERVAL_MS = 3000;
 const TIMEOUT_MS = 240_000;
+/** 单次 HTTP 请求超时：防止 TLS 挂起导致轮询永久卡住（整体超时无法兜底 await 中的 fetch） */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** 合并外部取消信号与单次请求超时；超时在 catch 中归为 network（可重试），用户取消仍是 cancelled */
+function requestSignal(signal: AbortSignal): AbortSignal {
+  return AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+}
 
 interface ApimartSubmitResponse {
   code?: number;
@@ -130,7 +137,7 @@ export const apimartImageProvider: ImageGenerationProvider = {
             method: 'POST',
             headers,
             body: JSON.stringify(body),
-            signal: ctx.signal,
+            signal: requestSignal(ctx.signal),
           });
         } catch (err) {
           if (ctx.signal.aborted) {
@@ -172,7 +179,7 @@ export const apimartImageProvider: ImageGenerationProvider = {
           response = await fetch(statusUrl, {
             method: 'GET',
             headers: { Authorization: `Bearer ${config.apiKey}` },
-            signal: ctx.signal,
+            signal: requestSignal(ctx.signal),
           });
         } catch (err) {
           if (ctx.signal.aborted) {
