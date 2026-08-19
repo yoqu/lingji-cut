@@ -1,0 +1,64 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--color-separator);
+  background: var(--color-panel-elevated);
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2, 8px);
+  padding: var(--space-3, 12px) var(--space-4, 16px);
+  border-bottom: 1px solid var(--color-separator);
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+
+.head h3 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.head p {
+  margin: 2px 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.spin {
+  animation: ingest-spin 0.9s linear infinite;
+  color: var(--color-system-blue);
+}
+
+@keyframes ingest-spin {
+  to { transform: rotate(360deg); }
+}
+
+.scan {
+  margin: var(--space-3, 12px) var(--space-4, 16px) 0;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--color-system-blue) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  flex-shrink: 0;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3, 12px) var(--space-4, 16px) var(--space-5, 20px);
+}
+
+.empty {
+  margin: var(--space-4, 16px) 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

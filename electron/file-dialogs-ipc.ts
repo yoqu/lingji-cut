@@ -63,6 +63,21 @@ function readImageSize(buf: Buffer): { width: number; height: number } | null {
   return null;
 }
 
+/** 读取图片文件头解析像素尺寸；无法识别返回 null。 */
+async function readImageSizeAtPath(full: string): Promise<{ width: number; height: number } | null> {
+  const fh = await fs.open(full, 'r');
+  try {
+    const head = Buffer.alloc(131072);
+    const { bytesRead } = await fh.read(head, 0, head.length, 0);
+    return readImageSize(head.subarray(0, bytesRead));
+  } finally {
+    await fh.close();
+  }
+}
+
+/** 发布封面可用的图片格式（与 scan-cover-images 的识别范围一致）。 */
+const COVER_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
+
 // ── 自动扫描项目目录下的媒体素材 ──
 
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.m4v']);
@@ -123,11 +138,7 @@ export function registerFileDialogsIpc(ctx: FileDialogsIpcContext): void {
         if (!/\.(png|jpe?g|webp)$/i.test(entry.name)) continue;
         const full = path.join(dir, entry.name);
         try {
-          const fh = await fs.open(full, 'r');
-          const head = Buffer.alloc(131072);
-          const { bytesRead } = await fh.read(head, 0, head.length, 0);
-          await fh.close();
-          const size = readImageSize(head.subarray(0, bytesRead));
+          const size = await readImageSizeAtPath(full);
           if (!size) continue;
           const stat = await fs.stat(full);
           out.push({ path: full, width: size.width, height: size.height, mtimeMs: stat.mtimeMs });
@@ -139,6 +150,49 @@ export function registerFileDialogsIpc(ctx: FileDialogsIpcContext): void {
     } catch {
       return [];
     }
+  });
+
+  // 发布封面：手动选择本地图片并复制进 covers/，文件名带比例标记（local-4x3-…），
+  // 便于重启后按用户指定比例而非像素判定分组。
+  ipcMain.handle('import-cover-images', async (_event, dir: string, ratio?: string) => {
+    const mainWindow = getMainWindow();
+    if (!mainWindow || !dir) return [];
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择本地封面图片',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '图片文件', extensions: COVER_IMAGE_EXTENSIONS }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return [];
+
+    const coversDir = path.join(dir, 'covers');
+    await fs.mkdir(coversDir, { recursive: true });
+    const tag = typeof ratio === 'string' ? ratio.replace(':', 'x') : '';
+    const stamp = Date.now();
+    const out: { path: string; width: number; height: number; mtimeMs: number }[] = [];
+    for (let i = 0; i < result.filePaths.length; i += 1) {
+      const source = result.filePaths[i];
+      const ext = path.extname(source).toLowerCase() || '.png';
+      const target = path.join(coversDir, `local-${tag ? `${tag}-` : ''}${stamp}-${i}${ext}`);
+      try {
+        await fs.copyFile(source, target);
+        const size = await readImageSizeAtPath(target);
+        const stat = await fs.stat(target);
+        out.push({
+          path: target,
+          width: size?.width ?? 0,
+          height: size?.height ?? 0,
+          mtimeMs: stat.mtimeMs,
+        });
+      } catch (error) {
+        writeAppLog(
+          'warn',
+          'import-cover-images',
+          `导入本地封面失败: ${source}`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    return out;
   });
 
   // 发布联动兜底：扫描项目目录顶层最新的 .mp4 成片（用于 App 重启后预填发布视频文件）。

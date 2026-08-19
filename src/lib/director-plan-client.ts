@@ -27,7 +27,7 @@ export async function requestDirectorPlan(
       : 65 + Math.round(event.percent * 0.35);
     options.onProgress?.(
       percent,
-      event.phase === 'planning' ? '分析内容结构' : '制定 Motion Bible',
+      event.phase === 'planning' ? '规划镜头并检索素材' : '复核镜头与媒介策略',
     );
   });
   try {

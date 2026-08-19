@@ -254,7 +254,8 @@ describe('planTranscriptSegments', () => {
   it('plans segments from the full transcript', async () => {
     const modelCaller = vi.fn<typeof generateStructuredData>().mockResolvedValue({
       segments: [baseSegment, secondSegment],
-      coverPrompts: ['封面提示词'],
+      title: 'AI视频工作流怎么拆',
+      coverPrompts: ['商业分析封面，画面主标题“另一个标题”'],
       summary: '节目总结',
       keywords: ['AI', '播客'],
       globalPrompt: '整体偏商业分析风',
@@ -267,11 +268,27 @@ describe('planTranscriptSegments', () => {
 
     expect(result.segments).toHaveLength(2);
     expect(result.segments[0]?.id).toBe('seg-1');
-    expect(result.coverPrompts).toEqual(['封面提示词']);
+    expect(result.title).toBe('AI视频工作流怎么拆');
+    expect(result.coverPrompts).toEqual(['商业分析封面，画面主标题“AI视频工作流怎么拆”']);
     expect(result.summary).toBe('节目总结');
     expect(result.keywords).toEqual(['AI', '播客']);
     expect(modelCaller).toHaveBeenCalledTimes(1);
     expect(modelCaller.mock.calls[0]?.[2]).toBe(fullTranscript);
+  });
+
+  it('derives a non-empty work intro when an older planning override omits top-level summary', async () => {
+    const modelCaller = vi.fn<typeof generateStructuredData>().mockResolvedValue({
+      segments: [baseSegment, secondSegment],
+      title: 'AI视频工作流怎么拆',
+      coverPrompts: ['商业分析封面，画面主标题“AI视频工作流怎么拆”'],
+      keywords: ['AI', '播客'],
+    });
+
+    const result = await planTranscriptSegments(baseEntries, settings, {
+      generateStructuredData: modelCaller,
+    });
+
+    expect(result.summary).toBe(`${baseSegment.summary}；${secondSegment.summary}`);
   });
 
   it('splits overlong planned segments by subtitle boundaries', async () => {
@@ -360,6 +377,80 @@ describe('generateCardForSegment', () => {
     const ctx = motionCaller.mock.calls[0]![0];
     expect(ctx.segmentTranscript).toContain('欢迎收听本期节目');
     expect(ctx.buildCardPrompt(undefined)).toContain('AI 视频生产背景');
+  });
+
+  it('routes image-shaped agent composites through the Motion Agent with the frozen composition brief', async () => {
+    const motionCaller = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
+    const imagePromptCaller = vi.fn().mockResolvedValue('不应调用');
+    const compositionInputs = [{
+      segmentIndex: 0,
+      segmentId: baseSegment.id,
+      startMs: baseSegment.startMs,
+      durationMs: baseSegment.endMs - baseSegment.startMs,
+      usage: 'required' as const,
+      trimStartMs: 1_200,
+      asset: {
+        id: 'approved-image',
+        filename: 'approved.png',
+        path: '/private/library/approved.png',
+        kind: 'image' as const,
+        score: 0.98,
+      },
+    }];
+
+    const result = await generateCardForSegment(
+      baseEntries,
+      { summary: '节目总结', keywords: ['AI'], globalPrompt: '' },
+      { ...baseSegment, visualType: 'image' },
+      settings,
+      {
+        generateMotionCard: motionCaller,
+        generateText: imagePromptCaller,
+        visualType: 'image',
+        renderStrategy: 'agent-composite',
+        compositionIntent: {
+          narrativeGoal: '用真实产品图证明长期积累',
+          focalPriority: '产品图先于数字',
+          temporalRelationship: '先全幅素材，再叠加结论',
+          mustShow: ['产品图', '世界第91位'],
+          avoid: ['固定画中画'],
+        },
+        compositionInputs,
+        cardTemplate: { name: 'test-card', user: '{{compositionContract}}\n{{assetContext}}' },
+        animationTemplate: { name: 'test-director', user: '{{compositionContract}}' },
+      },
+    );
+
+    expect(result.type).toBe('motion');
+    expect(result.renderStrategy).toBe('agent-composite');
+    expect(imagePromptCaller).not.toHaveBeenCalled();
+    const ctx = motionCaller.mock.calls[0]![0];
+    expect(ctx.motionCardMode).toBe('agent');
+    expect(ctx.compositionInputs).toEqual(compositionInputs);
+    expect(ctx.buildDirectorPrompt()).toContain('用真实产品图证明长期积累');
+    expect(ctx.buildDirectorPrompt()).toContain('assetId=approved-image');
+    const cardPrompt = ctx.buildCardPrompt(undefined, [{
+      slot: 'media-1',
+      assetId: 'approved-image',
+      filePath: '/private/library/approved.png',
+      kind: 'image',
+      usage: 'required',
+      required: true,
+      treatment: {
+        profile: 'technical-product',
+        lighting: 'neutral',
+        palette: 'source',
+        shadow: 'none',
+        perspective: 'source',
+      },
+      placement: { x: 12, y: 18, width: 60 },
+    }]);
+    expect(cardPrompt).toContain('BoundMedia');
+    expect(cardPrompt).toContain('usage=required');
+    expect(cardPrompt).not.toContain('/private/library/approved.png');
+    expect(cardPrompt).not.toContain('suggestedPlacement');
   });
 
   it('defaults a new card duration to the full segment span so the timeline has no blank gaps', async () => {
@@ -684,7 +775,9 @@ describe('analyzeSrt', () => {
     // 第三次 structured 调用为 cover.regeneration，其 prompt 参数应含标题
     expect(structuredCaller).toHaveBeenCalledTimes(3);
     expect(structuredCaller.mock.calls[2]?.[1]).toContain('爆款标题X');
-    expect(onCoverPromptsReady).toHaveBeenCalledWith(['带标题的封面提示词']);
+    expect(onCoverPromptsReady).toHaveBeenCalledWith([
+      '带标题的封面提示词；画面唯一文字标题必须逐字呈现为“爆款标题X”，不得增删、缩写或改写。',
+    ]);
   });
 
   it('generateWorkTitle 抛错时封面调用照常进行（{{title}} 为"无"）', async () => {
@@ -739,6 +832,80 @@ describe('regenerateCoverPrompt', () => {
     expect(modelCaller.mock.calls[0]?.[1]).toContain('必须使用简体中文');
     expect(modelCaller.mock.calls[0]?.[1]).toContain('旧提示词');
   });
+
+  it('programmatically keeps the generated cover title identical to the director title', async () => {
+    const modelCaller = vi.fn().mockResolvedValue({
+      coverPrompts: ['财经封面，主标题“截短后的标题”，人物居右'],
+    });
+
+    const result = await regenerateCoverPrompt(baseEntries, settings, {
+      generateStructuredData: modelCaller,
+      workTitle: '世界第91位不是突然发生的',
+    });
+
+    expect(result).toEqual(['财经封面，主标题“世界第91位不是突然发生的”，人物居右']);
+    expect(result[0]).not.toContain('截短后的标题');
+  });
+
+  it('replaces a stale unquoted cover title instead of leaving conflicting text', async () => {
+    const modelCaller = vi.fn().mockResolvedValue({
+      coverPrompts: ['财经封面，主标题：旧标题，人物居右'],
+    });
+
+    const result = await regenerateCoverPrompt(baseEntries, settings, {
+      generateStructuredData: modelCaller,
+      workTitle: '世界第91位不是突然发生的',
+    });
+
+    expect(result).toEqual(['财经封面，主标题：“世界第91位不是突然发生的”，人物居右']);
+    expect(result[0]).not.toContain('旧标题');
+  });
+
+  it('uses cover.regeneration LLM binding without requiring an image provider', async () => {
+    const modelCaller = vi.fn().mockResolvedValue({
+      coverPrompts: ['绑定后的封面提示词'],
+    });
+    const boundSettings = {
+      llmProviders: [{
+        id: 'P',
+        name: 'doubao',
+        type: 'openai_compatible' as const,
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'k',
+        models: ['turbo', 'code'],
+      }],
+      defaultProviderId: 'P',
+      defaultModel: 'code',
+      promptBindings: {
+        'cover.regeneration': { providerId: 'P', model: 'turbo' },
+      },
+    } as AISettings;
+
+    await regenerateCoverPrompt(baseEntries, boundSettings, {
+      generateStructuredData: modelCaller,
+      projectBindings: null,
+    });
+
+    expect(modelCaller.mock.calls[0]?.[3]).toMatchObject({ model: 'turbo' });
+    expect(modelCaller.mock.calls[0]?.[4]).toMatchObject({ label: 'cover.regeneration' });
+  });
+
+  it('keeps quoted typography attributes intact while replacing the visible title', async () => {
+    const modelCaller = vi.fn().mockResolvedValue({
+      coverPrompts: [
+        '画面主标题“旧标题”，标题字体“思源黑体”，标题颜色“#FFFFFF”，节目标题字号“画面高度10%”',
+      ],
+    });
+
+    const result = await regenerateCoverPrompt(baseEntries, settings, {
+      generateStructuredData: modelCaller,
+      workTitle: '世界第91位不是突然发生的',
+    });
+
+    expect(result).toEqual([
+      '画面主标题“世界第91位不是突然发生的”，标题字体“思源黑体”，标题颜色“#FFFFFF”，节目标题字号“画面高度10%”',
+    ]);
+  });
 });
 
 describe('regenerateAICard', () => {
@@ -771,6 +938,50 @@ describe('regenerateAICard', () => {
     expect(result.displayDurationMs).toBe(5_000);
     expect(result.renderMode).toBe('motion-card');
     expect(result.motionCard?.tsx).toContain('export default');
+  });
+
+  it('keeps the approved composite strategy in the Motion Agent context', async () => {
+    const motionCaller = vi
+      .fn<MotionCardAgentProvider>()
+      .mockResolvedValue({ tsx: VALID_MOTION_TSX });
+    const compositionIntent = {
+      narrativeGoal: '真实画面与观点同时成立',
+      focalPriority: '真实画面优先',
+      temporalRelationship: '素材先入，结论后落',
+      mustShow: ['真实素材'],
+      avoid: ['纯文字替代'],
+    };
+    const compositionInputs = [{
+      segmentIndex: 0,
+      segmentId: baseSegment.id,
+      startMs: 0,
+      durationMs: 3_000,
+      usage: 'required' as const,
+      asset: {
+        id: 'approved-video',
+        filename: 'approved.mp4',
+        path: '/library/approved.mp4',
+        kind: 'video' as const,
+        score: 0.98,
+      },
+    }];
+
+    const result = await regenerateAICard(baseEntries, baseCard, baseSegment, settings, {
+      generateMotionCard: motionCaller,
+      renderStrategy: 'agent-composite',
+      compositionIntent,
+      compositionInputs,
+      fallbackPolicy: 'block',
+    });
+
+    expect(motionCaller.mock.calls[0]?.[0]).toMatchObject({
+      renderStrategy: 'agent-composite',
+      compositionIntent,
+      compositionInputs,
+      fallbackPolicy: 'block',
+      motionCardMode: 'agent',
+    });
+    expect(result.renderStrategy).toBe('agent-composite');
   });
 
   it('records previous storyboard and tsx in motion history when regenerating', async () => {
@@ -941,6 +1152,51 @@ describe('generateAnimationDirection', () => {
     expect(userMessage).toContain('增长拐点');
     expect(userMessage).toContain('今年用户翻倍');
     expect(userMessage).toContain('trend > data-hero > comparison');
+  });
+
+  it('includes the frozen composite inputs and approved fallback in the storyboard prompt', async () => {
+    const generateText = vi.fn().mockResolvedValue('{"claim":"长期积累"}');
+    await generateAnimationDirection(
+      entries,
+      { summary: '总结', keywords: ['增长'], globalPrompt: '' },
+      segment,
+      {} as any,
+      {
+        generateText,
+        renderStrategy: 'agent-composite',
+        compositionIntent: {
+          narrativeGoal: '真实榜单与五年积累共同完成论证',
+          focalPriority: '榜单原图优先',
+          temporalRelationship: '先建立事实，再汇聚观点',
+          mustShow: ['榜单原图', '长期积累'],
+          avoid: ['纯文字替代'],
+        },
+        compositionInputs: [{
+          segmentIndex: 0,
+          segmentId: segment.id,
+          startMs: 0,
+          durationMs: 8_000,
+          usage: 'required',
+          trimStartMs: 0,
+          fileFingerprint: 'stat:100:200',
+          asset: {
+            id: 'approved-ranking',
+            filename: 'ranking.jpg',
+            path: '/library/ranking.jpg',
+            kind: 'image',
+            score: 0.99,
+          },
+        }],
+        fallbackPolicy: 'block',
+        projectBindings: undefined,
+      },
+    );
+
+    const userMessage = generateText.mock.calls[0][2] as string;
+    expect(userMessage).toContain('执行策略：Agent 原子合成镜头');
+    expect(userMessage).toContain('assetId=approved-ranking');
+    expect(userMessage).toContain('失败退路：block');
+    expect(userMessage).not.toContain('/library/ranking.jpg');
   });
 });
 

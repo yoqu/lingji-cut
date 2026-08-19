@@ -168,8 +168,12 @@ export function stringifyToolResult(result: unknown): string {
   if (r && Array.isArray(r.content)) {
     return r.content
       .map((c) => {
-        const item = c as { type?: unknown; text?: unknown };
-        return item?.type === 'text' ? String(item.text ?? '') : JSON.stringify(c);
+        const item = c as { type?: unknown; text?: unknown; mimeType?: unknown };
+        if (item?.type === 'text') return String(item.text ?? '');
+        if (item?.type === 'image') {
+          return `[image:${typeof item.mimeType === 'string' ? item.mimeType : 'unknown'}]`;
+        }
+        return JSON.stringify(c);
       })
       .join('\n');
   }

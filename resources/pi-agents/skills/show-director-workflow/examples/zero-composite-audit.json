@@ -1,0 +1,108 @@
+{
+  "title": "世界第91位不是突然发生的",
+  "summary": "从长期积累与真实市场现场出发，说明一个世界排名为何不是某个瞬间的偶然跃升。",
+  "keywords": [
+    "世界500强",
+    "长期积累",
+    "真实市场"
+  ],
+  "coverDirection": {
+    "prompt": "纪实商业影像，画面唯一文字为主标题“世界第91位不是突然发生的”，主体清楚，留出稳定标题区。",
+    "composition": "真实场景为主体，标题进入留白区域。",
+    "mood": "克制、笃定",
+    "typography": "清晰现代中文黑体",
+    "negativeConstraints": "不要副标题、署名、水印、logo 或日期文字"
+  },
+  "audioDirection": {
+    "bgmEnabled": true,
+    "soundEffectsEnabled": false,
+    "bgmStyle": "克制的现代纪录片节奏",
+    "energy": 2,
+    "soundDensity": "quiet"
+  },
+  "visualThesis": "用抽象关系讲清长期积累，用真实现场补足环境语境，不让信息层重复素材已经表达的内容。",
+  "rhythmDensity": "balanced",
+  "styleRules": {
+    "paletteUse": "中性色为底，关键数字使用单一高对比强调色。",
+    "typographyUse": "正文稳定易读，只在观点重音处放大字号。",
+    "recurringMotif": "由时间刻度延伸出的积累轨迹"
+  },
+  "defaultTransition": "hard-cut",
+  "matchCuts": [],
+  "segments": [
+    {
+      "key": "long-term-premise",
+      "firstEntryIndex": 1,
+      "lastEntryIndex": 6,
+      "title": "结果来自积累",
+      "summary": "用时间与行动的关系建立核心观点。",
+      "semanticType": "explanation",
+      "complexityLevel": "medium",
+      "visualizationScore": 78,
+      "pacingNeed": "accent",
+      "keywords": [
+        "长期积累",
+        "结果"
+      ],
+      "entities": [],
+      "enabled": true,
+      "purpose": "emphasis",
+      "carrier": "concept",
+      "intensity": 2,
+      "renderStrategy": "motion-card",
+      "visualType": "motion",
+      "composition": "graphic",
+      "cameraMove": "push-in",
+      "mediaRole": "context",
+      "transition": "hard-cut",
+      "strategyReason": "本段表达抽象因果，没有来源特定现场需要举证，符号化 Motion 能更直接建立阅读顺序。",
+      "confidence": 0.9,
+      "strategyStatus": "ready"
+    },
+    {
+      "key": "market-context",
+      "firstEntryIndex": 7,
+      "lastEntryIndex": 12,
+      "title": "市场现场",
+      "summary": "真实场景独立提供市场环境与车辆运行状态。",
+      "semanticType": "narration",
+      "complexityLevel": "low",
+      "visualizationScore": 70,
+      "pacingNeed": "steady",
+      "keywords": [
+        "市场",
+        "道路",
+        "车辆"
+      ],
+      "entities": [
+        "比亚迪"
+      ],
+      "enabled": true,
+      "purpose": "context",
+      "carrier": "footage",
+      "intensity": 2,
+      "renderStrategy": "standalone-media",
+      "visualType": "footage",
+      "composition": "full-bleed",
+      "cameraMove": "tracking",
+      "mediaRole": "evidence",
+      "transition": "crossfade",
+      "footageQuery": "比亚迪 海外市场 道路行驶 实拍",
+      "fallbackPolicy": "block",
+      "selectedAssets": [
+        {
+          "candidateId": "candidate:market-road-03",
+          "usage": "required",
+          "trimStartMs": 1800,
+          "reason": "代表帧与连续画面足以独立呈现道路环境和车辆状态，不需要额外信息层解释。",
+          "confidence": 0.88
+        }
+      ],
+      "strategyReason": "素材自身已经完整承载环境与动作，叠加观点或数据只会重复口播，因此使用 standalone-media。",
+      "confidence": 0.88,
+      "strategyStatus": "ready"
+    }
+  ],
+  "zeroCompositeReason": "已逐段检查双重不可替代：long-term-premise 是抽象因果，没有来源特定素材证据价值，Motion 可独立讲清；market-context 的真实素材已完整承载场景与动作，增加信息层只会重复口播。没有镜头同时满足素材不可替代与信息层不可替代。",
+  "warnings": []
+}

@@ -92,6 +92,7 @@ export function motionAssetSignature(bindings: CardAssetBinding[]): string {
       binding.slot,
       binding.assetId,
       binding.filePath,
+      binding.fileFingerprint ?? '',
       binding.metadata?.processedAt ?? '',
       binding.metadata?.processedColorKey ?? '',
     ].join(':'))

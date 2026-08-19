@@ -42,13 +42,24 @@ describe('真实事件画面真实性铁律', () => {
     expect(prompt).toContain('卡通或编辑插画');
   });
 
+  it('不可编辑契约区分来源特定证据与不误导的通用 B-roll', () => {
+    const planning = renderLocked('planning.segment');
+    const bible = renderLocked('motion.bible');
+
+    expect(planning).toContain('evidence 画面必须使用能核验到对应事实的来源特定素材');
+    expect(planning).toContain('context、emotion、demonstration 与 breath');
+    expect(planning).toContain('相关且不误导的通用真实 B-roll');
+    expect(planning).toContain('不要给 image 或 footage 设置数量、占比、连续段数或首尾配额');
+    expect(bible).toContain('不得设置素材或 agent-composite 的数量、占比、连续段数和首尾配额');
+  });
+
   it('Motion Card 导演角色把同一规则作为最高优先级铁律', () => {
     const role = readFileSync(
       new URL('../resources/pi-agents/agents/card-director.md', import.meta.url),
       'utf8',
     );
 
-    expect(role).toContain('version: 7');
+    expect(role).toContain('version: 9');
     expect(role).toContain('最高优先级铁律');
     expect(role).toContain('上市敲钟');
     expect(role).toContain('manual-only');
@@ -83,6 +94,29 @@ describe('真实事件画面真实性铁律', () => {
     });
 
     expect(result?.segments[0]?.visualType).toBe('motion');
+  });
+
+  it('可核验素材入口保留真实事件 footage，不再误杀成 motion', () => {
+    const result = parseSegmentPlanningResult({
+      segments: [{
+        id: 'seg-news-footage',
+        title: '上市敲钟现场',
+        summary: '公司正式上市',
+        transcriptExcerpt: '公司代表参加上市敲钟仪式。',
+        startMs: 0,
+        endMs: 6_000,
+        visualType: 'footage',
+        footageQuery: '公司 上市 敲钟',
+      }],
+      coverPrompts: ['封面'],
+      summary: '总结',
+      keywords: ['上市'],
+    });
+
+    expect(result?.segments[0]).toMatchObject({
+      visualType: 'footage',
+      footageQuery: '公司 上市 敲钟',
+    });
   });
 
   it('普通产品物件特写仍可保留 image', () => {

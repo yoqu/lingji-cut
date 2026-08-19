@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AISettings, LLMProvider, ImageProvider, PromptBindingMap } from '../src/types/ai';
 import {
+  resolveLlmBinding,
   resolvePromptBinding,
   PromptBindingError,
 } from '../src/lib/llm/binding-resolver';
@@ -83,6 +84,18 @@ describe('resolvePromptBinding', () => {
     expect(r.provider.id).toBe('A');
     expect(r.imageProvider?.id).toBe('IA');
     expect(r.imageModel).toBe('jimeng-5.0');
+  });
+
+  it('resolveLlmBinding 只解析文本模型，不要求 ImageProvider', () => {
+    const s = settings();
+    s.defaultImageProviderId = null;
+    s.defaultImageModel = null;
+    s.imageProviders = [];
+    s.promptBindings['cover.regeneration'] = { providerId: 'B', model: 'n1' };
+    const r = resolveLlmBinding('cover.regeneration', s, null);
+    expect(r.provider.id).toBe('B');
+    expect(r.model).toBe('n1');
+    expect(() => resolvePromptBinding('cover.regeneration', s, null)).toThrowError(PromptBindingError);
   });
 
   it('provider 已删除：抛 PromptBindingError(PROVIDER_MISSING)', () => {

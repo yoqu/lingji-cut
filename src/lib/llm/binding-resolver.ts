@@ -184,6 +184,15 @@ function resolveVideo(
   return { videoProvider: provider, videoModel: model };
 }
 
+/** 只解析文本模型。封面提示词生成不作出图，不能要求 ImageProvider。 */
+export function resolveLlmBinding(
+  kind: PromptKind,
+  settings: AISettings,
+  project: PromptBindingMap | null,
+): Pick<ResolvedBinding, 'provider' | 'model'> {
+  return resolveLlm(kind, settings, project);
+}
+
 export function resolvePromptBinding(
   kind: PromptKind,
   settings: AISettings,

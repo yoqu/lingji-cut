@@ -1,11 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { generateSubtitleHighlights } from '../../src/lib/subtitle-highlight-runner';
+import { syncDirectorPlanMotionBible } from '../../src/lib/director-workflow';
 import { buildDirectorExecutionPlan } from '../../src/lib/production-plan';
 import { parseSrt } from '../../src/lib/srt-parser';
 import type { SrtEntry, SubtitleHighlight } from '../../src/types';
 import type { AISettings } from '../../src/types/ai';
-import type { ProjectProductionState } from '../../src/types/director';
+import {
+  resolveDirectorRenderStrategy,
+  type ProjectProductionState,
+} from '../../src/types/director';
 import { loadProjectFile, mutateProjectProduction, saveProjectSection } from '../project-file';
 import { loadFullHeadlessAISettings } from './headless-settings';
 import { GenerationError } from './generation-error';
@@ -20,6 +24,8 @@ import {
   runHeadlessCardsTrack,
   runHeadlessCoverTrack,
 } from './director-headless-visual-tracks';
+import { runHeadlessFootageTrack } from './director-headless-footage';
+import type { FootageTrackResult } from '../../src/types/footage';
 
 interface DirectorProductionRunDeps {
   approve?: typeof runDirectorApproveHeadless;
@@ -57,10 +63,10 @@ async function readEntries(projectPath: string): Promise<SrtEntry[]> {
 async function setOutput(options: {
   ctx: GenerationRunCtx;
   revision: number;
-  output: 'cards' | 'cover' | 'audio' | 'timeline';
+  output: 'cards' | 'cover' | 'audio' | 'timeline' | 'footage';
   error?: string;
-}): Promise<void> {
-  await mutateProjectProduction(options.ctx.projectPath, {
+}): Promise<ProjectProductionState> {
+  return mutateProjectProduction(options.ctx.projectPath, {
     kind: 'set-output',
     output: options.output,
     state: {
@@ -71,6 +77,35 @@ async function setOutput(options: {
     },
     ...guard(options.revision, options.ctx.handle.taskId),
   });
+}
+
+async function stageHeadlessFootageForCardGeneration(options: {
+  ctx: GenerationRunCtx;
+  production: ProjectProductionState;
+  footage: FootageTrackResult;
+}): Promise<ProjectProductionState> {
+  const { ctx, production, footage } = options;
+  if (footage.reused) return production;
+  const plan = production.approvedPlan!;
+  const revision = plan.revision;
+  await mutateProjectProduction(ctx.projectPath, {
+    kind: 'set-footage',
+    footage: {
+      placements: footage.placements,
+      compositionInputs: footage.compositionInputs ?? [],
+      claimedSegmentIds: footage.claimedSegmentIds,
+      fallbacks: footage.fallbacks,
+      blockedSegmentIds: footage.blockedSegmentIds ?? [],
+      generationProvenance: {
+        directorRevision: revision,
+        fingerprint: `footage-${plan.inputFingerprint}-${revision}`,
+        generatedAt: Date.now(),
+        modifiedByUser: false,
+      },
+    },
+    ...guard(revision, ctx.handle.taskId),
+  });
+  return setOutput({ ctx, revision, output: 'footage', error: footage.error });
 }
 
 async function approveOrResume(
@@ -115,6 +150,7 @@ async function finalizeWorkflow(
 }
 
 interface ProductionTrackResults {
+  footage: FootageTrackResult;
   cards: Awaited<ReturnType<typeof runHeadlessCardsTrack>>;
   cover: Awaited<ReturnType<typeof runHeadlessCoverTrack>>;
   audio: HeadlessAudioResult;
@@ -131,8 +167,27 @@ async function runProductionTracks(options: {
   deps: DirectorProductionRunDeps;
 }): Promise<ProductionTrackResults> {
   const { ctx, production, settings, entries, execution, deps } = options;
-  const cardsPromise = runHeadlessCardsTrack({ ctx, production, cards: deps.cards ?? runAnalyzeHeadless });
-  const audioPromise: Promise<HeadlessAudioResult> = needsProductionTrack(production, 'audio')
+  // 与桌面制作一致：先完成本机素材检索并确定认领名单，再启动卡片等制作轨，
+  // 避免同一 footage 段既生成昂贵 Motion 卡又上真实素材。
+  const footage = await runHeadlessFootageTrack({
+    production,
+    plan: production.approvedPlan!,
+    settings,
+    projectPath: ctx.projectPath,
+  });
+  await assertActive(ctx, production.approvedPlan!.revision);
+  const stagedProduction = await stageHeadlessFootageForCardGeneration({
+    ctx,
+    production,
+    footage,
+  });
+  const cardsPromise = runHeadlessCardsTrack({
+    ctx,
+    production: stagedProduction,
+    cards: deps.cards ?? runAnalyzeHeadless,
+    footage,
+  });
+  const audioPromise: Promise<HeadlessAudioResult> = needsProductionTrack(stagedProduction, 'audio')
     ? (deps.audio ?? runHeadlessDirectorAudio)({
         projectPath: ctx.projectPath,
         settings,
@@ -141,7 +196,7 @@ async function runProductionTracks(options: {
         onProgress: (percent, message) => ctx.handle.update({ phase: message, percent }),
       })
     : Promise.resolve({ execution, placements: [], outcome: 'disabled', reusedSounds: 0 });
-  const highlightsPromise = needsProductionTrack(production, 'timeline')
+  const highlightsPromise = needsProductionTrack(stagedProduction, 'timeline')
     ? (deps.highlights ?? generateSubtitleHighlights)(entries, settings, {
         concurrency: 4,
         shouldCancel: () => ctx.handle.signal.aborted,
@@ -151,14 +206,14 @@ async function runProductionTracks(options: {
       }))
     : Promise.resolve({ highlights: options.timelineHighlights });
   const coverPromise = cardsPromise.then((cards) => runHeadlessCoverTrack({
-    ctx, production, entries, settings, analysis: cards.analysis,
+    ctx, production: stagedProduction, entries, settings, analysis: cards.analysis,
     covers: deps.covers ?? runHeadlessDirectorCover,
     assertActive: () => assertActive(ctx, production.approvedPlan!.revision).then(() => undefined),
   }));
   const [cards, cover, audio, highlights] = await Promise.all([
     cardsPromise, coverPromise, audioPromise, highlightsPromise,
   ]);
-  return { cards, cover, audio, highlights };
+  return { footage, cards, cover, audio, highlights };
 }
 
 async function commitProductionTracks(options: {
@@ -178,17 +233,65 @@ async function commitProductionTracks(options: {
     setOutput({ ctx, revision, output: 'cover', error: results.cover.error }),
     setOutput({ ctx, revision, output: 'audio', error: results.audio.error }),
   ]);
+  const cardErrorCount = results.cards.analysis.cardErrors?.length ?? 0;
+  if (results.cards.error) {
+    await setOutput({
+      ctx,
+      revision,
+      output: 'timeline',
+      error: cardErrorCount > 0
+        ? `${cardErrorCount} 个镜头未通过质量门禁，时间线未替换`
+        : `卡片轨失败，时间线未替换：${results.cards.error}`,
+    });
+    const error = cardErrorCount > 0
+      ? `${cardErrorCount} 个镜头未通过质量门禁，请修复后恢复制作`
+      : `卡片轨未完成：${results.cards.error}`;
+    ctx.handle.update({ phase: '质检未通过', percent: 100 });
+    return mutateProjectProduction(ctx.projectPath, {
+      kind: 'set-workflow',
+      stage: 'quality-blocked',
+      taskId: ctx.handle.taskId,
+      error,
+      ...guard(revision, ctx.handle.taskId),
+    });
+  }
+  const hasNonMotionShot = plan.segments.some((segment) => (
+    segment.enabled && resolveDirectorRenderStrategy(segment) !== 'motion-card'
+  ));
+  if (results.footage.error && hasNonMotionShot) {
+    await setOutput({
+      ctx,
+      revision,
+      output: 'timeline',
+      error: `素材轨失败，时间线未替换：${results.footage.error}`,
+    });
+    const error = `素材轨未完成，非 Motion 镜头尚未确认：${results.footage.error}`;
+    ctx.handle.update({ phase: '素材轨待恢复', percent: 100 });
+    return mutateProjectProduction(ctx.projectPath, {
+      kind: 'set-workflow',
+      stage: 'quality-blocked',
+      taskId: ctx.handle.taskId,
+      error,
+      ...guard(revision, ctx.handle.taskId),
+    });
+  }
   if (needsProductionTrack(production, 'timeline')) {
     const latest = await loadProjectFile(ctx.projectPath);
     const timeline = buildHeadlessDirectorTimeline({
       current: latest.timeline,
-      analysis: latest.aiAnalysis?.analysisResult ?? results.cards.analysis,
+      analysis: results.cards.analysis,
       plan,
       highlights: results.highlights.highlights,
       audioPlacements: results.audio.placements,
+      footagePlacements: results.footage.placements,
     });
     await assertActive(ctx, revision);
-    await saveProjectSection(ctx.projectPath, 'timeline', timeline);
+    await saveProjectSection(
+      ctx.projectPath,
+      'timeline',
+      timeline,
+      guard(revision, ctx.handle.taskId),
+    );
     await setOutput({ ctx, revision, output: 'timeline' });
   }
   ctx.handle.log(`production.tracks.end revision=${revision} highlightsError=${results.highlights.error ?? ''}`);
@@ -211,7 +314,7 @@ async function runDirectorProductionCore(
   const durationMs = project.timeline?.podcast.durationMs
     || Math.max(0, ...plan.segments.map((segment) => segment.endMs));
   const execution = production.execution?.generationProvenance?.directorRevision === revision
-    ? production.execution
+    ? { ...production.execution, motionBible: syncDirectorPlanMotionBible(plan) }
     : buildDirectorExecutionPlan(plan, durationMs);
   await mutateProjectProduction(ctx.projectPath, {
     kind: 'set-execution', execution, ...guard(revision, ctx.handle.taskId),
@@ -229,6 +332,18 @@ async function persistTerminalFailure(ctx: GenerationRunCtx, error: unknown): Pr
   const revision = project?.production?.approvedPlan?.revision;
   if (!revision) return;
   const aborted = ctx.handle.signal.aborted || (error as { name?: string })?.name === 'AbortError';
+  if (
+    aborted
+    && project?.production?.outputs.footage.status === 'current'
+    && project.production.outputs.footage.directorRevision === revision
+  ) {
+    await mutateProjectProduction(ctx.projectPath, {
+      kind: 'set-output',
+      output: 'footage',
+      state: { status: 'stale', directorRevision: revision, updatedAt: Date.now() },
+      expectedDirectorRevision: revision,
+    }).catch(() => undefined);
+  }
   await mutateProjectProduction(ctx.projectPath, {
     kind: 'set-workflow',
     stage: aborted ? 'production-paused' : 'error',

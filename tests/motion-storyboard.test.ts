@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseStoryboard,
   storyboardParseHint,
+  validateAgentCompositeStoryboard,
   validateStoryboard,
   formatStoryboardIssues,
   STORYBOARD_CARRIERS,
@@ -285,6 +286,77 @@ describe('validateStoryboard', () => {
     const result = validateStoryboard(overloaded, { ...CTX, requireCapacityModel: true });
     expect(result.ok).toBe(false);
     expect(result.errors.join()).toMatch(/同时驻留|预计占高/);
+  });
+});
+
+describe('validateAgentCompositeStoryboard', () => {
+  const approvedAssets = [
+    { assetId: 'asset-required', slot: 'media-1', usage: 'required' as const },
+    { assetId: 'asset-optional', slot: 'media-2', usage: 'optional' as const },
+  ];
+  const composite = {
+    claim: '硕士报名人数远超博士',
+    scene: '真实报名画面与核心数字形成连续论证',
+    focus: { beat: 1, subject: '硕士报名 28842 人' },
+    beats: [
+      { cue: null, kind: 'build' as const, adds: '真实报名画面建立语境' },
+      { cue: 1, kind: 'accent' as const, adds: '硕士报名 28842 人' },
+    ],
+    media: [{
+      assetId: 'asset-required',
+      slot: 'media-1',
+      purpose: '作为真实语境支撑结论',
+      beats: [0, 1],
+    }],
+  } as MotionStoryboard;
+
+  it('不要求 Motion Card 的 carrier/layout/elements/capacity/lifecycle', () => {
+    const result = validateAgentCompositeStoryboard({
+      ...composite,
+      carrier: 'not-a-motion-carrier' as never,
+      layout: 'not-a-layout' as never,
+      elements: undefined,
+      capacity: undefined,
+    }, { ...CTX, approvedAssets });
+
+    expect(result).toEqual(expect.objectContaining({ ok: true, errors: [] }));
+    expect(validateStoryboard(composite, { ...CTX, requireCapacityModel: true }).ok).toBe(false);
+  });
+
+  it('必用素材未进入 media 或引用未批准素材时失败', () => {
+    const missingRequired = validateAgentCompositeStoryboard(
+      { ...composite, media: [] },
+      { ...CTX, approvedAssets },
+    );
+    expect(missingRequired.errors.join()).toContain('必用素材');
+
+    const unapproved = validateAgentCompositeStoryboard({
+      ...composite,
+      media: [{ assetId: 'asset-unapproved', purpose: '冒充批准素材', beats: [0] }],
+    }, { ...CTX, approvedAssets });
+    expect(unapproved.errors.join()).toContain('未批准素材');
+  });
+
+  it('focus、cue、素材拍号与数字真实性继续执行硬校验', () => {
+    const result = validateAgentCompositeStoryboard({
+      ...composite,
+      focus: { beat: 9 },
+      beats: [
+        composite.beats[0],
+        { cue: 9, kind: 'accent', adds: '硕士报名 99999 人' },
+      ],
+      media: [{
+        assetId: 'asset-required',
+        purpose: '支撑结论',
+        beats: [8],
+      }],
+    }, { ...CTX, approvedAssets });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.join()).toContain('focus.subject');
+    expect(result.errors.join()).toContain('cue=9 越界');
+    expect(result.errors.join()).toContain('非法拍索引 8');
+    expect(result.errors.join()).toContain('99999');
   });
 });
 

@@ -6,7 +6,11 @@ import type { SubtitleCardDraftInput } from '../../../src/lib/ai-analysis';
 import { planMotionConversion, mergeMotionConversionResult } from '../../../src/lib/ai-card-conversion';
 import { handleGenerateCardImage, handleGenerateCardVideo } from '../../card-media-handlers';
 import { assertCardRenders } from '../../remotion/smoke-render';
-import { createMotionCardAgentProvider, resolveMotionCardModels } from '../motion-agent-run';
+import {
+  createMotionCardAgentProvider,
+  resolveMotionCardModels,
+  resolveMotionCardVisualModelCandidates,
+} from '../motion-agent-run';
 import { makeAgentFeedCallback } from '../agent-feed';
 import type { MotionCardAgentProvider } from '../../../src/lib/ai-analysis';
 import { updateCardInResult } from '../../../src/lib/ai-persistence';
@@ -28,7 +32,14 @@ import type {
   CoverCandidate,
 } from '../../../src/types/ai';
 import type { SrtEntry } from '../../../src/types';
+import type { TimelineData } from '../../../src/types';
+import { buildAICardTimelineDraft } from '../../../src/types/ai';
 import { requireApprovedDirectorPlan } from '../director-gate';
+import {
+  requireApprovedCardRegenerationContext,
+  requireExactApprovedDirectorSegment,
+} from '../../../src/lib/director-regeneration-context';
+import type { ProjectProductionState } from '../../../src/types/director';
 
 /** image/video 卡本地重写时的兜底展示时长（ms），复刻 src/store/ai.ts 的 MEDIA_DEFAULT_DURATION_MS。 */
 const MEDIA_DEFAULT_DURATION_MS: Record<'image' | 'video', number> = {
@@ -45,6 +56,8 @@ interface Loaded {
   segment: AISegment | undefined;
   entries: SrtEntry[];
   coverCandidates: CoverCandidate[];
+  production: ProjectProductionState | undefined;
+  timeline: TimelineData | null;
 }
 
 async function loadForCard(ctx: GenerationRunCtx): Promise<Loaded> {
@@ -59,7 +72,10 @@ async function loadForCard(ctx: GenerationRunCtx): Promise<Loaded> {
   if (!result || !card) {
     throw new GenerationError('card_not_found', `卡片不存在: ${cardId}`);
   }
-  const segment = result.segments.find((s) => s.id === card.segmentId);
+  const requestedSegment = result.segments.find((s) => s.id === card.segmentId);
+  const segment = requestedSegment
+    ? requireExactApprovedDirectorSegment(data.production, requestedSegment)
+    : undefined;
   let entries: SrtEntry[] = [];
   try {
     entries = parseSrt(await readFile(join(projectPath, 'podcast-subtitles.srt'), 'utf-8'));
@@ -75,16 +91,43 @@ async function loadForCard(ctx: GenerationRunCtx): Promise<Loaded> {
     segment,
     entries,
     coverCandidates: data.aiAnalysis?.coverCandidates ?? [],
+    production: data.production,
+    timeline: data.timeline,
   };
 }
 
 async function persistCard(l: Loaded, nextCard: AICard): Promise<AICard> {
   const next = updateCardInResult(l.result, nextCard.id, nextCard);
-  await new HeadlessProjectContext(l.projectPath).saveSection('aiAnalysis', {
+  const persisted = next!.cards.find((card) => card.id === nextCard.id)!;
+  const project = new HeadlessProjectContext(l.projectPath);
+  await project.saveSection('aiAnalysis', {
     analysisResult: next,
     coverCandidates: l.coverCandidates,
   });
-  return next!.cards.find((c) => c.id === nextCard.id)!;
+  if (l.timeline?.overlays.some((overlay) => (
+    overlay.overlayType === 'ai-card'
+    && overlay.aiCardData?.sourceCardId === persisted.id
+  ))) {
+    const draft = buildAICardTimelineDraft(persisted, l.result.motionBible);
+    await project.saveSection('timeline', {
+      ...l.timeline,
+      overlays: l.timeline.overlays.map((overlay) => {
+        if (
+          overlay.overlayType !== 'ai-card'
+          || overlay.aiCardData?.sourceCardId !== persisted.id
+        ) return overlay;
+        return {
+          ...overlay,
+          type: 'image' as const,
+          assetPath: '',
+          startMs: draft.startMs,
+          durationMs: draft.durationMs,
+          aiCardData: draft.aiCardData,
+        };
+      }),
+    });
+  }
+  return persisted;
 }
 
 /**
@@ -144,19 +187,28 @@ interface RegenDeps {
  */
 function makeHeadlessMotionCardProvider(ctx: GenerationRunCtx, l: Loaded): MotionCardAgentProvider {
   const { directorModel, sculptorModel } = resolveMotionCardModels(l.settings, l.projectBindings);
+  const visualModelCandidates = resolveMotionCardVisualModelCandidates(l.settings, l.projectBindings);
   return async (mctx) => {
     const { app } = await import('electron');
+    const { resolveFfmpegPath } = await import('../../runtime-binaries');
     const provider = createMotionCardAgentProvider({
       userDataPath: ctx.userDataPath,
       projectPath: ctx.projectPath,
       rolesSeedDir: join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
       contactSheetCacheDir: join(ctx.userDataPath, 'motion-contact-sheets'),
+      ffmpegPath: resolveFfmpegPath({
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+        cwd: process.cwd(),
+        moduleDir: __dirname,
+      }),
       signal: ctx.handle.signal,
       onPhase: (phase) => ctx.handle.update({ phase }),
       // 观测面板关联键与统一进度条的 bridgeId 同值（pipeline:<taskId>）。
       onAgentEvent: makeAgentFeedCallback(`pipeline:${ctx.handle.taskId}`),
       directorModel,
       sculptorModel,
+      visualModelCandidates,
     });
     return provider(mctx);
   };
@@ -173,6 +225,10 @@ async function buildRegenerateOptions(
     projectDir: l.projectPath,
   });
   const projectStylePresetId = (await loadProjectFile(l.projectPath)).stylePresetId;
+  const directorContext = requireApprovedCardRegenerationContext(
+    l.production,
+    l.card.segmentId,
+  );
   return {
     globalPrompt: l.result.globalPrompt,
     projectStylePresetId,
@@ -184,7 +240,9 @@ async function buildRegenerateOptions(
     cardTemplate,
     imageTemplate,
     animationTemplate,
+    ...directorContext,
     animationDirection: refineExistingMotion ? l.card.animationDirection : undefined,
+    reuseStoryboardDraft: refineExistingMotion,
     refineExistingMotion,
     projectBindings: l.projectBindings,
     generateMotionCard: makeHeadlessMotionCardProvider(ctx, l),
@@ -307,6 +365,15 @@ interface ConvertDeps {
 export async function runConvertCard(ctx: GenerationRunCtx, deps: ConvertDeps = {}): Promise<AICard> {
   const to = String((ctx.params ?? {}).to ?? '');
   const l = await loadForCard(ctx);
+  const approvedSegment = l.production?.approvedPlan?.segments.find(
+    (segment) => segment.id === l.card.segmentId,
+  );
+  if (approvedSegment?.renderStrategy === 'agent-composite') {
+    throw new GenerationError(
+      'approved_director_contract_locked',
+      `Agent 合成镜头 ${approvedSegment.title} 的产物形态由已批准导演方案锁定，请先回导演台修改方案。`,
+    );
+  }
   ctx.handle.update({ phase: '转换', percent: 20 });
 
   if (to === 'image' || to === 'video') {

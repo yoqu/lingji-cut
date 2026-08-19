@@ -23,15 +23,25 @@ let controlToken = '';
 // ─── 声呐桥状态 ───────────────────────────────────────────
 let sonarStore: SonarInboxStore | null = null;
 let sonarToken = '';
+/** 扩展最近一次访问桥（配对 / 探活 / 推送）的时间，供状态栏判活。 */
+let sonarLastSeenAt: number | null = null;
+
+export interface SonarBridgeInfo {
+  port: number;
+  token: string;
+  /** 桥服务是否在监听 */
+  running: boolean;
+  lastSeenAt: number | null;
+}
 
 /** 暴露给主进程/IPC：待创作箱 store（启动后非空）。 */
 export function getSonarInboxStore(): SonarInboxStore | null {
   return sonarStore;
 }
 
-/** 暴露给主进程/IPC：桥端点信息（端口 + token），供设置页展示让用户复制进扩展。 */
-export function getSonarBridgeInfo(): { port: number; token: string } {
-  return { port: currentPort, token: sonarToken };
+/** 暴露给主进程/IPC：桥端点信息（端口 + token + 活跃度），供设置页与状态栏使用。 */
+export function getSonarBridgeInfo(): SonarBridgeInfo {
+  return { port: currentPort, token: sonarToken, running: httpServer !== null, lastSeenAt: sonarLastSeenAt };
 }
 
 // ─── 辅助 ─────────────────────────────────────────────────
@@ -175,6 +185,8 @@ export async function startControlServer(
 
     // ── 声呐桥端点（仅 loopback + token）──
     if (isSonarPath(pathname)) {
+      // 扩展无心跳，任一桥请求都记为一次"活着"的信号
+      sonarLastSeenAt = Date.now();
       try {
         await handleSonarHttp(req, res, {
           store: sonarStore!,

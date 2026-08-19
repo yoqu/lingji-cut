@@ -160,6 +160,32 @@
   background: var(--color-system-red, #ff453a);
 }
 
+.badgeFallback {
+  background: var(--color-warning, #ffd60a);
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+}
+
+.cardMeta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardMeta span[data-tone='warning'] {
+  color: var(--color-warning, #ffd60a);
+}
+
 @keyframes aiCardBadgePulse {
   0%, 100% {
     transform: scale(1);

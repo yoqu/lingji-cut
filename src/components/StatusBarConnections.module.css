@@ -1,0 +1,151 @@
+/* 状态栏聚合连接指示（触发器 + 弹出面板） */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 var(--space-2);
+  margin: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.trigger:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
+}
+
+.trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.triggerIcon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-text-quaternary);
+}
+
+.dot[data-level='connected'] {
+  background: var(--color-success);
+}
+
+.dot[data-level='connecting'] {
+  background: var(--color-warning);
+  animation: connPulse 1.5s ease-in-out infinite;
+}
+
+.dot[data-level='error'] {
+  background: var(--color-danger);
+}
+
+@keyframes connPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.content {
+  overflow: hidden;
+}
+
+.panel {
+  padding: 10px 12px 12px;
+  background: var(--color-panel-bg);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.spinning {
+  animation: connSpin 1s linear infinite;
+}
+
+@keyframes connSpin {
+  to { transform: rotate(360deg); }
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.row:hover {
+  background: var(--color-bg-hover);
+}
+
+.rowIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+}
+
+.rowBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rowLabel {
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.rowDetail {
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.rowActions {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot[data-level='connecting'],
+  .spinning {
+    animation: none;
+  }
+}

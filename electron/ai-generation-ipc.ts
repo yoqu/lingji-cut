@@ -16,7 +16,11 @@ import {
 } from '../src/lib/ai-analysis';
 import { resolveStylePresetId } from '../src/lib/card-style';
 import { assertCardRenders } from './remotion/smoke-render';
-import { createMotionCardAgentProvider, resolveMotionCardModels } from './pipeline/motion-agent-run';
+import {
+  createMotionCardAgentProvider,
+  resolveMotionCardModels,
+  resolveMotionCardVisualModelCandidates,
+} from './pipeline/motion-agent-run';
 import { buildHybridSelectionFromPlan, type HybridSegmentDecision } from './pipeline/motion-hybrid';
 import { makeAgentFeedCallback } from './pipeline/agent-feed';
 import { generateCoverCandidates } from '../src/lib/cover-generation';
@@ -56,12 +60,26 @@ import {
 } from './asset-library';
 import type { AssetGenerationRequest } from '../src/types/assets';
 import type { TelemetryHook } from '../src/lib/telemetry/auto-run';
-import { createDirectorPlan } from '../src/lib/director-planning';
+import type {
+  DirectorCompositionIntent,
+  DirectorFallbackPolicy,
+  DirectorRenderStrategy,
+} from '../src/types/director';
+import type { FootageCompositionInput } from '../src/types/footage';
+import { runShowDirectorAgent } from './director-agent/show-director-run';
+import { makeKacutDigestProvider } from './footage/kacut-client';
 import {
   DirectorApprovalRequiredError,
   generateCardsFromDirectorPlan,
 } from '../src/lib/director-production';
 import { createEmptyProductionState } from '../src/lib/director-workflow';
+import {
+  ApprovedDirectorSegmentMismatchError,
+  requireApprovedAnimationDirectionContext,
+  requireApprovedCardRegenerationContext,
+  requireExactApprovedDirectorSegment,
+} from '../src/lib/director-regeneration-context';
+import { resolveFfmpegPath } from './runtime-binaries';
 
 export interface AiGenerationIpcContext {
   getMainWindow: () => BrowserWindow | null;
@@ -93,12 +111,13 @@ async function loadProjectWorkTitle(projectDir?: string): Promise<string | undef
   }
 }
 
-async function requireApprovedDirector(projectDir?: string): Promise<void> {
+async function requireApprovedDirector(projectDir?: string) {
   if (!projectDir) throw new DirectorApprovalRequiredError();
   const project = await loadProjectFile(projectDir);
   if (!project.production?.approvedPlan?.approvedAt) {
     throw new DirectorApprovalRequiredError();
   }
+  return project;
 }
 
 /**
@@ -115,14 +134,24 @@ function makeMotionCardProvider(
 ): ReturnType<typeof createMotionCardAgentProvider> {
   // 会话级模型：从 cards.animation / cards.segment 提示词绑定解析；无 settings 时跟随 pi 默认。
   const models = settings ? resolveMotionCardModels(settings, projectBindings ?? null) : {};
+  const visualModelCandidates = settings
+    ? resolveMotionCardVisualModelCandidates(settings, projectBindings ?? null)
+    : [];
   return createMotionCardAgentProvider({
     userDataPath: app.getPath('userData'),
     projectPath: projectDir ?? process.cwd(),
     rolesSeedDir: path.join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
     contactSheetCacheDir: path.join(app.getPath('userData'), 'motion-contact-sheets'),
+    ffmpegPath: resolveFfmpegPath({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      cwd: process.cwd(),
+      moduleDir: __dirname,
+    }),
     onPhase,
     onAgentEvent: makeAgentFeedCallback(feedId),
     ...models,
+    visualModelCandidates,
   });
 }
 
@@ -456,15 +485,23 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           await mutateProjectProduction(args.projectDir, {
             kind: 'set-workflow', stage: 'director-planning', mode: 'auto', taskId,
           });
-          const draft = await createDirectorPlan(entries, args.settings, {
+          const draft = await runShowDirectorAgent({
+            userDataPath: app.getPath('userData'),
+            projectDir: args.projectDir,
+            resourcesRoot: path.join(app.getAppPath(), 'resources', 'pi-agents'),
+            entries,
+            settings: args.settings,
             revision,
             globalPrompt: args.globalPrompt,
-            stylePresetId: projectStylePresetId,
-            planningTemplate,
             directorTemplate,
-            motionBibleTemplate,
             projectBindings: args.projectBindings ?? null,
             telemetry,
+            ffmpegPath: resolveFfmpegPath({
+              appPath: app.getAppPath(),
+              resourcesPath: process.resourcesPath,
+              cwd: process.cwd(),
+              moduleDir: __dirname,
+            }),
             onProgress: (phase, percent) => {
               getMainWindow()?.webContents.send('analyze-progress', {
                 phase,
@@ -472,7 +509,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
               });
             },
           });
-          await mutateProjectProduction(args.projectDir, { kind: 'replace-draft', plan: draft });
+          emitProjectUpdated(getMainWindow, args.projectDir, ['production', 'meta', 'publish']);
           const approved = await mutateProjectProduction(args.projectDir, {
             kind: 'approve-draft', expectedRevision: revision, taskId,
           });
@@ -526,6 +563,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           generateMotionCard,
           validateMotionSource: assertCardRenders,
           generateWorkTitle,
+          kacutDigestProvider: makeKacutDigestProvider(args.settings),
           onProgress: (progress) => {
             getMainWindow()?.webContents.send('analyze-progress', progress);
           },
@@ -597,7 +635,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           refineExistingMotion?: boolean;
       },
     ) => {
-      await requireApprovedDirector(args.projectDir);
+      const project = await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -612,7 +650,18 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           projectDir: args.projectDir,
         });
         const projectStylePresetId = await loadProjectStylePresetId(args.projectDir);
-        return await regenerateAICard(args.entries, args.card, args.segment, args.settings, {
+        const approvedSegment = requireExactApprovedDirectorSegment(project.production, args.segment);
+        if (args.card.segmentId !== approvedSegment.id) {
+          throw new ApprovedDirectorSegmentMismatchError(
+            approvedSegment.id,
+            `卡片属于镜头 ${args.card.segmentId}`,
+          );
+        }
+        const directorContext = requireApprovedCardRegenerationContext(
+          project.production,
+          approvedSegment.id,
+        );
+        return await regenerateAICard(args.entries, args.card, approvedSegment, args.settings, {
           globalPrompt: args.globalPrompt,
           // 单卡覆盖来自 args.card.stylePresetId（lib 层 resolve 时合并）；项目级从 project.json 读取。
           projectStylePresetId,
@@ -624,6 +673,8 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           cardTemplate,
           imageTemplate,
           animationTemplate,
+          ...directorContext,
+          reuseStoryboardDraft: args.refineExistingMotion === true,
           refineExistingMotion: args.refineExistingMotion === true,
           projectBindings: args.projectBindings ?? null,
           resolveCardAssets: makeAssetResolver({
@@ -665,7 +716,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         projectBindings?: PromptBindingMap | null;
       },
     ) => {
-      await requireApprovedDirector(args.projectDir);
+      const project = await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -683,6 +734,10 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           project: await loadProjectStylePresetId(args.projectDir),
           global: args.settings.defaultStylePresetId,
         });
+        const { segment: approvedSegment, context: directorContext } = requireApprovedAnimationDirectionContext(
+          project.production,
+          args.segment,
+        );
         return await generateAnimationDirection(
           args.entries,
           {
@@ -690,13 +745,14 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             keywords: args.keywords ?? [],
             globalPrompt: args.globalPrompt?.trim() || undefined,
           },
-          args.segment,
+          approvedSegment,
           args.settings,
           {
             cardPrompt: args.cardPrompt,
             animationTemplate,
             motionBible: args.motionBible,
             stylePresetId,
+            ...directorContext,
             projectBindings: args.projectBindings ?? null,
           },
         );
@@ -727,13 +783,18 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         prevSegment?: AISegment;
         nextSegment?: AISegment;
         visualType?: AISegmentVisualType;
+        renderStrategy?: DirectorRenderStrategy;
+        compositionIntent?: DirectorCompositionIntent;
+        compositionInputs?: FootageCompositionInput[];
+        fallbackPolicy?: DirectorFallbackPolicy;
+        approvedFallbackExecution?: 'motion';
         qualityMode?: 'auto' | 'director';
         feedId?: string;
         /** 可选 auto-run jsonl runId；传入后为该段卡片生成写遥测事件。 */
         telemetryRunId?: string | null;
       },
     ) => {
-      await requireApprovedDirector(args.projectDir);
+      const project = await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -749,6 +810,21 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
           projectDir: args.projectDir,
         });
         const projectStylePresetId = await loadProjectStylePresetId(args.projectDir);
+        const approvedSegment = requireExactApprovedDirectorSegment(project.production, args.segment);
+        const approvedSegmentIndex = project.production!.approvedPlan!.segments.findIndex(
+          (segment) => segment.id === approvedSegment.id,
+        );
+        const directorContext = requireApprovedCardRegenerationContext(
+          project.production,
+          approvedSegment.id,
+          {
+            renderStrategy: args.renderStrategy,
+            compositionIntent: args.compositionIntent,
+            compositionInputs: args.compositionInputs,
+            fallbackPolicy: args.fallbackPolicy,
+            approvedFallbackExecution: args.approvedFallbackExecution,
+          },
+        );
         // hybrid 模式：一键 / 导演四轨的逐段生成走这里——从项目 approvedPlan 做批量预选
         //（与 analyze-run 同一构建，含每期上限），把本段决议注入编排器；
         // 方案缺失或本段不在方案内时原样透传，由编排器按单卡规则兜底。
@@ -772,7 +848,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
             keywords: args.keywords ?? [],
             globalPrompt: args.globalPrompt?.trim() || undefined,
           },
-          args.segment,
+          approvedSegment,
           args.settings,
           {
             globalPrompt: args.globalPrompt,
@@ -797,11 +873,17 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
               ? wrapWithHybridSelection(baseSegmentProvider, segmentHybridSelection)
               : baseSegmentProvider,
             validateMotionSource: assertCardRenders,
-            segmentIndex: args.segmentIndex,
-            totalSegments: args.totalSegments,
-            prevSegment: args.prevSegment,
-            nextSegment: args.nextSegment,
-            visualType: args.visualType ?? 'motion',
+            segmentIndex: approvedSegmentIndex,
+            totalSegments: project.production!.approvedPlan!.segments.length,
+            prevSegment: project.production!.approvedPlan!.segments[approvedSegmentIndex - 1],
+            nextSegment: project.production!.approvedPlan!.segments[approvedSegmentIndex + 1],
+            visualType: args.approvedFallbackExecution === 'motion'
+              ? 'motion'
+              : approvedSegment.visualType ?? 'motion',
+            renderStrategy: directorContext.renderStrategy,
+            compositionIntent: directorContext.compositionIntent,
+            compositionInputs: directorContext.compositionInputs,
+            fallbackPolicy: directorContext.fallbackPolicy,
             qualityMode: args.qualityMode ?? 'auto',
             telemetry,
           },
@@ -918,13 +1000,13 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         currentPrompt?: string;
         projectDir?: string;
         projectBindings?: PromptBindingMap | null;
-        /** 自由发布（无项目）：跳过导演审批门禁，模板走全局覆盖。 */
-        standalone?: boolean;
-        /** 显式作品标题（standalone 场景无 project.json 可读时传入）。 */
+        /** 发布中心 / 无项目封面：跳过导演审批门禁。 */
+        skipDirectorGate?: boolean;
+        /** 显式作品标题（无 project.json 可读时传入）。 */
         workTitle?: string;
       },
     ) => {
-      if (!args.standalone) await requireApprovedDirector(args.projectDir);
+      if (!args.skipDirectorGate) await requireApprovedDirector(args.projectDir);
       writeAppLog(
         'info',
         'ai-analysis',
@@ -964,7 +1046,7 @@ export function registerAiGenerationIpc(ctx: AiGenerationIpcContext): void {
         prompts: string[];
         settings: AISettings;
         projectDir?: string;
-        /** 显式输出目录（欢迎页自由发布，无项目）；提供时跳过导演审批门禁。 */
+        /** 显式输出目录（发布中心工作目录）；提供时跳过导演审批门禁。 */
         outputDir?: string;
         projectBindings?: PromptBindingMap | null;
         telemetryRunId?: string | null;

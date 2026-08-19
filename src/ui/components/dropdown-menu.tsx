@@ -112,6 +112,60 @@ interface DropdownMenuContentProps {
 	glass?: boolean;
 }
 
+export interface DropdownPositionInput {
+	trigger: { top: number; left: number; right: number; bottom: number; width: number };
+	menu: { width: number; height: number };
+	viewport: { width: number; height: number };
+	align: "start" | "center" | "end";
+	side: "top" | "bottom";
+	sideOffset: number;
+	padding?: number;
+}
+
+/** 用 left/top 夹紧到视口，避免用 translate 对齐（会和动画 transform 互相覆盖）。 */
+export function computeDropdownPosition(input: DropdownPositionInput): {
+	top: number;
+	left: number;
+	transformOrigin: string;
+} {
+	const padding = input.padding ?? 12;
+	const menuWidth = input.menu.width > 0 ? input.menu.width : 220;
+	const menuHeight = input.menu.height;
+	const { trigger, viewport, align, side, sideOffset } = input;
+
+	let left = trigger.left;
+	if (align === "end") left = trigger.right - menuWidth;
+	else if (align === "center") left = trigger.left + trigger.width / 2 - menuWidth / 2;
+	const maxLeft = Math.max(padding, viewport.width - menuWidth - padding);
+	left = Math.min(Math.max(left, padding), maxLeft);
+
+	let top = side === "bottom" ? trigger.bottom + sideOffset : trigger.top - sideOffset - (menuHeight || 0);
+	let usedSide = side;
+	if (menuHeight > 0) {
+		if (side === "bottom" && top + menuHeight > viewport.height - padding) {
+			const flipped = trigger.top - sideOffset - menuHeight;
+			if (flipped >= padding) {
+				top = flipped;
+				usedSide = "top";
+			} else {
+				top = Math.max(padding, viewport.height - menuHeight - padding);
+			}
+		} else if (side === "top" && top < padding) {
+			const flipped = trigger.bottom + sideOffset;
+			if (flipped + menuHeight <= viewport.height - padding) {
+				top = flipped;
+				usedSide = "bottom";
+			} else {
+				top = padding;
+			}
+		}
+	}
+
+	const originX = align === "end" ? "right" : align === "center" ? "center" : "left";
+	const originY = usedSide === "top" ? "bottom" : "top";
+	return { top, left, transformOrigin: `${originY} ${originX}` };
+}
+
 function DropdownMenuContent({
 	children,
 	className,
@@ -121,51 +175,57 @@ function DropdownMenuContent({
 	glass = false,
 }: DropdownMenuContentProps) {
 	const { open, triggerRef } = useDropdownMenuContext();
+	const contentRef = React.useRef<HTMLDivElement | null>(null);
 	const [mounted, setMounted] = React.useState(false);
-	const [position, setPosition] = React.useState({ top: 0, left: 0 });
+	const [position, setPosition] = React.useState({ top: 0, left: 0, transformOrigin: "top left" });
 
-	// Ensure we only render portal on client
 	React.useEffect(() => {
 		setMounted(true);
 	}, []);
 
-	// Calculate position based on trigger element
-	React.useEffect(() => {
-		if (open && triggerRef.current) {
-			const rect = triggerRef.current.getBoundingClientRect();
-			let top = 0;
-			let left = 0;
+	const updatePosition = React.useCallback(() => {
+		const trigger = triggerRef.current;
+		if (!trigger) return;
+		const triggerRect = trigger.getBoundingClientRect();
+		const menu = contentRef.current;
+		const next = computeDropdownPosition({
+			trigger: triggerRect,
+			menu: menu
+				? { width: menu.offsetWidth, height: menu.offsetHeight }
+				: { width: 0, height: 0 },
+			viewport: { width: window.innerWidth, height: window.innerHeight },
+			align,
+			side,
+			sideOffset,
+		});
+		setPosition((prev) => (
+			prev.top === next.top && prev.left === next.left && prev.transformOrigin === next.transformOrigin
+				? prev
+				: next
+		));
+	}, [align, side, sideOffset, triggerRef]);
 
-			if (side === "bottom") {
-				top = rect.bottom + sideOffset;
-			} else {
-				top = rect.top - sideOffset;
-			}
+	const setContentNode = React.useCallback((node: HTMLDivElement | null) => {
+		contentRef.current = node;
+		if (node) updatePosition();
+	}, [updatePosition]);
 
-			if (align === "start") {
-				left = rect.left;
-			} else if (align === "center") {
-				left = rect.left + rect.width / 2;
-			} else {
-				left = rect.right;
-			}
-
-			setPosition({ top, left });
-		}
-	}, [open, side, align, sideOffset, triggerRef]);
-
-	const getTransform = () => {
-		const transforms = [];
-		if (side === "top") transforms.push("translateY(-100%)");
-		if (align === "center") transforms.push("translateX(-50%)");
-		if (align === "end") transforms.push("translateX(-100%)");
-		return transforms.join(" ") || undefined;
-	};
+	React.useLayoutEffect(() => {
+		if (!open) return;
+		updatePosition();
+		window.addEventListener("resize", updatePosition);
+		window.addEventListener("scroll", updatePosition, true);
+		return () => {
+			window.removeEventListener("resize", updatePosition);
+			window.removeEventListener("scroll", updatePosition, true);
+		};
+	}, [open, updatePosition, children]);
 
 	const content = (
 		<AnimatePresence>
 			{open && (
 				<m.div
+					ref={setContentNode}
 					initial={{
 						opacity: 0,
 						scaleY: 0.9,
@@ -189,7 +249,7 @@ function DropdownMenuContent({
 					role="menu"
 					aria-orientation="vertical"
 					className={cn(
-						"fixed min-w-[220px] overflow-hidden rounded-xl border border-mac-border p-1.5 shadow-[0_10px_30px_rgba(0,0,0,0.66)]",
+						"fixed min-w-[220px] max-w-[min(380px,calc(100vw-24px))] overflow-x-hidden overflow-y-auto rounded-xl border border-mac-border p-1.5 shadow-[0_10px_30px_rgba(0,0,0,0.66)]",
 						"bg-mac-elevated",
 						className
 					)}
@@ -197,8 +257,7 @@ function DropdownMenuContent({
 						zIndex: 9999,
 						top: position.top,
 						left: position.left,
-						transform: getTransform(),
-						transformOrigin: side === "top" ? "bottom" : "top",
+						transformOrigin: position.transformOrigin,
 					}}
 				>
 					{children}

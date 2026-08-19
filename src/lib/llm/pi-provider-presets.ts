@@ -24,20 +24,6 @@ export const CUSTOM_PROVIDER_PRESET_ID = 'custom';
 
 export const PI_PROVIDER_PRESETS: PiProviderPreset[] = [
   {
-    id: 'lingji-gateway',
-    label: '灵机剪影网关（开箱即用）',
-    description:
-      '登录灵机剪影账户后在「用户中心 · 网关密钥」生成 lj_ 密钥填入即可；AI 调用统一走网关按积分计费，无需自配上游 Key。Base URL 改成你的网关地址。',
-    piProviderId: null,
-    providerName: '灵机剪影网关',
-    type: 'openai_compatible',
-    baseUrl: 'http://localhost:18080/v1',
-    models: ['gpt-4o-mini', 'gpt-4o'],
-    apiKeyPlaceholder: 'lj_...',
-    apiKeyRequired: true,
-    enableThinking: false,
-  },
-  {
     id: 'openai',
     label: 'OpenAI',
     description: 'Pi 内置 OpenAI provider，填写 Key 后即可使用。',

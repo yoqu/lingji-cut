@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,9 @@ import {
 } from '../electron/pipeline/motion-agent-run';
 import type { MotionCardAgentContext } from '../src/lib/ai-analysis';
 import type { PiAgentRole, PiAgentRoleName } from '../electron/agent-runtime/pi-agents-seed';
+import type { PiHeadlessImage } from '../electron/agent-runtime/pi-headless';
 import type { AISettings, LLMProvider } from '../src/types/ai';
+import { readLocalFileFingerprint } from '../electron/footage/file-fingerprint';
 
 const VALID_TSX = `import { AbsoluteFill, useCurrentFrame } from 'remotion';
 export default function Card({ cues = [] }) {
@@ -49,6 +51,23 @@ const STORYBOARD = JSON.stringify({
   ],
 });
 
+function compositeStoryboard(media: Array<{ assetId: string; slot: string }>): string {
+  return JSON.stringify({
+    claim: '硕士报名人数远超博士',
+    scene: '批准素材建立真实语境，核心数字随后落定',
+    focus: { beat: 1, subject: '硕士报名 28842 人' },
+    beats: [
+      { cue: null, kind: 'build', adds: '批准素材建立真实语境', motion: '素材进入并留出信息空间' },
+      { cue: 1, kind: 'accent', adds: '硕士报名 28842 人', motion: '核心数字随口播落定' },
+    ],
+    media: media.map((item) => ({
+      ...item,
+      purpose: '作为事实语境并支撑核心结论',
+      beats: [0, 1],
+    })),
+  });
+}
+
 const ROLE: Record<string, PiAgentRole> = {
   'card-director': { name: 'card-director', version: '2', tools: [], systemPrompt: '导演' },
   'card-sculptor': { name: 'card-sculptor', version: '2', tools: ['read', 'write', 'edit'], systemPrompt: '雕刻' },
@@ -61,15 +80,15 @@ interface FakeSessionScript {
 }
 
 function makeDeps(script: FakeSessionScript) {
-  const prompts: Array<{ role: string; text: string }> = [];
+  const prompts: Array<{ role: string; text: string; images?: PiHeadlessImage[] }> = [];
   const sessions: Array<{ role: string; model?: string }> = [];
   const createSession = vi.fn(async (input: { systemPrompt: string; cwd: string; model?: string }) => {
     let turn = 0;
     sessions.push({ role: input.systemPrompt, model: input.model });
     return {
-      prompt: async (text: string) => {
+      prompt: async (text: string, images?: PiHeadlessImage[]) => {
         turn += 1;
-        prompts.push({ role: input.systemPrompt, text });
+        prompts.push({ role: input.systemPrompt, text, images });
         return String(await script.reply(input.systemPrompt, text, input.cwd, turn));
       },
       dispose: vi.fn(),
@@ -135,6 +154,29 @@ describe('parseReviewVerdict', () => {
       severity: 'warn',
       code: 'review-unavailable',
     });
+  });
+
+  it('保留审查员声明的视觉审片不可用原因', () => {
+    const verdict = parseReviewVerdict(JSON.stringify({
+      pass: true,
+      issues: [],
+      unavailableReason: ' 当前模型无法解码 contact sheet 图片附件。 ',
+    }));
+    expect(verdict.pass).toBe(true);
+    expect(verdict.unavailableReason).toBe('当前模型无法解码 contact sheet 图片附件。');
+  });
+
+  it('visual-unverified 即使漏写顶层原因也不得记为完成视觉审片', () => {
+    const verdict = parseReviewVerdict(JSON.stringify({
+      pass: true,
+      issues: [{
+        code: 'visual-unverified',
+        severity: 'warn',
+        visualProblem: '未能读取 contact sheet，只能按文本推断。',
+      }],
+    }));
+    expect(verdict.pass).toBe(true);
+    expect(verdict.unavailableReason).toBe('未能读取 contact sheet，只能按文本推断。');
   });
 
   it('审查员误写 pass=true 时，白名单硬错误仍按未通过处理', () => {
@@ -211,6 +253,239 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
       expect.objectContaining({ code: 'style-fidelity', severity: 'warning' }),
     ]);
     expect(phases.filter((phase) => phase.startsWith('回炉'))).toHaveLength(0);
+  });
+
+  it('Agent 原子合成把冻结素材与 required slot 契约交给审查员', async () => {
+    const projectPath = await mkdtemp(path.join(os.tmpdir(), 'lingji-composite-review-'));
+    const assetPath = path.join(projectPath, 'approved.png');
+    await writeFile(assetPath, 'approved-image', 'utf-8');
+    const fileFingerprint = (await readLocalFileFingerprint(assetPath))!;
+    try {
+      const { provider, prompts } = providerWith(
+        {
+          reply: async (role, _text, cwd) => {
+            if (role === '导演') {
+              return compositeStoryboard([{ assetId: 'approved-asset', slot: 'media-1' }]);
+            }
+            if (role === '雕刻') {
+              await writeTsx(cwd, `import { AbsoluteFill } from 'remotion';
+export default function Card({ BoundMedia }) {
+  return <AbsoluteFill><BoundMedia slot="media-1" /></AbsoluteFill>;
+}`);
+              return 'ok';
+            }
+            return '{"pass": true, "issues": []}';
+          },
+        },
+        { projectPath, contactSheetCacheDir: path.join(projectPath, 'contact-sheets') },
+      );
+
+      await provider(makeCtx({
+        renderStrategy: 'agent-composite',
+        compositionInputs: [{
+          segmentIndex: 0,
+          segmentId: 'seg-1',
+          startMs: 0,
+          durationMs: 4_000,
+          usage: 'required',
+          fileFingerprint,
+          asset: {
+            id: 'approved-asset',
+            filename: 'approved.png',
+            path: assetPath,
+            kind: 'image',
+            score: 1,
+          },
+        }],
+        validate: vi.fn(),
+      }));
+
+      const reviewPrompt = prompts.find((prompt) => prompt.role === '审查')!.text;
+      expect(reviewPrompt).toContain('Agent 原子合成镜头锁定契约');
+      expect(reviewPrompt).toContain('slot=media-1');
+      expect(reviewPrompt).toContain('usage=required');
+      expect(reviewPrompt).toContain('required 素材必须通过 BoundMedia');
+      expect(reviewPrompt).toContain('素材池全为 optional 时仍必须至少采用一项');
+      expect(reviewPrompt).toContain('不得引用未绑定素材');
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('多素材超过附件预算时优先保证每个 required 素材都有视觉附件', async () => {
+    const projectPath = await mkdtemp(path.join(os.tmpdir(), 'lingji-composite-budget-'));
+    try {
+      const compositionInputs = await Promise.all(Array.from({ length: 9 }, async (_, index) => {
+        const filename = `asset-${index}.png`;
+        const assetPath = path.join(projectPath, filename);
+        await writeFile(assetPath, `image-${index}`, 'utf-8');
+        return {
+          segmentIndex: 0,
+          segmentId: 'seg-1',
+          startMs: 0,
+          durationMs: 4_000,
+          usage: index < 3 ? 'optional' as const : 'required' as const,
+          fileFingerprint: (await readLocalFileFingerprint(assetPath))!,
+          asset: {
+            id: `asset-${index}`,
+            filename,
+            path: assetPath,
+            kind: 'image' as const,
+            score: 1,
+          },
+        };
+      }));
+      const { provider, prompts } = providerWith(
+        {
+          reply: async (role, _text, cwd) => {
+            if (role === '导演') {
+              return compositeStoryboard(Array.from({ length: 6 }, (_, index) => ({
+                assetId: `asset-${index + 3}`,
+                slot: `media-${index + 4}`,
+              })));
+            }
+            if (role === '雕刻') {
+              await writeTsx(cwd, `import { AbsoluteFill } from 'remotion';
+export default function Card({ BoundMedia }) {
+  return <AbsoluteFill><BoundMedia slot="media-4" /></AbsoluteFill>;
+}`);
+              return 'ok';
+            }
+            return '{"pass": true, "issues": []}';
+          },
+        },
+        { projectPath, contactSheetCacheDir: path.join(projectPath, 'contact-sheets') },
+      );
+
+      await provider(makeCtx({
+        renderStrategy: 'agent-composite',
+        compositionInputs,
+        validate: vi.fn(),
+      }));
+
+      const directorImages = prompts.find((prompt) => prompt.role === '导演')?.images ?? [];
+      expect(directorImages).toHaveLength(8);
+      const attachedPayloads = new Set(directorImages.map((image) => image.data));
+      for (let index = 3; index < 9; index += 1) {
+        expect(attachedPayloads.has(Buffer.from(`image-${index}`).toString('base64'))).toBe(true);
+      }
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('原始 Agent 合成缺少 contact-sheet 多模态审片时拒绝交付', async () => {
+    const projectPath = await mkdtemp(path.join(os.tmpdir(), 'lingji-composite-no-review-'));
+    const assetPath = path.join(projectPath, 'approved.png');
+    await writeFile(assetPath, 'approved-image', 'utf-8');
+    const fileFingerprint = (await readLocalFileFingerprint(assetPath))!;
+    try {
+      const { provider } = providerWith(
+        {
+          reply: async (role, _text, cwd) => {
+            if (role === '导演') {
+              return compositeStoryboard([{ assetId: 'approved-asset', slot: 'media-1' }]);
+            }
+            if (role === '雕刻') {
+              await writeTsx(cwd, `import { AbsoluteFill } from 'remotion';
+export default function Card({ BoundMedia }) {
+  return <AbsoluteFill><BoundMedia slot="media-1" /></AbsoluteFill>;
+}`);
+              return 'ok';
+            }
+            return '{"pass": true, "issues": []}';
+          },
+        },
+        { projectPath },
+      );
+
+      await expect(provider(makeCtx({
+        renderStrategy: 'agent-composite',
+        compositionInputs: [{
+          segmentIndex: 0,
+          segmentId: 'seg-1',
+          startMs: 0,
+          durationMs: 4_000,
+          usage: 'required',
+          fileFingerprint,
+          asset: {
+            id: 'approved-asset',
+            filename: 'approved.png',
+            path: assetPath,
+            kind: 'image',
+            score: 1,
+          },
+        }],
+        validate: vi.fn(),
+      }))).rejects.toThrow('未完成多模态审片');
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it('显式 motion fallback 用 motion-card profile 和空素材绑定完成最后机械校验', async () => {
+    const projectPath = await mkdtemp(path.join(os.tmpdir(), 'lingji-composite-motion-fallback-'));
+    const assetPath = path.join(projectPath, 'approved.png');
+    await writeFile(assetPath, 'approved-image', 'utf-8');
+    const fileFingerprint = (await readLocalFileFingerprint(assetPath))!;
+    const validate = vi.fn(async () => ({
+      ok: true,
+      renderOk: true,
+      framesChecked: [0, 30],
+      issues: [],
+    }));
+    try {
+      const { provider } = providerWith(
+        {
+          reply: async (role, _text, cwd) => {
+            if (role === '导演') {
+              return compositeStoryboard([{ assetId: 'approved-asset', slot: 'media-1' }]);
+            }
+            if (role === '雕刻') {
+              await writeTsx(cwd, `import { AbsoluteFill } from 'remotion';
+export default function Card({ BoundMedia }) {
+  return <AbsoluteFill><BoundMedia slot="media-1" /></AbsoluteFill>;
+}`);
+              return 'ok';
+            }
+            return '{"pass": false, "issues": [{"code":"content-missing","rule":"核心结论缺失"}]}';
+          },
+        },
+        { projectPath },
+      );
+
+      const result = await provider(makeCtx({
+        renderStrategy: 'agent-composite',
+        fallbackPolicy: 'motion',
+        qualityMode: 'auto',
+        compositionInputs: [{
+          segmentIndex: 0,
+          segmentId: 'seg-1',
+          startMs: 0,
+          durationMs: 4_000,
+          usage: 'required',
+          fileFingerprint,
+          asset: {
+            id: 'approved-asset',
+            filename: 'approved.png',
+            path: assetPath,
+            kind: 'image',
+            score: 1,
+          },
+        }],
+        validate,
+      }));
+
+      expect(result.productionReport?.fallbackUsed).toBe(true);
+      expect(result.tsx).toContain('SafeLayout');
+      const finalValidation = validate.mock.calls.at(-1)?.[1];
+      expect(finalValidation).toMatchObject({
+        qualityProfile: 'motion-card',
+        assetBindings: [],
+      });
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
   });
 
   it('机械校验返回的 layout warnings 会保留到 productionReport', async () => {
@@ -649,6 +924,26 @@ describe('createMotionCardAgentProvider（导演分镜→雕刻→机械质检�
     expect(result.productionReport?.unavailableReason).toContain('未输出 JSON');
   });
 
+  it('审查员首次未输出 JSON 时在同一会话重出裁决', async () => {
+    let reviewTurns = 0;
+    const { provider, phases } = providerWith({
+      reply: async (role, _text, cwd) => {
+        if (role === '导演') return STORYBOARD;
+        if (role === '雕刻') {
+          await writeTsx(cwd);
+          return 'ok';
+        }
+        reviewTurns += 1;
+        return reviewTurns === 1 ? '审查通过。' : '{"pass":true,"issues":[]}';
+      },
+    });
+    const result = await provider(makeCtx({ validate: vi.fn() }));
+    expect(reviewTurns).toBe(2);
+    expect(phases).toContain('审查重出（解析失败 1/2）');
+    expect(result.productionReport?.unavailableReason).not.toContain('未输出 JSON');
+    expect(result.productionReport?.reviewIssues).toEqual([]);
+  });
+
   it('refine 模式：现有 TSX 进导演诊断上下文并预写入工作目录', async () => {
     const existing = VALID_TSX.replace('Card', 'OldCard');
     const { provider, prompts } = providerWith({
@@ -982,9 +1277,10 @@ describe('观测事件：结构化 stage/round 与模型标注', () => {
 });
 
 describe('production report contact sheet', () => {
-  it('启用 contactSheetCacheDir 时生成并记录 PNG 缓存路径', async () => {
+  it('审查员无法读取已附加的 contact sheet 时保留原因并标记视觉审片不可用', async () => {
     const cacheDir = await mkdtemp(path.join(os.tmpdir(), 'lingji-agent-sheet-'));
-    const { provider } = providerWith(
+    const unavailableReason = '当前模型无法解码 contact sheet 图片附件。';
+    const { provider, prompts } = providerWith(
       {
         reply: async (role, _text, cwd) => {
           if (role === '导演') return STORYBOARD;
@@ -992,16 +1288,27 @@ describe('production report contact sheet', () => {
             await writeTsx(cwd);
             return 'ok';
           }
-          return '{"pass": true, "issues": []}';
+          return JSON.stringify({
+            pass: true,
+            unavailableReason,
+            issues: [{
+              code: 'visual-unverified',
+              severity: 'warn',
+              visualProblem: '未能读取 contact sheet，只能按文本推断。',
+            }],
+          });
         },
       },
       { contactSheetCacheDir: cacheDir },
     );
     const result = await provider(makeCtx());
+    expect(prompts.find((prompt) => prompt.role === '审查')?.images).toHaveLength(1);
     expect(result.productionReport?.contactSheetCacheKey).toMatch(/^[a-f0-9]{24}$/);
     expect(result.productionReport?.contactSheetPath).toContain(cacheDir);
     expect(result.productionReport?.contactSheetCached).toBe(false);
     expect(result.productionReport?.contactSheetError).toBeUndefined();
+    expect(result.productionReport?.visualReviewAvailable).toBe(false);
+    expect(result.productionReport?.unavailableReason).toBe(unavailableReason);
   }, 120_000);
 });
 

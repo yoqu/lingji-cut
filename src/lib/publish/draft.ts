@@ -1,6 +1,6 @@
 // 发布草稿：项目无关的发布表单数据与纯逻辑。
-// 项目发布 tab 与欢迎页自由发布共用；持久化由各自适配层负责
-// （project.json publish 段 / userData standalone 状态文件）。
+// 项目发布 tab 与发布中心共用；持久化由各自适配层负责
+// （project.json publish 段 / 工作目录 .lingji/publish.json）。
 
 import type {
   PublishAccount,

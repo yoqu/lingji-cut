@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMotionAssetUnderlay, motionAssetStyle } from '../src/lib/motion-asset-layer';
+import { isMotionAssetUnderlay, motionAssetSignature, motionAssetStyle } from '../src/lib/motion-asset-layer';
 import { DEFAULT_ASSET_TREATMENT, type CardAssetBinding } from '../src/types/assets';
 
 function binding(overrides: Partial<CardAssetBinding> = {}): CardAssetBinding {
@@ -56,5 +56,12 @@ describe('motion asset layer', () => {
       height: 1080,
       durationInFrames: 150,
     }).opacity).toBeLessThan(0.1);
+  });
+
+  it('冻结文件指纹变化会让素材签名失效', () => {
+    const original = motionAssetSignature([binding({ fileFingerprint: 'stat:100:1' })]);
+    const replaced = motionAssetSignature([binding({ fileFingerprint: 'stat:220:2' })]);
+
+    expect(replaced).not.toBe(original);
   });
 });

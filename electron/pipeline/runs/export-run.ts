@@ -39,6 +39,7 @@ export async function runExportHeadless(
   try {
     const result = await render(
       {
+        projectDir: projectPath,
         timeline: JSON.stringify(project.timeline),
         outputPath,
         exportConfig: { resolution: '720p', quality: 'balanced' },

@@ -165,6 +165,23 @@ export interface StoryboardBeat {
 }
 
 /**
+ * Agent 原子合成只描述已批准素材与叙事节拍的关系，不承载布局模板。
+ * `slot` 是运行时素材绑定标识，不是 MotionSlot / SafeLayout 的版式槽位。
+ */
+export interface CompositeStoryboardMediaUse {
+  assetId?: string;
+  slot?: string;
+  purpose: string;
+  beats: number[];
+}
+
+export interface CompositeStoryboardAssetRef {
+  assetId: string;
+  slot: string;
+  usage: 'required' | 'optional';
+}
+
+/**
  * 偏离整片 bible 指定载体的正当理由（枚举，防自由发挥）。
  * 只有写了理由，"图形载体 → 文字载体"的降密度偏离才放行。
  */
@@ -193,7 +210,9 @@ export interface MotionStoryboard {
   scene: string;
   /** 本卡需要的可复用视觉资产；由资产解析器优先匹配已有素材，缺失进入待生成队列。 */
   assets?: StoryboardAssetRequest[];
-  focus?: { beat: number; emphasis?: MotionEmphasisKind };
+  focus?: { beat: number; emphasis?: MotionEmphasisKind; subject?: string };
+  /** 仅 agent-composite 使用；普通 Motion Card 忽略。 */
+  media?: CompositeStoryboardMediaUse[];
   /** 叙事运镜（可选，≤2 次）：把镜头推向正在讲的那块内容。 */
   camera?: StoryboardCameraShot[];
   /** 指示标注（可选，≤2 个）：圈 / 框 / 划 / 指 / 聚光，讲解者的手。 */
@@ -539,6 +558,44 @@ function collectDataNumbers(data: Record<string, unknown>): string[] {
   return [...new Set(numbers)];
 }
 
+function collectQuantifiedScreenStrings(sb: MotionStoryboard): string[] {
+  const texts: string[] = [];
+  const collectStrings = (value: unknown): void => {
+    if (typeof value === 'string') {
+      texts.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(collectStrings);
+      return;
+    }
+    const record = asRecord(value);
+    if (record) Object.values(record).forEach(collectStrings);
+  };
+  collectStrings(sb.claim);
+  for (const beat of sb.beats ?? []) {
+    collectStrings(beat?.adds);
+    collectStrings(beat?.changes);
+  }
+  collectStrings(sb.data);
+  for (const element of sb.elements ?? []) collectStrings(element?.content);
+  return texts;
+}
+
+/** 卡面数量一律使用阿拉伯数字；专有名词中的“一”等非数量文字不会命中。 */
+function collectChineseScreenNumerals(sb: MotionStoryboard): string[] {
+  return [...new Set(collectQuantifiedScreenStrings(sb).flatMap(extractChineseQuantityLiterals))];
+}
+
+function checkScreenNumeralStyle(sb: MotionStoryboard): string[] {
+  const literals = collectChineseScreenNumerals(sb);
+  if (literals.length === 0) return [];
+  return [
+    `卡面可量化信息必须使用阿拉伯数字，检测到中文数字 [${literals.slice(0, 8).join('、')}]；` +
+      `请保持原始精度改写，例如“百分之一百二十四点三”→“124.3%”、“十七万九千八百四十一辆”→“179,841辆”，不得换算或四舍五入`,
+  ];
+}
+
 /* ---------- 文字防复述（卡面文字不得整段复述口播，底部已有完整字幕通道） ---------- */
 
 /** 触发复述判定的重合比例：卡面文字被逐字稿覆盖超过该比例即复述。 */
@@ -755,6 +812,7 @@ export function validateStoryboardData(
   ctx: { transcript?: string },
 ): { errors: string[] } {
   const errors: string[] = [];
+  errors.push(...checkScreenNumeralStyle(sb));
   // 文字防复述：只依赖 claim / carrier / transcript，无 data 的回落路径同样要查。
   errors.push(...checkTranscriptRepetition(sb, ctx.transcript));
   const data = asRecord(sb.data);
@@ -1025,9 +1083,9 @@ export function validateStoryboardData(
   }
 
   // 数字防编造：data 里的内容数字必须能在逐字稿中找到（matrix x/y 坐标除外）。
-  const transcript = normalizeForNumbers(ctx.transcript ?? '');
-  if (transcript) {
-    const fabricated = collectDataNumbers(data).filter((num) => !transcript.includes(num));
+  const transcriptNumbers = new Set(extractCheckableNumbers(ctx.transcript ?? ''));
+  if (transcriptNumbers.size > 0) {
+    const fabricated = collectDataNumbers(data).filter((num) => !transcriptNumbers.has(num));
     if (fabricated.length > 0) {
       errors.push(
         `data 中的数字 [${fabricated.join(', ')}] 在本段逐字稿中不存在；数据必须忠于口播原文，不得编造 / 换算 / 四舍五入`,
@@ -1210,17 +1268,131 @@ export function storyboardParseHint(text: string): string {
   return 'JSON 语法不合法（常见：单引号、未加引号的键名、注释、尾随逗号）——用严格 JSON 重新输出。';
 }
 
-/** 归一化文本用于数字匹配：去掉逗号 / 空格 / 全角逗号，便于 "28,842" ↔ "28842" 互认。 */
+/** 归一化文本用于数字匹配：统一全角数字并去掉千分位 / 空格。 */
 function normalizeForNumbers(text: string): string {
-  return text.replace(/[,，\s]/g, '');
+  return text
+    .replace(/[０-９]/g, (digit) => String(digit.charCodeAt(0) - 0xff10))
+    .replace(/[，,\s]/g, '');
 }
 
-/** 提取需要核对的数字：≥2 位整数或带小数点的数（单位数字噪声大，跳过）。 */
+const CHINESE_DIGITS: Readonly<Record<string, number>> = {
+  零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
+  五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+const CHINESE_SMALL_UNITS: Readonly<Record<string, number>> = { 十: 10, 百: 100, 千: 1_000 };
+const CHINESE_LARGE_UNITS: Readonly<Record<string, number>> = { 万: 10_000, 亿: 100_000_000 };
+const CHINESE_NUMBER_TOKEN = /[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?/gu;
+const SCREEN_QUANTITY_SUFFIX = /^(?:%|％|年|月份?|季度|月|日|天|小时|分钟|秒|毫秒|辆|艘|船|元|美元|万元|亿元|人|倍|届|吨|公里|千米|米|平方米|吉瓦时|吉瓦|兆瓦时|兆瓦|千瓦时|千瓦)/u;
+
+function parseChineseInteger(token: string): number | null {
+  if (!token) return null;
+  if (![...token].some((char) => char in CHINESE_SMALL_UNITS || char in CHINESE_LARGE_UNITS)) {
+    const digits = [...token].map((char) => CHINESE_DIGITS[char]);
+    return digits.every((digit) => digit != null) ? Number(digits.join('')) : null;
+  }
+  let total = 0;
+  let section = 0;
+  let current: number | null = null;
+  for (const char of token) {
+    if (char in CHINESE_DIGITS) {
+      current = CHINESE_DIGITS[char];
+      continue;
+    }
+    const smallUnit = CHINESE_SMALL_UNITS[char];
+    if (smallUnit) {
+      section += (current ?? 1) * smallUnit;
+      current = null;
+      continue;
+    }
+    const largeUnit = CHINESE_LARGE_UNITS[char];
+    if (largeUnit) {
+      section += current ?? 0;
+      total += (section || 1) * largeUnit;
+      section = 0;
+      current = null;
+      continue;
+    }
+    return null;
+  }
+  return total + section + (current ?? 0);
+}
+
+function parseChineseNumber(token: string): number | null {
+  const [integerPart, decimalPart] = token.split('点', 2);
+  const integer = parseChineseInteger(integerPart);
+  if (integer == null) return null;
+  if (decimalPart == null) return integer;
+  const digits = [...decimalPart].map((char) => CHINESE_DIGITS[char]);
+  if (digits.some((digit) => digit == null)) return null;
+  return Number(`${integer}.${digits.join('')}`);
+}
+
+function numericKey(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  if (Number.isInteger(value)) return String(value);
+  return String(Number(value.toFixed(8)));
+}
+
+function addCheckableNumber(target: Set<string>, value: number | null): void {
+  if (value == null || !Number.isFinite(value)) return;
+  if (Math.abs(value) < 10 && Number.isInteger(value)) return;
+  const key = numericKey(value);
+  if (key) target.add(key);
+}
+
+/**
+ * 提取可比对的数字事实。中文口播与阿拉伯数字卡面会归一到同一数值；
+ * 同时保留“150万”的 150 与 1500000，兼容 value=150 + unit=万 的结构化 data。
+ */
 function extractCheckableNumbers(text: string): string[] {
-  const normalized = normalizeForNumbers(text);
-  return Array.from(normalized.matchAll(/\d+(?:\.\d+)?/g), (m) => m[0]).filter(
-    (n) => n.length >= 2 || n.includes('.'),
+  const numbers = new Set<string>();
+  let normalized = normalizeForNumbers(text);
+  normalized = normalized.replace(new RegExp(`百分之(${CHINESE_NUMBER_TOKEN.source})`, 'gu'), (_match, token: string) => {
+    addCheckableNumber(numbers, parseChineseNumber(token));
+    return ' ';
+  });
+  normalized = normalized.replace(
+    new RegExp(`(${CHINESE_NUMBER_TOKEN.source})成([零〇一二两三四五六七八九]?)`, 'gu'),
+    (_match, whole: string, fraction: string) => {
+      const wholeValue = parseChineseNumber(whole);
+      if (wholeValue != null) addCheckableNumber(numbers, wholeValue * 10 + (CHINESE_DIGITS[fraction] ?? 0));
+      return ' ';
+    },
   );
+  normalized = normalized.replace(CHINESE_NUMBER_TOKEN, (token) => {
+    addCheckableNumber(numbers, parseChineseNumber(token));
+    const coefficient = token.match(/^(.+)(万|亿)$/u);
+    if (coefficient) addCheckableNumber(numbers, parseChineseNumber(coefficient[1]));
+    return ' ';
+  });
+  for (const match of normalized.matchAll(/\d+(?:\.\d+)?(?:万|亿)?/g)) {
+    const literal = match[0];
+    const unit = literal.endsWith('万') ? 10_000 : literal.endsWith('亿') ? 100_000_000 : 1;
+    const base = Number(unit === 1 ? literal : literal.slice(0, -1));
+    addCheckableNumber(numbers, base);
+    if (unit !== 1) addCheckableNumber(numbers, base * unit);
+  }
+  return [...numbers];
+}
+
+/** 找出卡面里的中文数量写法；单独出现在专有名词中的“一”等不会命中。 */
+function extractChineseQuantityLiterals(text: string): string[] {
+  const literals = new Set<string>();
+  for (const match of text.matchAll(CHINESE_NUMBER_TOKEN)) {
+    const token = match[0];
+    const index = match.index ?? 0;
+    const before = text.slice(Math.max(0, index - 3), index);
+    const after = text.slice(index + token.length);
+    const quantitative = before.endsWith('百分之')
+      || before.endsWith('第')
+      || before.endsWith('约')
+      || before.endsWith('超')
+      || after.startsWith('成')
+      || SCREEN_QUANTITY_SUFFIX.test(after)
+      || /[十百千万亿点]/u.test(token);
+    if (quantitative) literals.add(`${before.endsWith('百分之') ? '百分之' : before.endsWith('第') ? '第' : ''}${token}${after.startsWith('成') ? '成' : ''}`);
+  }
+  return [...literals];
 }
 
 export function validateStoryboard(
@@ -1331,18 +1503,150 @@ export function validateStoryboard(
   }
 
   // 数字防编造：分镜里的数字必须能在逐字稿中找到。
-  const transcript = normalizeForNumbers(ctx.transcript ?? '');
-  if (transcript) {
+  const transcriptNumbers = new Set(extractCheckableNumbers(ctx.transcript ?? ''));
+  if (transcriptNumbers.size > 0) {
     const fabricated = new Set<string>();
-    for (const beat of sb.beats) {
-      const text = `${beat?.adds ?? ''} ${beat?.changes ?? ''}`;
+    for (const text of collectQuantifiedScreenStrings(sb)) {
       for (const num of extractCheckableNumbers(text)) {
-        if (!transcript.includes(num)) fabricated.add(num);
+        if (!transcriptNumbers.has(num)) fabricated.add(num);
       }
     }
     if (fabricated.size > 0) {
       errors.push(
         `分镜中的数字 [${Array.from(fabricated).join(', ')}] 在本段逐字稿中不存在；数据必须忠于口播原文，不得编造 / 换算 / 四舍五入`,
+      );
+    }
+  }
+
+  return { ok: errors.length === 0, errors, warnings };
+}
+
+/**
+ * Agent 原子合成的独立语义门禁。
+ *
+ * 它刻意不读取 carrier / layout / elements / capacity / lifecycle，也不执行
+ * SafeLayout、MotionSlot 或模板 data 校验。框架只确认叙事节拍和冻结素材关系，
+ * 具体空间组织由下游 React/Remotion Agent 决定。
+ */
+export function validateAgentCompositeStoryboard(
+  sb: MotionStoryboard | null,
+  ctx: {
+    cueCount: number;
+    transcript?: string;
+    approvedAssets: CompositeStoryboardAssetRef[];
+  },
+): StoryboardValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!sb) {
+    return { ok: false, errors: ['无法从回复中解析出 JSON 分镜对象'], warnings };
+  }
+  if (!sb.claim || typeof sb.claim !== 'string') errors.push('缺少 claim（一句话论点）');
+  errors.push(...checkScreenNumeralStyle(sb));
+  if (!sb.scene || typeof sb.scene !== 'string') warnings.push('缺少 scene（终态画面描述）');
+  if (Array.isArray(sb.assets) && sb.assets.length > 0) {
+    errors.push('Agent 原子合成不得新增 assets，只能使用批准时冻结的素材');
+  }
+
+  if (!Array.isArray(sb.beats) || sb.beats.length === 0) {
+    errors.push('beats 必须是非空数组');
+    return { ok: false, errors, warnings };
+  }
+  if (sb.beats.length > 6) errors.push(`beats 数量 ${sb.beats.length} 超过上限 6（节拍密度约束）`);
+
+  let lastCue = -1;
+  sb.beats.forEach((beat, index) => {
+    if (!beat || typeof beat !== 'object') {
+      errors.push(`拍 ${index} 不是对象`);
+      return;
+    }
+    if (!beat.adds || typeof beat.adds !== 'string') {
+      errors.push(`拍 ${index} 缺少 adds（本拍新增的叙事内容）`);
+    }
+    if (beat.kind && !['build', 'transform', 'accent'].includes(beat.kind)) {
+      warnings.push(`拍 ${index} 的 kind "${String(beat.kind)}" 不在 build|transform|accent 中`);
+    }
+    if (beat.role && !(STORYBOARD_BEAT_ROLES as readonly string[]).includes(beat.role)) {
+      warnings.push(`拍 ${index} 的 role "${String(beat.role)}" 不在 ${STORYBOARD_BEAT_ROLES.join('|')} 中`);
+    }
+    const cue = beat.cue;
+    if (cue == null) {
+      if (index > 0) errors.push(`拍 ${index} 的 cue 为空；只有第 0 拍（入场）允许 cue 为 null`);
+      return;
+    }
+    if (!Number.isInteger(cue) || cue < 0) {
+      errors.push(`拍 ${index} 的 cue=${String(cue)} 不是合法句索引`);
+      return;
+    }
+    if (ctx.cueCount > 0 && cue >= ctx.cueCount) {
+      errors.push(`拍 ${index} 的 cue=${cue} 越界（本段只有 ${ctx.cueCount} 句，合法范围 0-${ctx.cueCount - 1}）`);
+    }
+    if (cue < lastCue) {
+      errors.push(`拍 ${index} 的 cue=${cue} 小于前一拍的 ${lastCue}；cue 必须随拍序单调不减`);
+    }
+    lastCue = Math.max(lastCue, cue);
+  });
+
+  if (!sb.focus) {
+    errors.push('缺少 focus（唯一语义焦点）');
+  } else {
+    if (!Number.isInteger(sb.focus.beat) || sb.focus.beat < 0 || sb.focus.beat >= sb.beats.length) {
+      errors.push(`focus.beat=${String(sb.focus.beat)} 不是合法拍索引（0-${sb.beats.length - 1}）`);
+    }
+    if (!sb.focus.subject || typeof sb.focus.subject !== 'string') {
+      errors.push('focus.subject 必须说明本镜头的唯一语义焦点');
+    }
+  }
+
+  const approvedByAssetId = new Map(ctx.approvedAssets.map((asset) => [asset.assetId, asset]));
+  const approvedBySlot = new Map(ctx.approvedAssets.map((asset) => [asset.slot, asset]));
+  const media = Array.isArray(sb.media) ? sb.media : [];
+  const usedAssetIds = new Set<string>();
+  for (const [index, use] of media.entries()) {
+    if (!use || typeof use !== 'object') {
+      errors.push(`media[${index}] 不是对象`);
+      continue;
+    }
+    const approved = (use.assetId ? approvedByAssetId.get(use.assetId) : undefined)
+      ?? (use.slot ? approvedBySlot.get(use.slot) : undefined);
+    if (!approved) {
+      errors.push(`media[${index}] 引用了未批准素材 ${use.assetId ?? use.slot ?? '(缺少 assetId/slot)'}`);
+      continue;
+    }
+    if (usedAssetIds.has(approved.assetId)) {
+      errors.push(`media 重复声明素材 ${approved.assetId}`);
+    }
+    usedAssetIds.add(approved.assetId);
+    if (!use.purpose || typeof use.purpose !== 'string') {
+      errors.push(`media[${index}] 缺少 purpose（素材在论证中的作用）`);
+    }
+    if (!Array.isArray(use.beats) || use.beats.length === 0) {
+      errors.push(`media[${index}] 缺少 beats（素材出现在哪些叙事拍）`);
+      continue;
+    }
+    for (const beat of use.beats) {
+      if (!Number.isInteger(beat) || beat < 0 || beat >= sb.beats.length) {
+        errors.push(`media[${index}].beats 包含非法拍索引 ${String(beat)}`);
+      }
+    }
+  }
+  for (const asset of ctx.approvedAssets) {
+    if (asset.usage === 'required' && !usedAssetIds.has(asset.assetId)) {
+      errors.push(`必用素材 ${asset.assetId}（${asset.slot}）未写入 media 叙事关系`);
+    }
+  }
+
+  const transcriptNumbers = new Set(extractCheckableNumbers(ctx.transcript ?? ''));
+  if (transcriptNumbers.size > 0) {
+    const fabricated = new Set<string>();
+    for (const text of collectQuantifiedScreenStrings(sb)) {
+      for (const number of extractCheckableNumbers(text)) {
+        if (!transcriptNumbers.has(number)) fabricated.add(number);
+      }
+    }
+    if (fabricated.size > 0) {
+      errors.push(
+        `分镜中的数字 [${Array.from(fabricated).join(', ')}] 在本段逐字稿中不存在；数据必须忠于口播原文`,
       );
     }
   }

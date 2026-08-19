@@ -1,0 +1,66 @@
+{
+  "key": "global-rank-evidence",
+  "firstEntryIndex": 18,
+  "lastEntryIndex": 21,
+  "title": "排名来自长期积累",
+  "summary": "真实道路中的车辆状态与世界排名共同说明，结果来自持续落地，而不是突然发生。",
+  "semanticType": "data",
+  "complexityLevel": "high",
+  "visualizationScore": 92,
+  "pacingNeed": "accent",
+  "keywords": [
+    "世界500强",
+    "第91位",
+    "全球落地"
+  ],
+  "entities": [
+    "比亚迪",
+    "《财富》世界500强"
+  ],
+  "enabled": true,
+  "purpose": "evidence",
+  "carrier": "data-hero",
+  "intensity": 3,
+  "visualType": "footage",
+  "renderStrategy": "agent-composite",
+  "cameraMove": "tracking",
+  "mediaRole": "evidence",
+  "transition": "match-cut",
+  "footageQuery": "比亚迪 车辆 海外道路 行驶 实拍",
+  "compositionIntent": {
+    "narrativeGoal": "先用真实车辆行驶画面建立全球化落地事实，再让排名数字回应口播观点，形成从现场到结论的视觉论证。",
+    "focalPriority": "口播重音到来时，第 91 位是唯一信息焦点，真实车辆画面仍保持可辨识。",
+    "temporalRelationship": "素材先建立场景，排名随后进入并与车辆运动方向形成回应，结尾共同收束。",
+    "mustShow": [
+      "required 素材中的真实车辆必须清晰可见",
+      "排名第 91 位不得改写"
+    ],
+    "avoid": [
+      "广告式车型陈列",
+      "用生成画面冒充真实道路记录",
+      "让装饰图形遮挡车辆主体"
+    ]
+  },
+  "selectedAssets": [
+    {
+      "candidateId": "candidate:byd-road-02",
+      "usage": "required",
+      "trimStartMs": 4200,
+      "reason": "代表帧中车辆主体清晰，运动方向为排名数字留出视觉空间，且内容与口播事实一致。",
+      "confidence": 0.91
+    }
+  ],
+  "rejectedAssets": [
+    {
+      "candidateId": "candidate:byd-road-01",
+      "reason": "车辆只在远景短暂出现，裁剪后无法稳定辨识主体。",
+      "confidence": 0.86
+    }
+  ],
+  "fallbackPolicy": "block",
+  "strategyReason": "真实道路画面负责提供落地证据，排名信息层负责解释口播结论，两者必须按同一重音形成关系。",
+  "confidence": 0.91,
+  "mediaIndispensability": "真实车辆与道路状态提供来源特定的产品落地证据，符号化 Motion 不能等价替代。",
+  "graphicsIndispensability": "原始画面不包含世界 500 强排名，数字信息层承担结论与阅读顺序。",
+  "strategyStatus": "ready"
+}

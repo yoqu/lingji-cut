@@ -53,7 +53,7 @@ async function createPlan(
       percent: event.phase === 'planning'
         ? Math.round(event.percent * 0.65)
         : 65 + Math.round(event.percent * 0.35),
-      message: event.phase === 'planning' ? '分析内容结构' : '制定 Motion Bible',
+      message: event.phase === 'planning' ? '规划镜头并检索素材' : '复核镜头与媒介策略',
     });
   });
   try {

@@ -7,7 +7,11 @@ import { parseSrt } from '../../../src/lib/srt-parser';
 import { createPersistedAIState } from '../../../src/lib/ai-persistence';
 import { handleGenerateCardImage } from '../../card-media-handlers';
 import { assertCardRenders } from '../../remotion/smoke-render';
-import { createMotionCardAgentProvider } from '../motion-agent-run';
+import {
+  createMotionCardAgentProvider,
+  resolveMotionCardModels,
+  resolveMotionCardVisualModelCandidates,
+} from '../motion-agent-run';
 import { buildHybridSelectionFromPlan, type HybridSegmentDecision } from '../motion-hybrid';
 import { makeAgentFeedCallback } from '../agent-feed';
 import type { MotionCardAgentProvider, SegmentPlanningResult } from '../../../src/lib/ai-analysis';
@@ -23,9 +27,12 @@ import {
 } from '../../../src/lib/publish-metadata';
 import { resolvePromptBinding } from '../../../src/lib/llm/binding-resolver';
 import { resolveWorkTitle } from '../../../src/lib/project-persistence';
+import type { ProductionMutationGuard } from '../../../src/lib/production-mutations';
+import { alignCoverPromptTitle } from '../../../src/lib/cover-title';
 import type { GenerationRunCtx } from '../headless-generation';
 import type { SrtEntry } from '../../../src/types';
 import type { AISettings, AIAnalysisResult } from '../../../src/types/ai';
+import type { FootageCompositionInput } from '../../../src/types/footage';
 import { runDirectorApproveHeadless, runDirectorPlanHeadless } from './director-run';
 
 interface AnalyzeDeps {
@@ -81,19 +88,30 @@ export async function runAnalyzeHeadless(
   // hybrid 模式：批准方案后按全量段做每期上限预选（下方 else 分支赋值），
   // wrapper 按段把决议注入 ctx.hybridDecision，编排器据此分流 agent / template。
   let hybridSelection: Map<string, HybridSegmentDecision> | null = null;
+  const motionModels = resolveMotionCardModels(settings, projectBindings);
+  const visualModelCandidates = resolveMotionCardVisualModelCandidates(settings, projectBindings);
 
   // Motion TSX 多 agent provider（懒构造 electron 依赖，vitest 下 deps.analyze mock 不触达）。
   const generateMotionCard: MotionCardAgentProvider = async (mctx) => {
     const { app } = await import('electron');
+    const { resolveFfmpegPath } = await import('../../runtime-binaries');
     const provider = createMotionCardAgentProvider({
       userDataPath,
       projectPath,
       rolesSeedDir: join(app.getAppPath(), 'resources', 'pi-agents', 'agents'),
       contactSheetCacheDir: join(userDataPath, 'motion-contact-sheets'),
+      ffmpegPath: resolveFfmpegPath({
+        appPath: app.getAppPath(),
+        resourcesPath: process.resourcesPath,
+        cwd: process.cwd(),
+        moduleDir: __dirname,
+      }),
       signal: handle.signal,
       onPhase: (phase) => handle.update({ phase: `卡片:${phase}` }),
       // 观测面板关联键与统一进度条的 bridgeId 同值（pipeline:<taskId>）。
       onAgentEvent: makeAgentFeedCallback(`pipeline:${handle.taskId}`),
+      ...motionModels,
+      visualModelCandidates,
     });
     const hybrid = hybridSelection?.get(mctx.segmentId);
     // 保留 motionCardMode='hybrid'：编排器优先消费 hybridDecision，且遥测 / 里程碑
@@ -129,6 +147,7 @@ export async function runAnalyzeHeadless(
   // generateCardImage 复用主进程 handleGenerateCardImage（与 UI 行为一致，即时 materialize 图片卡）。
   handle.update({ phase: '分析与卡片', percent: 20 });
   let result: AIAnalysisResult;
+  let approvedPlanGuard: ProductionMutationGuard | undefined;
   if (deps.analyze) {
     result = await deps.analyze(entries, settings, {
       projectStylePresetId,
@@ -153,15 +172,35 @@ export async function runAnalyzeHeadless(
       mode: 'auto',
     });
     if (migrated.approvedPlan) {
+      const existingTitle = resolveWorkTitle(await loadProjectFile(projectPath));
+      const migratedPlan = existingTitle
+        ? {
+            ...migrated.approvedPlan,
+            title: existingTitle,
+            coverDirection: {
+              ...migrated.approvedPlan.coverDirection,
+              prompt: alignCoverPromptTitle(
+                migrated.approvedPlan.coverDirection.prompt,
+                existingTitle,
+              ),
+            },
+          }
+        : migrated.approvedPlan;
       await mutateProjectProduction(projectPath, {
         kind: 'set-workflow', stage: 'director-planning', mode: 'auto', taskId: handle.taskId,
       });
-      await mutateProjectProduction(projectPath, { kind: 'replace-draft', plan: migrated.approvedPlan });
-      await mutateProjectProduction(projectPath, {
+      await mutateProjectProduction(projectPath, { kind: 'replace-draft', plan: migratedPlan });
+      const approved = await mutateProjectProduction(projectPath, {
         kind: 'approve-draft',
-        expectedRevision: migrated.approvedPlan.revision,
+        expectedRevision: migratedPlan.revision,
         taskId: handle.taskId,
       });
+      if (approved.approvedPlan) {
+        approvedPlanGuard = {
+          expectedDirectorRevision: approved.approvedPlan.revision,
+          expectedTaskId: handle.taskId,
+        };
+      }
     }
   } else {
     const useApprovedPlan = ctx.params?.useApprovedPlan === true;
@@ -177,6 +216,46 @@ export async function runAnalyzeHeadless(
         })();
     const approvedPlan = approvedState?.approvedPlan;
     if (!approvedPlan) throw new GenerationError('director_approval_required', '导演方案批准失败。');
+    approvedPlanGuard = {
+      expectedDirectorRevision: approvedPlan.revision,
+      expectedTaskId: handle.taskId,
+    };
+    const claimedFootageSegmentIds = new Set(
+      Array.isArray(ctx.params?.claimedFootageSegmentIds)
+        ? ctx.params.claimedFootageSegmentIds.filter((id): id is string => typeof id === 'string')
+        : [],
+    );
+    const blockedFootageSegmentIds = new Set(
+      Array.isArray(ctx.params?.blockedFootageSegmentIds)
+        ? ctx.params.blockedFootageSegmentIds.filter((id): id is string => typeof id === 'string')
+        : [],
+    );
+    const visualTypeOverrides = new Map<string, 'image' | 'motion'>();
+    const renderStrategyOverrides = new Map<string, 'motion-card'>();
+    if (Array.isArray(ctx.params?.footageFallbacks)) {
+      for (const item of ctx.params.footageFallbacks) {
+        if (!item || typeof item !== 'object') continue;
+        const fallback = item as Record<string, unknown>;
+        if (
+          typeof fallback.segmentId === 'string'
+          && (fallback.visualType === 'image' || fallback.visualType === 'motion')
+        ) {
+          visualTypeOverrides.set(fallback.segmentId, fallback.visualType);
+          renderStrategyOverrides.set(fallback.segmentId, 'motion-card');
+        }
+      }
+    }
+    const compositionInputs = new Map<string, FootageCompositionInput[]>();
+    if (Array.isArray(ctx.params?.footageCompositionInputs)) {
+      for (const item of ctx.params.footageCompositionInputs) {
+        if (!item || typeof item !== 'object') continue;
+        const input = item as FootageCompositionInput;
+        if (typeof input.segmentId !== 'string' || !input.asset?.path) continue;
+        const inputs = compositionInputs.get(input.segmentId) ?? [];
+        inputs.push(input);
+        compositionInputs.set(input.segmentId, inputs);
+      }
+    }
     if (settings.motionCardMode === 'hybrid') {
       // hybrid 预选：与 analyze-srt IPC / generate-ai-card-for-segment 共用同一构建函数，
       // 只对启用的 motion 段按规则 + 每期上限截断。
@@ -191,6 +270,16 @@ export async function runAnalyzeHeadless(
     });
     result = await generateCardsFromDirectorPlan(entries, approvedPlan, settings, {
       existingCards: (await loadProjectFile(projectPath)).aiAnalysis?.analysisResult?.cards ?? [],
+      segmentIds: approvedPlan.segments
+        .filter((segment) => (
+          segment.enabled
+          && !claimedFootageSegmentIds.has(segment.id)
+          && !blockedFootageSegmentIds.has(segment.id)
+        ))
+        .map((segment) => segment.id),
+      visualTypeOverrides,
+      renderStrategyOverrides,
+      compositionInputs,
       generateCardImage: async (invoke) =>
         handleGenerateCardImage(
           {
@@ -233,21 +322,19 @@ export async function runAnalyzeHeadless(
   await headless.saveSection('aiAnalysis', {
     analysisResult: persisted.analysisResult,
     coverCandidates: existing?.coverCandidates ?? [],
-  });
+  }, approvedPlanGuard);
 
-  const production = (await loadProjectFile(projectPath)).production;
-  if (production?.approvedPlan) {
+  if (approvedPlanGuard?.expectedDirectorRevision != null) {
     await mutateProjectProduction(projectPath, {
       kind: 'set-output',
       output: 'cards',
       state: {
         status: result.cardErrors?.length ? 'failed' : 'current',
-        directorRevision: production.approvedPlan.revision,
+        directorRevision: approvedPlanGuard.expectedDirectorRevision,
         updatedAt: Date.now(),
         error: result.cardErrors?.length ? `${result.cardErrors.length} 个镜头生成失败` : undefined,
       },
-      expectedDirectorRevision: production.approvedPlan.revision,
-      expectedTaskId: handle.taskId,
+      ...approvedPlanGuard,
     });
   }
 

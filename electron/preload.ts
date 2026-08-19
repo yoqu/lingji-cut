@@ -154,7 +154,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     currentPrompt?: string;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
-    standalone?: boolean;
+    skipDirectorGate?: boolean;
     workTitle?: string;
   }) => ipcRenderer.invoke('regenerate-cover-prompt', args),
   generateCoverImages: (args: {
@@ -192,21 +192,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('delete-card-media-assets', { projectDir, cardId }),
   saveCoverEdit: (args: import('../src/lib/cover-editor/contracts').SaveCoverEditArgs) =>
     ipcRenderer.invoke('save-cover-edit', args),
-  lingjiLogin: () =>
-    ipcRenderer.invoke('lingji-login') as Promise<{
-      session: import('../src/lib/llm/lingji-gateway').LingjiSession;
-      base: string;
-    }>,
-  lingjiLogout: () => ipcRenderer.invoke('lingji-logout') as Promise<void>,
-  lingjiGetAccount: () =>
-    ipcRenderer.invoke('lingji-get-account') as Promise<
-      import('./lingji-account').LingjiAccount | null
-    >,
-  lingjiRefreshConfig: () =>
-    ipcRenderer.invoke('lingji-refresh-config') as Promise<{
-      session: import('../src/lib/llm/lingji-gateway').LingjiSession;
-      base: string;
-    } | null>,
   listSystemFonts: () =>
     ipcRenderer.invoke('list-system-fonts') as Promise<
       import('../src/lib/cover-editor/contracts').ListSystemFontsResult
@@ -287,6 +272,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectMediaFile: (kind: 'audio' | 'video' | 'srt' | 'image') => ipcRenderer.invoke('select-media-file', kind),
   findLatestExport: (projectDir: string) => ipcRenderer.invoke('find-latest-export', projectDir),
   scanCoverImages: (projectDir: string) => ipcRenderer.invoke('scan-cover-images', projectDir),
+  importCoverImages: (dir: string, ratio?: string) =>
+    ipcRenderer.invoke('import-cover-images', dir, ratio),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   addAsset: () => ipcRenderer.invoke('add-asset'),
   scanProjectAssets: (projectDir: string) =>
@@ -359,6 +346,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       import('../src/types/assets').ProjectAssetManifest | null
     >,
   renderVideo: (args: {
+    projectDir: string;
     timeline: string;
     outputPath: string;
     exportConfig: ExportConfig;
@@ -652,6 +640,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       events: import('../src/lib/telemetry/auto-run').AutoRunEvent[];
     } | null>,
   getAutoRunLogDir: () => ipcRenderer.invoke('auto-run-telemetry/get-log-dir') as Promise<string>,
+  // ── footage 轨：灵机素材（KaCut）本机 MCP 服务 ──
+  kacutHealth: (baseUrl: string) =>
+    ipcRenderer.invoke('footage:health', baseUrl) as Promise<boolean>,
+  kacutSearchClips: (args: { baseUrl: string } & import('../src/types/footage').KacutSearchClipsArgs) =>
+    ipcRenderer.invoke('footage:search-clips', args) as Promise<import('../src/types/footage').KacutClip[]>,
+  kacutLibraryDigest: (baseUrl: string) =>
+    ipcRenderer.invoke('footage:library-digest', baseUrl) as Promise<import('../src/types/footage').KacutLibraryDigest>,
+  getLocalFileFingerprint: (args: { filePath: string; baseDir?: string }) =>
+    ipcRenderer.invoke('footage:file-fingerprint', args) as Promise<string | null>,
   loadRecentProjects: () => ipcRenderer.invoke('load-recent-projects'),
   addRecentProject: (projectDir: string, projectName?: string) =>
     ipcRenderer.invoke('add-recent-project', projectDir, projectName),
@@ -910,8 +907,59 @@ contextBridge.exposeInMainWorld('publishAPI', {
   run: (job: import('../src/lib/electron-api').PublishJobInput, headless?: boolean) =>
     ipcRenderer.invoke('publish:run', job, headless),
   cancel: () => ipcRenderer.invoke('publish:cancel'),
-  loadStandaloneState: () => ipcRenderer.invoke('publish:standalone-load'),
-  saveStandaloneState: (state: unknown) => ipcRenderer.invoke('publish:standalone-save', state),
+  listHubJobs: () => ipcRenderer.invoke('publish:hub-list'),
+  addHubJob: (workDir: string) => ipcRenderer.invoke('publish:hub-add', workDir),
+  removeHubJob: (workDir: string) => ipcRenderer.invoke('publish:hub-remove', workDir),
+  loadHubJob: (workDir: string) => ipcRenderer.invoke('publish:hub-load', workDir),
+  saveHubJob: (workDir: string, state: unknown) => ipcRenderer.invoke('publish:hub-save', workDir, state),
+  startIngest: (args: {
+    taskId: string;
+    workDir: string;
+    settings: import('../src/types/ai').AISettings;
+    projectBindings?: import('../src/types/ai').PromptBindingMap | null;
+    telemetryRunId?: string | null;
+  }) => ipcRenderer.invoke('publish:ingest-start', args),
+  cancelIngest: () => ipcRenderer.invoke('publish:ingest-cancel'),
+  onIngestProgress: (
+    cb: (payload: {
+      taskId: string;
+      workDir: string;
+      phase: string;
+      percent: number;
+      toolName?: string;
+    }) => void,
+  ) => {
+    const handler = (
+      _e: unknown,
+      payload: {
+        taskId: string;
+        workDir: string;
+        phase: string;
+        percent: number;
+        toolName?: string;
+      },
+    ) => cb(payload);
+    ipcRenderer.on('publish:ingest-progress', handler);
+    return () => ipcRenderer.removeListener('publish:ingest-progress', handler);
+  },
+  onIngestEvent: (
+    cb: (payload: {
+      taskId: string;
+      workDir: string;
+      event: import('../src/lib/publish/ingest-trace').PublishIngestTraceEvent;
+    }) => void,
+  ) => {
+    const handler = (
+      _e: unknown,
+      payload: {
+        taskId: string;
+        workDir: string;
+        event: import('../src/lib/publish/ingest-trace').PublishIngestTraceEvent;
+      },
+    ) => cb(payload);
+    ipcRenderer.on('publish:ingest-event', handler);
+    return () => ipcRenderer.removeListener('publish:ingest-event', handler);
+  },
   onQrcode: (cb: (payload: { platform: string; accountName: string; png: string }) => void) => {
     const handler = (_e: unknown, payload: { platform: string; accountName: string; png: string }) =>
       cb(payload);

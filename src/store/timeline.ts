@@ -93,7 +93,15 @@ export interface TimelineStore {
   replaceAICardsOnTimeline: (
     cards: AICardTimelineDraft[],
     sourceCardIds: string[],
-    options?: { skipAutosave?: boolean },
+    options?: {
+      skipAutosave?: boolean;
+      /**
+       * 制作提交时同批替换的 footage 素材 overlay：与同一次 set() 内移除全部
+       * 旧 footage overlay（footageData 标记）并按 startMs 并入新批次，
+       * 保证卡片 + 素材的原子替换只产生一条撤销历史。
+       */
+      footageOverlays?: OverlayItem[];
+    },
   ) => void;
   appendAICardToTimeline: (
     card: AICardTimelineDraft,
@@ -908,7 +916,7 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
       const sourceIds = new Set(sourceCardIds);
       const nextSourceIds = new Set(cards.map((card) => card.sourceCardId));
       const tracks = [...state.timeline.tracks];
-      const overlays = state.timeline.overlays.filter((overlay) => (
+      let overlays = state.timeline.overlays.filter((overlay) => (
         overlay.overlayType !== 'ai-card'
         || !overlay.aiCardData?.sourceCardId
         || !sourceIds.has(overlay.aiCardData.sourceCardId)
@@ -916,6 +924,20 @@ export const useTimelineStore = create<TimelineStore>((set, get) => ({
       ));
       for (const card of cards) {
         applyAICardDraftToTimeline(state, tracks, overlays, card);
+      }
+      if (options?.footageOverlays) {
+        // footage 素材 overlay 与卡片同批原子替换：先移除全部旧 footage
+        // （footageData 标记），再按 startMs 并入新批次；visual-2 缺失时补建。
+        if (
+          options.footageOverlays.length > 0
+          && !tracks.some((track) => track.id === DEFAULT_AI_CARDS_TRACK_ID)
+        ) {
+          tracks.push(createVisualTrack(2, 2));
+        }
+        overlays = overlays.filter((overlay) => !overlay.footageData);
+        overlays.push(
+          ...[...options.footageOverlays].sort((left, right) => left.startMs - right.startMs),
+        );
       }
       const nextTimeline = normalizeTimeline({ ...state.timeline, tracks, overlays });
       return buildCommittedTimelineState(state, nextTimeline);

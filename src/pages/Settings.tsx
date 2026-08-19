@@ -1,9 +1,10 @@
 import { useCallback, useRef, useState } from 'react';
-import { ArrowLeft, Bot, Cpu, DatabaseBackup, Heart, MessageCircle, Music2, Share2, Sparkles, Volume2 } from 'lucide-react';
+import { ArrowLeft, Bot, Cpu, DatabaseBackup, Heart, LibraryBig, MessageCircle, Music2, Share2, Sparkles, Volume2 } from 'lucide-react';
 import { ConfigBackupTab } from '../components/settings/ConfigBackupTab';
 import { AIConfigTab } from '../components/settings/AIConfigTab';
 import { TTSConfigTab } from '../components/settings/TTSConfigTab';
 import { SunoAudioConfigTab } from '../components/settings/SunoAudioConfigTab';
+import { KacutConnectTab } from '../components/settings/KacutConnectTab';
 import { AgentSettingsTab } from '../components/settings/AgentSettingsTab';
 import { PromptsConfigTab } from '../components/settings/PromptsConfigTab';
 import { PublishAccountsTab } from '../components/settings/PublishAccountsTab';
@@ -17,6 +18,7 @@ export type SettingsTab =
   | 'ai-config'
   | 'tts'
   | 'audio-generation'
+  | 'kacut-connect'
   | 'agent'
   | 'prompts'
   | 'backup'
@@ -28,6 +30,7 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Bot }[] = [
   { id: 'ai-config', label: 'AI 基础配置', icon: Bot },
   { id: 'tts', label: '口播合成', icon: Volume2 },
   { id: 'audio-generation', label: 'BGM 与音效', icon: Music2 },
+  { id: 'kacut-connect', label: '素材联动', icon: LibraryBig },
   { id: 'agent', label: 'AI Agent', icon: Cpu },
   { id: 'prompts', label: '提示词配置', icon: Sparkles },
   { id: 'backup', label: '配置备份', icon: DatabaseBackup },
@@ -152,6 +155,9 @@ export function Settings({ onBack, initialTab }: SettingsProps) {
               tabLeaveGuardRef.current = guard;
             }}
           />
+        </TabsContent>
+        <TabsContent value="kacut-connect" className={styles.contentPanel}>
+          <KacutConnectTab />
         </TabsContent>
         <TabsContent value="agent" className={styles.contentPanel}>
           <AgentSettingsTab />

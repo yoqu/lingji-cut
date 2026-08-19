@@ -1,5 +1,5 @@
 // 发布执行编排（项目无关）：一键发布 → 登录失效弹窗确认 → 就地重登 → 自动续发 → 汇总历史。
-// 从 PublishWorkbench 抽出，供项目发布 tab 与欢迎页自由发布共用。
+// 从 PublishWorkbench 抽出，供项目发布 tab 与发布中心共用。
 
 import { useEffect, useRef, useState } from 'react';
 import { usePublishStore, type PublishResult } from '../../../store/publish';

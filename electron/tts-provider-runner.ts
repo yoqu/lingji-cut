@@ -1,5 +1,4 @@
 import type { TTSProvider, TTSVoicePreset } from '../src/types/ai';
-import { INSUFFICIENT_CREDITS_MESSAGE, isLingjiGatewayKey } from '../src/lib/llm/credits-error';
 import {
   buildMinimaxTtsRequestBody,
   decodeMinimaxAudioData,
@@ -56,9 +55,6 @@ async function runMinimaxTTS(options: TTSRunnerOptions): Promise<TTSRunnerResult
   });
 
   if (!response.ok) {
-    if (response.status === 402 && isLingjiGatewayKey(provider.apiKey)) {
-      throw new Error(INSUFFICIENT_CREDITS_MESSAGE);
-    }
     const errText = await response.text().catch(() => String(response.status));
     throw new Error(`MiniMax TTS 请求失败: ${errText}`);
   }

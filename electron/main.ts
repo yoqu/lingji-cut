@@ -32,6 +32,7 @@ import { registerAgentIpc } from './acp/ipc';
 import { registerConversationIpc } from './conversations/ipc';
 import { registerScriptHistoryIpc } from './script-history/ipc';
 import { registerPublishIpc } from './publish/ipc';
+import { registerPublishHubIpc } from './publish/hub-ipc';
 import { configureBiliupRoot } from './publish/biliup-runtime';
 import { getBiliupDestRoot } from './publish/biliup-install';
 import { LockMonitor } from './ai-edit/lock-watcher';
@@ -48,6 +49,13 @@ import {
   type AutoRunEvent,
 } from './telemetry/auto-run-logger';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
+import {
+  checkKacutHealth,
+  getKacutLibraryDigest,
+  searchKacutClips,
+} from './footage/kacut-client';
+import { readLocalFileFingerprint } from './footage/file-fingerprint';
+import type { KacutSearchClipsArgs } from '../src/types/footage';
 import { startControlServer, stopControlServer, getSonarInboxStore, getSonarBridgeInfo } from './control/server';
 import { loadProjectFile, mutateProjectProduction, saveProjectSection } from './project-file';
 import type { ProductionMutation } from '../src/lib/production-mutations';
@@ -95,9 +103,9 @@ import type { WechatArticleMaterializeRequest } from '../src/lib/article-import-
 import { createWorkbenchTabContextMenuTemplate } from './workbench-tab-context-menu';
 import { getWindowChromeOptions } from './window-chrome';
 import { getPipelineService, attachTaskProgressBridge } from './pipeline';
+import { createProductionStartupRecovery } from './production-startup-recovery';
 import { runSculptCard } from './pipeline/runs/card-run';
 import { setActiveProjectPath } from './pipeline/context';
-import { lingjiLogin, lingjiLogout, lingjiRefreshConfig, loadAccount } from './lingji-account';
 import { sendToLiveWindow } from './safe-window-send';
 
 const execFileAsync = promisify(execFile);
@@ -137,6 +145,16 @@ function writeAppLog(level: 'info' | 'warn' | 'error', scope: string, message: s
     mainWindow?.webContents.send('app-log', entry);
   }
 }
+
+const loadProjectWithStartupRecovery = createProductionStartupRecovery({
+  getTask: (taskId) => getPipelineService().getTask(taskId),
+  onRecovered: (projectDir, taskId) => {
+    writeAppLog('warn', 'production', '已暂停重启前遗留的制作任务', `${projectDir} task=${taskId ?? 'none'}`);
+  },
+  onError: (projectDir, error) => {
+    writeAppLog('warn', 'production', '恢复重启前制作状态失败', `${projectDir}: ${String(error)}`);
+  },
+});
 
 function getCurrentAppConfig(): ResolvedAppConfig {
   if (appConfig) {
@@ -529,7 +547,13 @@ ipcMain.handle(
   'mutate-project-production',
   async (_event, projectDir: string, mutation: ProductionMutation) => {
     const production = await mutateProjectProduction(projectDir, mutation);
-    emitProjectUpdated(() => mainWindow, projectDir, ['production']);
+    emitProjectUpdated(
+      () => mainWindow,
+      projectDir,
+      mutation.kind === 'replace-draft' && mutation.plan.title?.trim()
+        ? ['production', 'meta', 'publish']
+        : ['production'],
+    );
     return production;
   },
 );
@@ -579,6 +603,38 @@ ipcMain.handle('auto-run-telemetry/get-latest', async () => {
 
 ipcMain.handle('auto-run-telemetry/get-log-dir', async () => getAutoRunLogDir());
 
+// ─────────────────────────────────────────────────────────────
+// footage 轨：灵机素材（KaCut）本机 MCP 服务代理
+// renderer 不直接发 HTTP，统一走主进程（与遥测同一注入原则）。
+// ─────────────────────────────────────────────────────────────
+ipcMain.handle('footage:health', async (_event, baseUrl: string) => {
+  return checkKacutHealth(baseUrl);
+});
+
+ipcMain.handle(
+  'footage:search-clips',
+  async (_event, args: { baseUrl: string } & KacutSearchClipsArgs) => {
+    const { baseUrl, ...searchArgs } = args;
+    return searchKacutClips(baseUrl, searchArgs);
+  },
+);
+
+ipcMain.handle('footage:library-digest', async (_event, baseUrl: string) => {
+  return getKacutLibraryDigest(baseUrl);
+});
+
+ipcMain.handle(
+  'footage:file-fingerprint',
+  async (_event, args: { filePath: string; baseDir?: string }) => {
+    const filePath = args.filePath?.trim();
+    if (!filePath) return null;
+    const resolved = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(args.baseDir?.trim() || process.cwd(), filePath);
+    return readLocalFileFingerprint(resolved);
+  },
+);
+
 registerAiGenerationIpc({
   getMainWindow: () => mainWindow,
   writeAppLog,
@@ -589,7 +645,7 @@ registerDirectorWorkflowIpc({
 });
 
 ipcMain.handle('load-project', async (_event, projectDir: string) => {
-  const data = await loadProjectFile(projectDir);
+  const data = await loadProjectWithStartupRecovery(projectDir);
   setActiveProjectPath(projectDir);
   return JSON.stringify(data, null, 2);
 });
@@ -891,7 +947,14 @@ ipcMain.handle('sonar-inbox-clear', async () => {
   return store ? store.clear() : 0;
 });
 
-ipcMain.handle('sonar-bridge-info', async () => getSonarBridgeInfo());
+ipcMain.handle('sonar-bridge-info', async () => {
+  const info = getSonarBridgeInfo();
+  // 桥的 lastSeenAt 是进程内内存，重启即清零；用收件箱最近收件时间兜底"曾配对过"的结论
+  const store = getSonarInboxStore();
+  const items = store ? await store.list() : [];
+  const latestReceivedAt = items.reduce((max, item) => Math.max(max, item.receivedAt || 0), 0);
+  return latestReceivedAt > (info.lastSeenAt ?? 0) ? { ...info, lastSeenAt: latestReceivedAt } : info;
+});
 
 // 轻量级抖音链接解析：仅获取标题和视频 ID，不下载视频
 ipcMain.handle('resolve-douyin-url', async (_event, url: string) => {
@@ -1194,12 +1257,6 @@ ipcMain.handle('list-system-fonts', async () => {
   return listSystemFonts();
 });
 
-// 灵机剪影账户：浏览器授权登录 / 退出 / 读缓存账户（服务器基址烘焙进包，渲染层不可见改）
-ipcMain.handle('lingji-login', async () => lingjiLogin());
-ipcMain.handle('lingji-logout', async () => lingjiLogout());
-ipcMain.handle('lingji-get-account', async () => loadAccount());
-ipcMain.handle('lingji-refresh-config', async () => lingjiRefreshConfig());
-
 // 开发模式下让 Ctrl+C 能正常退出 Electron
 if (process.env.NODE_ENV_ELECTRON_VITE === 'development') {
   process.on('SIGINT', () => app.quit());
@@ -1210,11 +1267,24 @@ registerAgentIpc(() => mainWindow);
 registerConversationIpc(() => mainWindow);
 registerScriptHistoryIpc();
 registerPublishIpc();
+registerPublishHubIpc(() => mainWindow);
 
 // 设置 macOS 系统菜单栏应用名称
 app.setName('灵机剪影');
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+
+app.on('second-instance', () => {
+  const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return;
   refreshAppConfig();
   // biliup 二进制按需下载到用户可写目录，注入该目录作为解析根
   configureBiliupRoot(getBiliupDestRoot());
@@ -1229,6 +1299,8 @@ app.whenReady().then(async () => {
       }
     }
   }
+  // 账号体系已移除：清掉遗留的加密账户文件（含 lj_ 网关密钥）
+  void fs.unlink(path.join(os.homedir(), '.lingji', 'account.json')).catch(() => undefined);
   // 一次性迁移：把旧 customTemplates 转为 userData/prompts/script-template/*.yaml
   try {
     const userDataPath = app.getPath('userData');

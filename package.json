@@ -86,6 +86,7 @@
     "remark-gfm": "^4.0.0",
     "remotion": "^4.0.484",
     "tailwind-merge": "^3.4.0",
+    "typebox": "1.1.38",
     "uuid": "^13.0.0",
     "wavesurfer.js": "^7.12.5",
     "yaml": "^2.8.3",

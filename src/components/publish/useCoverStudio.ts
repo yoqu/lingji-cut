@@ -33,6 +33,38 @@ export function classifyRatio(width: number, height: number): ImageAspectRatio |
   return bestErr <= 0.06 ? best : null;
 }
 
+const RATIO_FILE_TAGS: Record<string, ImageAspectRatio> = {
+  '16x9': '16:9',
+  '4x3': '4:3',
+  '3x4': '3:4',
+};
+
+/** 手动导入的封面文件名带比例标记（local-4x3-…）；据此保留用户指定的比例，不做像素判定。 */
+export function ratioFromFileName(filePath: string): ImageAspectRatio | null {
+  const name = filePath.split(/[/\\]/).pop() ?? '';
+  const matched = /^local-(16x9|4x3|3x4)-/.exec(name);
+  return matched ? RATIO_FILE_TAGS[matched[1]] : null;
+}
+
+/** 选择本地图片复制进 covers/，转成指定比例的候选（比例以用户点选的槽位为准）。 */
+export async function importLocalCovers(
+  dir: string,
+  ratio: ImageAspectRatio,
+): Promise<CoverCandidate[]> {
+  if (typeof window.electronAPI?.importCoverImages !== 'function') {
+    throw new Error('本地图片导入能力未加载，请完全退出并重启应用后再试');
+  }
+  const files = await window.electronAPI.importCoverImages(dir, ratio);
+  return files.map((file, index) => ({
+    id: `local-${file.mtimeMs}-${index}`,
+    prompt: '',
+    imageUrl: file.path,
+    selected: false,
+    aspectRatio: ratio,
+    createdAt: file.mtimeMs,
+  }));
+}
+
 /** 按比例合并 store 候选与磁盘封面；旧候选缺少比例时以磁盘真实尺寸为准。 */
 export function groupCoverCandidatesByRatio(
   coverCandidates: CoverCandidate[],
@@ -179,6 +211,8 @@ export interface CoverStudio {
   regenerateOne: (candidateId: string) => Promise<void>;
   fillMissing: () => Promise<void>;
   regenerateAll: () => Promise<void>;
+  /** 手动选择本地图片作为该比例封面；返回首张导入图片路径，取消或失败返回 null。 */
+  importLocal: (ratio: ImageAspectRatio) => Promise<string | null>;
 }
 
 export function useCoverStudio(projectDir?: string | null): CoverStudio {
@@ -219,7 +253,7 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
       const found = await window.electronAPI.scanCoverImages(dir);
       const mapped: DiskCover[] = [];
       for (const f of found) {
-        const ratio = classifyRatio(f.width, f.height);
+        const ratio = ratioFromFileName(f.path) ?? classifyRatio(f.width, f.height);
         if (ratio) mapped.push({ path: f.path, ratio, mtimeMs: f.mtimeMs });
       }
       setDiskCovers(mapped);
@@ -370,6 +404,32 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
     }
   }, [persist, runGeneration, scanDisk]);
 
+  const importLocal = useCallback(
+    async (ratio: ImageAspectRatio): Promise<string | null> => {
+      setError(null);
+      const dir = resolveDir();
+      if (!dir) {
+        setError('未找到项目目录');
+        return null;
+      }
+      try {
+        const imported = await importLocalCovers(dir, ratio);
+        if (imported.length === 0) return null;
+        await persist(appendCoverGenerationHistory(
+          useAIStore.getState().coverCandidates,
+          imported,
+        ));
+        return imported[0].imageUrl;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '导入本地图片失败');
+        return null;
+      } finally {
+        void scanDisk();
+      }
+    },
+    [persist, resolveDir, scanDisk],
+  );
+
   return {
     basePrompt,
     groups,
@@ -378,6 +438,7 @@ export function useCoverStudio(projectDir?: string | null): CoverStudio {
     error,
     scanUnavailable,
     missingRatios,
+    importLocal,
     regenerateRatio,
     regenerateOne,
     fillMissing,

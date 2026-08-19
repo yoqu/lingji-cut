@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendCoverGenerationHistory,
   autoFillCovers,
   buildRatioPrompt,
   classifyRatio,
   groupCoverCandidatesByRatio,
+  importLocalCovers,
+  ratioFromFileName,
   resolveCoverStudioBasePrompt,
   resolvePublishRatioPrompt,
 } from '../src/components/publish/useCoverStudio';
@@ -151,5 +153,59 @@ describe('autoFillCovers', () => {
     const current = { '4:3': '/h.png', '3:4': '/v.png' };
     expect(autoFillCovers(g({ '4:3': '/x.png' }), current)).toBe(current);
     expect(autoFillCovers({ '16:9': [], '4:3': [], '3:4': [] }, {})).toEqual({});
+  });
+});
+
+describe('ratioFromFileName', () => {
+  it('识别手动导入封面的比例标记', () => {
+    expect(ratioFromFileName('/p/covers/local-4x3-1700000000000-0.png')).toBe('4:3');
+    expect(ratioFromFileName('C:\\p\\covers\\local-3x4-1-0.jpg')).toBe('3:4');
+    expect(ratioFromFileName('/p/covers/local-16x9-1-0.webp')).toBe('16:9');
+  });
+
+  it('AI 生成或无标记文件名返回 null（回落像素判定）', () => {
+    expect(ratioFromFileName('/p/covers/cover-abc.png')).toBeNull();
+    expect(ratioFromFileName('/p/covers/my-local-4x3.png')).toBeNull();
+  });
+});
+
+describe('importLocalCovers', () => {
+  const stubWindow = (api: unknown) => {
+    (globalThis as { window?: unknown }).window = { electronAPI: api };
+  };
+
+  afterEach(() => {
+    delete (globalThis as { window?: unknown }).window;
+  });
+
+  it('按点选的比例生成候选，不做像素判定', async () => {
+    const importCoverImages = vi.fn().mockResolvedValue([
+      { path: '/p/covers/local-3x4-1-0.png', width: 1000, height: 1000, mtimeMs: 42 },
+    ]);
+    stubWindow({ importCoverImages });
+
+    const out = await importLocalCovers('/p', '3:4');
+
+    expect(importCoverImages).toHaveBeenCalledWith('/p', '3:4');
+    expect(out).toEqual([
+      {
+        id: 'local-42-0',
+        prompt: '',
+        imageUrl: '/p/covers/local-3x4-1-0.png',
+        selected: false,
+        aspectRatio: '3:4',
+        createdAt: 42,
+      },
+    ]);
+  });
+
+  it('取消选择返回空数组', async () => {
+    stubWindow({ importCoverImages: vi.fn().mockResolvedValue([]) });
+    expect(await importLocalCovers('/p', '4:3')).toEqual([]);
+  });
+
+  it('主进程能力缺失时报错提示重启', async () => {
+    stubWindow({});
+    await expect(importLocalCovers('/p', '4:3')).rejects.toThrow('重启应用');
   });
 });

@@ -25,6 +25,7 @@ import {
   areDirectorSoundEffectsEnabled,
   isDirectorBgmEnabled,
 } from './director-audio-options';
+import { syncDirectorPlanMotionBible } from './director-workflow';
 
 function fallbackBible(): MotionBible {
   return {
@@ -160,7 +161,8 @@ function attachTransitions(shots: VisualShot[], bible: MotionBible): VisualShot[
     const match = bible.transitionRules.matchCutCandidates.find(
       (item) => item.fromSegmentId === previous.segmentId && item.toSegmentId === shot.segmentId,
     );
-    const kind = match ? 'match-cut' : bible.transitionRules.default;
+    const directive = bible.carrierPlan.find((item) => item.segmentId === shot.segmentId);
+    const kind = match ? 'match-cut' : directive?.transition ?? bible.transitionRules.default;
     const transition = { kind, durationMs: kind === 'hard-cut' ? 0 : 300, motif: match?.motif };
     return { ...shot, transitionIn: transition };
   }).map((shot, index, all) => (
@@ -232,6 +234,9 @@ function directorShot(segment: DirectorPlan['segments'][number]): VisualShot {
     purpose: segment.purpose,
     carrier: segment.carrier,
     intensity: segment.intensity,
+    composition: segment.composition ?? (segment.visualType === 'motion' ? 'graphic' : 'full-bleed'),
+    cameraMove: segment.cameraMove ?? (segment.visualType === 'motion' ? 'static' : 'push-in'),
+    mediaRole: segment.mediaRole ?? (segment.semanticType === 'data' ? 'evidence' : 'context'),
     beats: [
       { role: 'reveal', cueMs: Math.round(durationMs * 0.15), description: segment.rationale },
       { role: 'emphasis', cueMs: Math.round(durationMs * 0.45), description: segment.summary },
@@ -286,6 +291,7 @@ export function buildDirectorExecutionPlan(
   durationMs: number,
   now = Date.now(),
 ): MotionProductionPlan {
+  const executionBible = syncDirectorPlanMotionBible(plan);
   const baseShots = plan.segments.filter((segment) => segment.enabled).map(directorShot);
   const sequences = directorSequences(plan.segments, baseShots);
   const cues = areDirectorSoundEffectsEnabled(plan.audioDirection)
@@ -293,11 +299,11 @@ export function buildDirectorExecutionPlan(
     : { stingers: [], sfx: [] };
   const shots = attachTransitions(
     attachCueIds(baseShots, [...cues.stingers, ...cues.sfx]),
-    plan.motionBible,
+    executionBible,
   );
   return {
     version: 2,
-    motionBible: plan.motionBible,
+    motionBible: executionBible,
     sequences,
     shots,
     audioPlan: {

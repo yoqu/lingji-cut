@@ -795,6 +795,7 @@ export function Editor({
 
     try {
       await window.electronAPI.renderVideo({
+        projectDir,
         timeline: JSON.stringify(timeline),
         outputPath: savePath,
         exportConfig,
@@ -820,7 +821,7 @@ export function Editor({
     } finally {
       setIsExporting(false);
     }
-  }, [timeline]);
+  }, [projectDir, timeline]);
 
   return (
     <div

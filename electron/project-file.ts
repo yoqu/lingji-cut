@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   createDefaultProjectData,
+  extractMetaSection,
+  extractPublishSection,
   migrateProjectData,
   mergeProjectSection,
   type ProjectData,
@@ -18,6 +20,7 @@ import { createEmptyProductionState } from '../src/lib/director-workflow';
 import {
   applyProductionMutation,
   assertProductionMutationGuard,
+  normalizeProductionStateInvariant,
   type ProductionMutation,
   type ProductionMutationGuard,
 } from '../src/lib/production-mutations';
@@ -159,9 +162,8 @@ function cardIo(projectDir: string) {
 }
 
 /**
- * 旧工程的 aiAnalysis 可能遗留 motionCards / storyboardPlan 等已下线字段。
- * 检测到时仅做内存态剥离，不回写磁盘（下次保存 aiAnalysis 段时自然清除）；
- * workflowMeta 缺省由 extractWorkflowMetaSection 默认填充，无需落盘补全。
+ * 清理旧工程中已经失效的 AI 字段与制作中间态。非 production-running
+ * 阶段不能保留 generating，否则重启后导演台会一直显示上一任务仍在保存。
  */
 function normalizeProjectData(data: ProjectData): ProjectData {
   const currentAI = data.aiAnalysis;
@@ -171,13 +173,20 @@ function normalizeProjectData(data: ProjectData): ProjectData {
     'storyboardPlan' in currentAI ||
     currentAI.analysisResult === undefined ||
     currentAI.coverCandidates === undefined;
-  if (!legacyExtras) return data;
+  const production = data.production
+    ? normalizeProductionStateInvariant(data.production, data.production.workflow.updatedAt)
+    : undefined;
+  const repairedProduction = production !== data.production;
+  if (!legacyExtras && !repairedProduction) return data;
   return {
     ...data,
-    aiAnalysis: {
-      analysisResult: currentAI?.analysisResult ?? null,
-      coverCandidates: currentAI?.coverCandidates ?? [],
-    },
+    ...(legacyExtras ? {
+      aiAnalysis: {
+        analysisResult: currentAI?.analysisResult ?? null,
+        coverCandidates: currentAI?.coverCandidates ?? [],
+      },
+    } : {}),
+    ...(repairedProduction ? { production } : {}),
   };
 }
 
@@ -191,9 +200,12 @@ async function loadProjectFileRaw(projectDir: string): Promise<ProjectData> {
   if (read.status === 'ok') {
     const migrated = migrateProjectData(read.data);
     const normalized = normalizeProjectData(migrated.data);
-    if (migrated.migrated) {
-      const raw = await fs.readFile(path.join(projectDir, PROJECT_FILE), 'utf-8');
-      await backupLegacyProjectFile(projectDir, raw);
+    const repairedProduction = normalized.production !== migrated.data.production;
+    if (migrated.migrated || repairedProduction) {
+      if (migrated.migrated) {
+        const raw = await fs.readFile(path.join(projectDir, PROJECT_FILE), 'utf-8');
+        await backupLegacyProjectFile(projectDir, raw);
+      }
       await writeProjectJson(projectDir, normalized);
     }
     return normalized;
@@ -225,6 +237,7 @@ export async function loadProjectFile(projectDir: string): Promise<ProjectData> 
 export async function mutateProjectProduction(
   projectDir: string,
   mutation: ProductionMutation,
+  validateCurrent?: (project: ProjectData) => void,
 ): Promise<ProjectProductionState> {
   return withWriteLock(projectDir, async () => {
     const read = await readProjectJsonClassified(projectDir);
@@ -235,9 +248,26 @@ export async function mutateProjectProduction(
     const current = read.status === 'ok'
       ? migrateProjectData(read.data).data
       : createDefaultProjectData();
-    const base = current.production ?? createEmptyProductionState();
+    validateCurrent?.(current);
+    const rawBase = current.production ?? createEmptyProductionState();
+    const base = normalizeProductionStateInvariant(rawBase, rawBase.workflow.updatedAt);
     const production = applyProductionMutation(base, mutation);
-    await writeProjectJson(projectDir, mergeProjectSection(current, 'production', production));
+    const withProduction = mergeProjectSection(current, 'production', production);
+    const draft = mutation.kind === 'replace-draft' ? production.draftPlan : null;
+    const workTitle = mutation.kind === 'replace-draft' ? mutation.plan.title?.trim() : undefined;
+    const publish = extractPublishSection(current);
+    const next = draft && workTitle
+      ? {
+          ...withProduction,
+          meta: { ...extractMetaSection(current), title: workTitle },
+          publish: {
+            ...publish,
+            title: workTitle,
+            desc: publish.desc.trim() || draft.summary.trim(),
+          },
+        }
+      : withProduction;
+    await writeProjectJson(projectDir, next);
     return production;
   });
 }

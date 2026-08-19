@@ -13,7 +13,7 @@ describe('Setup', () => {
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
         onImportProject={() => undefined}
-        onOpenFreePublish={() => undefined}
+        onOpenPublishHub={() => undefined}
       />,
     );
 
@@ -21,6 +21,7 @@ describe('Setup', () => {
     expect(html).toContain('导入文稿');
     expect(html).toContain('导入媒体');
     expect(html).toContain('导入项目');
+    expect(html).toContain('发布视频');
     expect(html).not.toContain('所有文件均在本地处理');
   });
 
@@ -34,7 +35,7 @@ describe('Setup', () => {
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
         onImportProject={() => undefined}
-        onOpenFreePublish={() => undefined}
+        onOpenPublishHub={() => undefined}
       />,
     );
 
@@ -58,7 +59,7 @@ describe('Setup', () => {
         onOpenSettings={() => undefined}
         onMediaImport={async () => undefined}
         onImportProject={() => undefined}
-        onOpenFreePublish={() => undefined}
+        onOpenPublishHub={() => undefined}
       />,
     );
 

@@ -111,6 +111,65 @@ describe('validateStoryboardData（per-carrier data 机器校验）', () => {
     expect(errorsOf(sb({ carrier: 'trend', data: { points: [43, 40, 38] } }))).toEqual([]);
   });
 
+  it('允许把中文口播数字精确写成阿拉伯数字卡面', () => {
+    const transcript = '总销量四十一万九千两百一十一辆，海外销量十七万九千八百四十一辆，同比增长百分之一百二十四点三。';
+    const errors = errorsOf(sb({
+      carrier: 'data-hero',
+      data: {
+        variant: 'stat-grid',
+        items: [
+          { value: '419,211辆', label: '总销量' },
+          { value: '179,841辆', label: '海外销量' },
+          { value: '124.3%', label: '同比增长' },
+        ],
+      },
+    }), transcript);
+
+    expect(errors).toEqual([]);
+  });
+
+  it('中文数量写法被卡面风格门禁打回，专有名词不误伤', () => {
+    const chineseNumbers = errorsOf(sb({
+      carrier: 'data-hero',
+      data: {
+        variant: 'stat-grid',
+        items: [
+          { value: '四十一万九千两百一十一辆', label: '总销量' },
+          { value: '百分之一百二十四点三', label: '同比增长' },
+        ],
+      },
+    }), '总销量四十一万九千两百一十一辆，同比增长百分之一百二十四点三。');
+    expect(chineseNumbers.some((error) => error.includes('必须使用阿拉伯数字'))).toBe(true);
+
+    expect(errorsOf(sb({
+      carrier: 'concept',
+      data: { variant: 'section', title: '一叶知秋' },
+    }), '大家好，我是一叶知秋。')).toEqual([]);
+
+    const claimNumbers = errorsOf(sb({
+      carrier: 'data-hero',
+      claim: '海外销量十七万九千八百四十一辆',
+      data: { value: 179841, unit: '辆', label: '海外销量' },
+    }), '海外销量十七万九千八百四十一辆。');
+    expect(claimNumbers.some((error) => error.includes('必须使用阿拉伯数字'))).toBe(true);
+
+    const fabricatedClaim = errorsOf(sb({
+      carrier: 'data-hero',
+      claim: '海外销量179,842辆',
+      data: { value: 179841, unit: '辆', label: '海外销量' },
+    }), '海外销量十七万九千八百四十一辆。');
+    expect(fabricatedClaim.some((error) => error.includes('179842') && error.includes('不得编造'))).toBe(true);
+  });
+
+  it('中文口播数字转写仍禁止换算和四舍五入', () => {
+    const errors = errorsOf(sb({
+      carrier: 'data-hero',
+      data: { value: 41.92, unit: '万辆', label: '总销量' },
+    }), '总销量四十一万九千两百一十一辆。');
+
+    expect(errors.some((error) => error.includes('41.92') && error.includes('不得编造 / 换算 / 四舍五入'))).toBe(true);
+  });
+
   it('matrix 的 x/y 是布局坐标，不参与数字防编造', () => {
     const errors = errorsOf(
       sb({

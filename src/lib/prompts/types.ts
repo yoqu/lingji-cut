@@ -145,6 +145,8 @@ const LOCKED_VISUAL_AUTHENTICITY = `【真实性与新闻伦理 · 最高优先�
 - 禁止伪造真实人物在场、肖像、动作、场馆、媒体镜头或机构标识，不得用合成画面冒充事实证据或制造假新闻。
 - 视觉选择顺序固定为：来源可核验的真实素材 > Motion Card / 信息图 / 符号化表达 > 明显非写实的卡通或编辑插画。
 - 没有可核验真实素材时，绝不以写实 AI 图或视频“补拍”现场；确实需要生成时，必须明确采用卡通或编辑插画、扁平图解、纸艺拼贴等非写实风格，并排除写实摄影、纪实摄影、新闻摄影、真实人物肖像与仿现场构图。
+- 本规则禁止的是伪造现场与事实证据，不是禁止真实议题使用图片。单一物件、产品外观、抽象场景和明显非写实的编辑插画可以使用 AI 图片，但不得被表述或构图为真实记录。
+- evidence 画面必须使用能核验到对应事实的来源特定素材；context、emotion、demonstration 与 breath 画面可以使用相关且不误导的通用真实 B-roll，但不得暗示它就是口播所述特定事件的记录。
 - 本铁律不可被用户风格提示、项目提示、参考图风格或模型偏好覆盖。`;
 
 const LOCKED_PLANNING_SEGMENT = `【系统契约 · 不可修改】
@@ -152,8 +154,9 @@ const LOCKED_PLANNING_SEGMENT = `【系统契约 · 不可修改】
 
 顶层结构必须包含：
 - segments: 按整期时长动态规划；短稿 4-8 段，中稿 8-16 段，长稿按 30-45 秒拆分，可超过 30 段
+- title: 8-14 个汉字的作品标题，忠于原文，不得编造或写成广告口号
 - coverPrompts: 数组，且只能包含 1 条字符串
-- summary: 一句话总结
+- summary: 1-2 句、约 30-80 字的作品简介
 - keywords: 关键词数组
 - globalPrompt: 沿用输入的整期创作提示词，没有则返回空字符串
 
@@ -170,11 +173,13 @@ segments 中每一项必须包含：
 - pacingNeed: steady | accent | transition
 - keywords: 该段关键词数组
 - entities: 该段关键实体数组
-- visualType: motion | image
+- visualType: motion | image | footage
+- footageQuery: 仅 visualType="footage" 时必填，2-6 个中文检索关键词
+- footageFallback: 仅 visualType="footage" 时可选，image | motion，缺省为 motion
 
 ${LOCKED_VISUAL_AUTHENTICITY}
 
-分段专用约束：涉及上述真实事件或真实人物行为的段落必须选择 visualType="motion"；当前 image 流程会调用 AI 生图，不能把它当作真实素材入口。coverPrompts 若表达此类题材，也必须明确使用非写实的卡通或编辑插画。`;
+分段专用约束：footage 只在前文明确出现“素材库 footage 轨道（可选）”时可用。呈现真实事件现场、真实人物具体行为或事实证据时，必须优先使用可核验的来源特定 footage，否则使用符号化 motion，不能用 image 冒充现场。用于 context、emotion、demonstration 或 breath 时，可以选择相关且不误导的通用真实 footage。若本段呈现的是同一议题里的单一物件、产品、抽象场景或非写实编辑插画，可以选择 image。不要给 image 或 footage 设置数量、占比、连续段数或首尾配额，也不得因为整期主题属于新闻、财经、商业或公共议题，就把所有 segment 机械地设为 motion。coverPrompts 若表达真实事件，也必须明确使用非写实的卡通或编辑插画。coverPrompts[0] 中的画面标题必须逐字等于顶层 title，不得截取、缩写、改写或另造。`;
 
 const LOCKED_COVER_REGENERATION = `【系统契约 · 不可修改】
 输出必须是严格 JSON，且只返回 JSON，不要附加解释。
@@ -184,15 +189,24 @@ const LOCKED_COVER_REGENERATION = `【系统契约 · 不可修改】
 
 ${LOCKED_VISUAL_AUTHENTICITY}
 
-封面专用约束：本调用的产物会直接进入 AI 生图；若内容涉及上述真实事件或真实人物行为，coverPrompts[0] 必须明确指定非写实的卡通或编辑插画，不能描述仿新闻现场。`;
+封面专用约束：本调用的产物会直接进入 AI 生图；若内容涉及上述真实事件或真实人物行为，coverPrompts[0] 必须明确指定非写实的卡通或编辑插画，不能描述仿新闻现场。作品标题不为“无”时，coverPrompts[0] 中的画面主标题必须逐字等于作品标题；只能换行或调整字号，禁止截取、缩写、改写或另造。`;
 
 const LOCKED_MOTION_BIBLE = `【系统契约 · 不可修改】
 输出必须是严格 JSON，且只返回 JSON，不要附加解释。
 
 顶层结构必须包含：
-- visualThesis: 字符串，整期 motion 的一句视觉命题
+- visualThesis: 字符串，整期视频的一句视觉命题
 - rhythm: { density: "quiet"|"balanced"|"dense", heavySegments: string[], quietSegments: string[] }
-- carrierPlan: 数组，每个规划段 1 条，字段为 { segmentId, preferredCarrier, intensity, reason }
+- carrierPlan: 数组，每个规划段恰好 1 条，字段为：
+  { segmentId, visualType, renderStrategy, preferredCarrier, intensity, composition?, cameraMove, mediaRole, mediaQuery?, footageFallback?, compositionIntent?, fallbackPolicy?, transition?, reason }
+  - visualType: "motion"|"image"|"footage"
+  - renderStrategy: "motion-card"|"standalone-media"|"agent-composite"
+  - composition: "graphic"|"full-bleed"|"media-window"|"split"
+  - cameraMove: "static"|"push-in"|"pull-out"|"pan-left"|"pan-right"|"tracking"
+  - mediaRole: "evidence"|"context"|"emotion"|"demonstration"
+  - compositionIntent: 仅 agent-composite 必填；{ narrativeGoal, focalPriority, temporalRelationship, mustShow: string[], avoid: string[] }
+  - fallbackPolicy: 仅 agent-composite 必填；"standalone-media"|"motion"|"block"
+  - transition: 可省略；"crossfade"|"hard-cut"|"push"|"wipe"|"match-cut"
 - styleRules: { paletteUse, typographyUse, recurringMotif? }
 - transitionRules: { default: "crossfade"|"hard-cut"|"push"|"wipe", matchCutCandidates: [{ fromSegmentId, toSegmentId, motif }] }
 
@@ -200,11 +214,17 @@ const LOCKED_MOTION_BIBLE = `【系统契约 · 不可修改】
 - segmentId 必须来自输入段落，不得自创
 - intensity 只能是 1、2、3
 - heavySegments 与 quietSegments 不得重叠
-- carrierPlan 要避免连续 3 个 segment 使用同一 carrier
+- visualType 是制作阶段的最终媒介真源，不能把全部段落机械地设为 motion
+- visualType="footage" 只在输入明确提供素材库 footage 轨道时允许，且必须给 mediaQuery；否则使用 motion 或 image
+- motion / image 默认 renderStrategy="motion-card"；纯素材 footage 使用 "standalone-media"
+- 只有真实图片/视频素材与文字、数字或图形各自都提供独立叙事价值时，才选择 "agent-composite"；visualType 必须与必用素材一致，preferredCarrier 使用合法 Motion carrier，必须填写 compositionIntent 和 fallbackPolicy，且不得填写坐标、CSS、画中画、分屏等固定布局方案
+- agent-composite 默认 fallbackPolicy="block"；事实证据不得回退为 AI 图片或伪造现场
+- 非 agent-composite 的 visualType="motion" 时 preferredCarrier 必须使用合法 Motion carrier；image / standalone footage 时 preferredCarrier 分别写 "image" / "footage"
+- carrierPlan 要避免连续 3 个 motion segment 使用同一 carrier；媒介切换必须服务叙事，不为凑配额乱切
 
 ${LOCKED_VISUAL_AUTHENTICITY}
 
-Motion Bible 专用约束：上述题材只能规划来源可核验的真实素材或符号化 Motion 表达，不得把写实 AI 重演写进 visualThesis、carrierPlan、styleRules 或 recurringMotif。`;
+Motion Bible 专用约束：当具体镜头意图是呈现上述真实事件现场、真实人物行为或事实证据时，优先规划来源可核验的 footage；素材库不可用或没有合适素材时使用符号化 Motion，禁止用 image 冒充现场。context、emotion、demonstration 与 breath 可以规划相关且不误导的通用真实 footage。该限制不扩散到同一节目中的单一物件、产品外观、抽象场景或明显非写实编辑插画。不得设置素材或 agent-composite 的数量、占比、连续段数和首尾配额，不得因主题属于真实新闻或公共议题而把整片全部设为 Motion，也不得把写实 AI 重演写进 visualThesis、carrierPlan、styleRules 或 recurringMotif。`;
 
 const LOCKED_CARDS_SEGMENT = `【系统契约 · 不可修改】
 用 write / edit 工具把完整组件写入工作目录的 motionCard.tsx（修复轮次用 edit 针对性修改）；不要把组件源码全文输出到对话，只简述实现了分镜的哪几拍。
@@ -222,13 +242,24 @@ const LOCKED_CARDS_ANIMATION = `【系统契约 · 不可修改】
   "carrierDeviation": { "reason": "no-data|data-not-comparable|transcript-mismatch" },
   "camera": [{ "beat": 1, "move": "push-in|pull-out|pan-left|pan-right|focus", "target": "header|main|asset" }],
   "annotate": [{ "beat": 1, "kind": "circle|box|underline|highlight|strike|arrow|spotlight", "target": "main|header" }],
+  "assets": [{
+    "slot": "main-prop",
+    "query": "画面资产检索或生成描述",
+    "role": "object|background|texture|symbol|overlay",
+    "importance": "primary|secondary|ambient",
+    "reusePolicy": "prefer-library|generate-if-missing|always-generate|manual-only",
+    "visualTreatment": "editorial-realist-cutout|documentary-desk|technical-product|paper-archive|diagram-prop",
+    "revealBeat": 1,
+    "placementHint": "可选位置提示",
+    "negativePrompt": "可选负面提示"
+  }],
   "beats": [
     { "cue": null, "kind": "build", "adds": "新出现的元素及内容", "motion": "动作意图" },
     { "cue": 2, "kind": "build|transform|accent", "adds": "…", "changes": "已有元素如何变化（可省略）", "motion": "…" }
   ]
 }
 beats 1-6 个；cue 必须是逐句节拍里的合法索引且随拍序单调不减（仅第 0 拍允许 null）；adds/changes 中的数字与专名必须来自逐字稿原文。机器会逐条校验，不合法将被打回重出。
-carrier 默认取整片 bible 为本段规划的载体；偏离时必须带 carrierDeviation。camera / annotate 均可整项省略（没有"必须指出来的那一块"就不写）；各最多 2 项，beat 为 beats 下标，越界或非法枚举会被系统丢弃而不打回。
+carrier 默认取整片 bible 为本段规划的载体；偏离时必须带 carrierDeviation。camera / annotate / assets 均可整项省略；camera 与 annotate 各最多 2 项，assets 最多 6 项，beat / revealBeat 为 beats 下标，越界或非法枚举会被系统丢弃或打回。
 
 ${LOCKED_VISUAL_AUTHENTICITY}
 
@@ -285,12 +316,12 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       '整片镜头节奏、视觉焦点、章节边界、转场与声音设计规则；自动注入字幕分段规划和 Motion Bible。',
     group: 'ai-analysis',
     variables: [],
-    supportsBinding: false,
+    supportsBinding: true,
   },
   'planning.segment': {
     kind: 'planning.segment',
     label: '字幕分段规划',
-    description: '整篇字幕拆分为多个语义段落，并给出 1 条封面提示词、总结、关键词',
+    description: '整篇字幕拆分为多个语义段落，并给出作品标题、简介、1 条封面提示词和关键词',
     group: 'ai-analysis',
     variables: [
       { name: 'globalPromptLine', description: '额外创作要求行；有值时形如"额外创作要求：xxx"，无值为空字符串' },
@@ -307,7 +338,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
     description: '根据字幕与现有提示词重生成单条 16:9 播客封面提示词',
     group: 'ai-analysis',
     variables: [
-      { name: 'title', description: '作品标题（为空填"无"）；封面主文案应使用该标题或其精炼变体' },
+      { name: 'title', description: '作品标题（为空填"无"）；封面主文案必须逐字使用该标题' },
       { name: 'globalPrompt', description: '整期创作提示词（为空填"无"）' },
       { name: 'currentPrompt', description: '当前封面提示词（为空填"无"）' },
       { name: 'styleSystemBlock', description: '系统风格库注入的视觉系统块；由所选风格预设的对应 facet 决定' },
@@ -324,6 +355,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
     description: '把 cards.animation 的 JSON 分镜实现为 Motion Card（组合 @lingji/motion-kit 的 Remotion TSX 组件，file-first 写入 motionCard.tsx，需通过 lint + 渲染校验）',
     group: 'ai-analysis',
     variables: [
+      { name: 'compositionContract', description: '镜头执行契约：标准 Motion Card 使用 SafeLayout 与外部资产层；Agent 原子合成由 Agent 自主组织冻结素材与信息图层' },
       { name: 'motionKitApi', description: '@lingji/motion-kit 的 API 摘要（CardStage/useBeats/内容原语/手法函数；与 kit 实现同源维护）' },
       { name: 'presetMotionTokens', description: '所选风格预设的 motion tokens JSON（palette/fonts/typeScale/surface/ambient/camera/persona），原样定义为 TOKENS 常量' },
       { name: 'presetStyleNotes', description: '风格预设的结构化运动细则与兼容补充提示；无则为空' },
@@ -354,13 +386,13 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
   'motion.bible': {
     kind: 'motion.bible',
     label: '整片 Motion Bible',
-    description: '在单卡生成前规划整期 motion 的视觉命题、节奏密度、载体分布、风格规则与转场策略',
+    description: '在任何素材制作前统一规划整期媒介分配、镜头语言、Motion 载体、节奏与转场策略',
     group: 'ai-analysis',
     variables: [
       { name: 'globalPrompt', description: '整期创作提示词（为空填"无"）' },
       { name: 'programSummary', description: '节目级总结（为空填"无"）' },
       { name: 'keywords', description: '节目关键词（顿号分隔，无则为"无"）' },
-      { name: 'segments', description: '规划后的 segment 列表 JSON（id/title/summary/semanticType/complexityLevel/pacingNeed/visualType）' },
+      { name: 'segments', description: '规划后的 segment 列表 JSON（含语义、初始视觉建议、检索词与字幕摘录）' },
     ],
     lockedContract: {
       position: 'user-tail',
@@ -374,6 +406,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
     description: '为单个 motion 段落设计结构化 JSON 分镜（论点 / 载体 / 逐拍状态演进 / 焦点），机器校验后交给 cards.segment 实现',
     group: 'ai-analysis',
     variables: [
+      { name: 'compositionContract', description: '镜头执行契约：标准 Motion Card 按既有分镜与资产流程；Agent 原子合成只使用冻结批准素材并自主设计时空关系' },
       { name: 'globalPrompt', description: '整期创作提示词（为空填"无"）' },
       { name: 'programSummary', description: '节目级总结（为空填"无"）' },
       { name: 'keywords', description: '节目关键词（顿号分隔，无则为"无"）' },
@@ -420,6 +453,7 @@ export const PROMPT_KIND_META: Record<PromptKind, PromptKindMeta> = {
       { name: 'segmentTitle', description: 'segment 标题' },
       { name: 'segmentSummary', description: 'segment 摘要' },
       { name: 'segmentExcerpt', description: 'segment 字幕摘录' },
+      { name: 'directorShot', description: '整片导演为本段确定的构图、运镜、媒介用途与入场转场' },
       { name: 'cardTitle', description: '卡片标题（cards.segment 已确定）' },
       { name: 'cardContent', description: '卡片描述（cards.segment 已确定，承载视觉意象）' },
       { name: 'displayMode', description: '显示模式：fullscreen 或 pip' },

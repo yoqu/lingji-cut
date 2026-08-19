@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, RefreshCw, Sparkles, Loader2, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Check, RefreshCw, Sparkles, Loader2, ChevronDown, ChevronRight, AlertTriangle, ImagePlus } from 'lucide-react';
 import type { CoverCandidate, ImageAspectRatio } from '../../types/ai';
 import { toFileSrc } from '../../lib/utils';
 import {
@@ -152,13 +152,27 @@ export function PublishCoverPanel({
   selectedByRatio: Partial<Record<ImageAspectRatio, string>>;
   /** 点选某比例的封面：同图再点为取消该比例。 */
   onSelectRatio: (ratio: ImageAspectRatio, path: string) => void;
-  /** 无封面生成描述时的引导文案（项目 / 自由发布场景不同）。 */
+  /** 无封面生成描述时的引导文案（项目 / 发布中心场景不同）。 */
   emptyPromptHint?: string;
 }) {
   const [expandedPrompt, setExpandedPrompt] = useState<Record<string, boolean>>({});
+  // 正在弹出系统文件框 / 复制图片的比例，避免重复触发
+  const [importingRatio, setImportingRatio] = useState<ImageAspectRatio | null>(null);
   const anyBusy = studio.busyRatios.length > 0 || studio.busyCandidateIds.length > 0;
   // 没有封面提示词时仍展示已存在的封面（含磁盘扫描结果），仅禁用 AI 生成相关按钮。
   const canGenerate = !!studio.basePrompt;
+
+  // 手动选图：复制进 covers/ 后直接选为该比例封面（比例以点选的槽位为准）。
+  const handleImportLocal = async (ratio: ImageAspectRatio) => {
+    if (importingRatio) return;
+    setImportingRatio(ratio);
+    try {
+      const imported = await studio.importLocal(ratio);
+      if (imported) onSelectRatio(ratio, imported);
+    } finally {
+      setImportingRatio(null);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -233,10 +247,24 @@ export function PublishCoverPanel({
               <span style={{ fontSize: 11, color: 'var(--color-text-tertiary)' }}>{hint}</span>
               <button
                 type="button"
+                onClick={() => void handleImportLocal(ratio)}
+                disabled={importingRatio !== null}
+                title="从本机选择图片作为该比例封面（会复制到 covers/）"
+                style={{ ...btn(), marginLeft: 'auto', opacity: importingRatio !== null ? 0.5 : 1 }}
+              >
+                {importingRatio === ratio ? (
+                  <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <ImagePlus size={11} />
+                )}
+                本地图片
+              </button>
+              <button
+                type="button"
                 onClick={() => void studio.regenerateRatio(ratio)}
                 disabled={!canGenerate || ratioBusy}
                 title={canGenerate ? '' : '需先在编辑器完成 AI 分析生成封面提示词'}
-                style={{ ...btn(), marginLeft: 'auto', opacity: !canGenerate || ratioBusy ? 0.5 : 1 }}
+                style={{ ...btn(), opacity: !canGenerate || ratioBusy ? 0.5 : 1 }}
               >
                 {ratioBusy ? (
                   <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
@@ -292,8 +320,8 @@ export function PublishCoverPanel({
                 {ratioBusy
                   ? '生成中…'
                   : canGenerate
-                    ? '暂无此比例封面，点「生成」创建'
-                    : '暂无此比例封面（可在 covers/ 放入对应比例图片，或先完成 AI 分析）'}
+                    ? '暂无此比例封面，点「生成」创建，或用「本地图片」选一张'
+                    : '暂无此比例封面，点「本地图片」选一张（或先完成 AI 分析后生成）'}
               </div>
             ) : (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

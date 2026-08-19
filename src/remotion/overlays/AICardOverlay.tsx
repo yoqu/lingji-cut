@@ -146,7 +146,9 @@ export function AICardOverlay({
       };
 
   const plan = resolveAICardRenderPlan(card, compiledJs);
-  const hasUnderlay = card.assetBindings?.some(isMotionAssetUnderlay) === true;
+  const isAgentComposite = card.renderStrategy === 'agent-composite';
+  const hasUnderlay = !isAgentComposite
+    && card.assetBindings?.some(isMotionAssetUnderlay) === true;
 
   // 媒体卡（image / video）：直接渲染素材。此前缺少该分支，媒体卡会落到 CardHost
   // 且没有编译产物 → 显示「卡片不可用」。
@@ -185,13 +187,15 @@ export function AICardOverlay({
         ...transitionStyle(transitionOut, frame, durationFrames, 'out'),
       }}
     >
-      <CardAssetLayer
-        bindings={card.assetBindings}
-        frame={frame}
-        underlay
-        timingPlan={timingPlan}
-        durationInFrames={durationFrames}
-      />
+      {!isAgentComposite ? (
+        <CardAssetLayer
+          bindings={card.assetBindings}
+          frame={frame}
+          underlay
+          timingPlan={timingPlan}
+          durationInFrames={durationFrames}
+        />
+      ) : null}
       <CardHost
         overlayId={overlay.id}
         compiledJs={compiledJs ?? ''}
@@ -199,14 +203,17 @@ export function AICardOverlay({
         timingPlan={timingPlan}
         projectDir={projectDir}
         transparentStage={hasUnderlay}
+        mediaBindings={isAgentComposite ? card.assetBindings : undefined}
       />
-      <CardAssetLayer
-        bindings={card.assetBindings}
-        frame={frame}
-        underlay={false}
-        timingPlan={timingPlan}
-        durationInFrames={durationFrames}
-      />
+      {!isAgentComposite ? (
+        <CardAssetLayer
+          bindings={card.assetBindings}
+          frame={frame}
+          underlay={false}
+          timingPlan={timingPlan}
+          durationInFrames={durationFrames}
+        />
+      ) : null}
     </AbsoluteFill>
   );
 }

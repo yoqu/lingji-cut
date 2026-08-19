@@ -38,9 +38,10 @@
 }
 
 .menuContent {
-  min-width: 280px;
+  min-width: min(280px, calc(100vw - 24px));
   max-width: min(380px, calc(100vw - 24px));
-  max-height: 340px;
+  max-height: min(340px, calc(100vh - 24px));
+  overflow-x: hidden;
   overflow-y: auto;
 }
 

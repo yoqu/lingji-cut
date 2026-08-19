@@ -217,10 +217,11 @@ export async function selectRemotionComposition(params: {
   platform?: NodeJS.Platform;
   useAngle?: boolean;
 }): Promise<SelectedRemotionComposition> {
+  const inputProps = params.input as unknown as Record<string, unknown>;
   return selectComposition({
     serveUrl: params.serveUrl,
     id: COMPOSITION_ID,
-    inputProps: params.input,
+    inputProps,
     binariesDirectory: params.binariesDirectory ?? null,
     browserExecutable: params.browserExecutable,
     chromiumOptions: chromiumOptionsForPlatform(params.platform, params.useAngle ?? true),
@@ -276,7 +277,7 @@ export async function renderRemotionChunk(
   // duration and fps), but resolve the component props to this chunk's input.
   const chunkComposition: SelectedRemotionComposition = {
     ...params.composition,
-    props: params.input,
+    props: params.input as unknown as Record<string, unknown>,
   };
   const result = await renderMedia({
     composition: chunkComposition,
@@ -284,7 +285,7 @@ export async function renderRemotionChunk(
     codec: 'h264-ts',
     outputLocation: params.outputPath,
     separateAudioTo: params.audioPath,
-    inputProps: params.input,
+    inputProps: params.input as unknown as Record<string, unknown>,
     frameRange: [params.chunk.startFrame, params.chunk.endFrame],
     compositionStart: 0,
     enforceAudioTrack: true,

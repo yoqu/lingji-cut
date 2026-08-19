@@ -98,4 +98,13 @@ describe('motion production report', () => {
     expect(report.contactSheetCacheKey).toBe('abc');
     expect(report.contactSheetCached).toBe(true);
   });
+
+  it('unavailableReason 会强制视觉审片状态为不可用并保留具体原因', () => {
+    const report = buildMotionCardProductionReport({
+      visualReviewAvailable: true,
+      unavailableReason: ' reviewer 无法读取 contact sheet。 ',
+    });
+    expect(report.visualReviewAvailable).toBe(false);
+    expect(report.unavailableReason).toBe('reviewer 无法读取 contact sheet。');
+  });
 });

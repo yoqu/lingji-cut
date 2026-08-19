@@ -1,7 +1,7 @@
 /**
  * pi-agents-seed.ts
  *
- * Motion Card 多 agent 角色定义（card-director / card-sculptor / card-reviewer）的
+ * Pi agent 角色定义（card-director / card-sculptor / card-reviewer / show-director / publish-ingest）的
  * 种子播种与读取：种子在应用资源 resources/pi-agents/agents，运行时按 frontmatter
  * version 强制同步到 ~/.lingji/pi-agent/agents（版本变更即覆盖；用户可在目标目录
  * 微调正文，但升级种子版本会重置——与 agent-skills 的 version 强制同步语义一致）。
@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-export const PI_AGENT_ROLE_NAMES = ['card-director', 'card-sculptor', 'card-reviewer'] as const;
+export const PI_AGENT_ROLE_NAMES = ['card-director', 'card-sculptor', 'card-reviewer', 'show-director', 'publish-ingest'] as const;
 export type PiAgentRoleName = (typeof PI_AGENT_ROLE_NAMES)[number];
 
 export interface PiAgentRole {

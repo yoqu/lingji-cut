@@ -1,9 +1,9 @@
 // 发布工作台核心（项目无关）：视频文件 / 封面 / 文案 / 账号 / B站分区 / 一键发布 /
 // 进度 / 就地重登 / 发布历史 的完整 UI 与交互。
-// 项目发布 tab（PublishWorkbench）与欢迎页自由发布（FreePublish）共用；
+// 项目发布 tab（PublishWorkbench）与发布中心（PublishHub）共用；
 // 数据来源与持久化由调用方通过 draft / coverStudio / generateMeta 等适配注入。
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Upload, Film, Image as ImageIcon, Tag, Check, X, Loader2, ChevronDown, ChevronRight, Sparkles, History, RotateCcw, LogIn } from 'lucide-react';
 import { Button, Checkbox, ConfirmDialog, Field, Input, Select } from '../../../ui';
 import {
@@ -351,7 +351,7 @@ export interface PublishComposerProps {
   /** 头部副标题（项目路径等）；hideHeader 时忽略。 */
   subtitle?: string | null;
   hideHeader?: boolean;
-  /** 视频文件字段之后插入的额外表单项（自由发布的主题输入）。 */
+  /** 视频文件字段之后插入的额外表单项。 */
   extraFields?: ReactNode;
   /** 可选「扫描」按钮：返回解析出的文件路径，null 表示未找到。 */
   onScanVideo?: (() => Promise<string | null>) | null;
@@ -364,12 +364,14 @@ export interface PublishComposerProps {
   publishedPlatforms: Record<string, number>;
   /** 一次发布（含自动续发）完成后回调；历史与已发布平台由调用方持久化。 */
   onPublished: (entry: PublishHistoryEntry) => void;
-  /** 封面面板无生成描述时的引导文案（自由发布提示填主题）。 */
+  /** 封面面板无生成描述时的引导文案。 */
   coverEmptyHint?: string;
-  /** 封面面板上方的额外内容（自由发布的封面提示词编辑区）。 */
+  /** 封面面板上方的额外内容（封面提示词编辑区）。 */
   coverExtra?: ReactNode;
   /** 提供时历史区常显：无记录也渲染「发布历史」标题与此占位文案。 */
   historyEmptyText?: string;
+  /** 发布中心：账号加载后默认勾选所有已登录账号。 */
+  defaultSelectValidAccounts?: boolean;
 }
 
 export function PublishComposer({
@@ -389,6 +391,7 @@ export function PublishComposer({
   coverEmptyHint,
   coverExtra,
   historyEmptyText,
+  defaultSelectValidAccounts,
 }: PublishComposerProps) {
   const { accounts, loadAccounts, loadSettings } = usePublishStore();
   const runner = usePublishRunner();
@@ -412,6 +415,7 @@ export function PublishComposer({
   const [showCoverPanel, setShowCoverPanel] = useState(true);
 
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const didAutoSelectAccounts = useRef(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // Chromium 自动化组件安装状态：null=未知/检测中
@@ -421,6 +425,14 @@ export function PublishComposer({
     void loadAccounts();
     void loadSettings();
   }, [loadAccounts, loadSettings]);
+
+  useEffect(() => {
+    if (!defaultSelectValidAccounts || didAutoSelectAccounts.current) return;
+    const validIds = accounts.filter((acc) => acc.status === 'valid').map((acc) => acc.id);
+    if (validIds.length === 0) return;
+    didAutoSelectAccounts.current = true;
+    setSelectedAccountIds(validIds);
+  }, [accounts, defaultSelectValidAccounts]);
 
   // 选中的账号是否包含需要 Chromium 的平台
   const needsChromium = selectedAccountIds.some((id) => {
@@ -518,7 +530,7 @@ export function PublishComposer({
     if (path) onDraftChange({ filePath: path });
   };
 
-  // 扫描解析视频文件（项目模式：项目目录最新成片；自由发布不提供）
+  // 扫描解析视频文件（项目模式：项目目录最新成片；发布中心由识别结果回填）
   const [scanMsg, setScanMsg] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const handleScanVideo = async () => {

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { Badge, Button, EmptyState } from '../../ui';
-import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import styles from './ImageProviderListSection.module.css';
 
 /** 生成唯一 Provider ID */
@@ -120,26 +119,18 @@ export function MediaProviderListSection<T extends MediaProviderBase>({
                   </div>
                   <div className={styles.providerActions}>
                     {renderCardExtras?.(p)}
-                    {isLingjiManagedProviderId(p.id) ? (
-                      <Badge variant="secondary" size="xs">
-                        服务端托管
-                      </Badge>
-                    ) : (
-                      <>
-                        <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => openEdit(p)}>
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          leftIcon={<Trash2 size={12} />}
-                          onClick={() => handleDelete(p.id)}
-                        >
-                          删除
-                        </Button>
-                      </>
-                    )}
+                    <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => openEdit(p)}>
+                      编辑
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      leftIcon={<Trash2 size={12} />}
+                      onClick={() => handleDelete(p.id)}
+                    >
+                      删除
+                    </Button>
                   </div>
                 </div>
 

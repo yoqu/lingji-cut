@@ -60,4 +60,14 @@ describe('electron menu actions', () => {
     // Web Card 路径下线后 selectHtmlFile 已从 Preload 桥移除
     expect(source).not.toContain('selectHtmlFile');
   });
+
+  it('no longer exposes the removed Lingji cloud account login bridge', () => {
+    const api = readFileSync(new URL('../src/lib/electron-api.ts', import.meta.url), 'utf8');
+    const preload = readFileSync(new URL('../electron/preload.ts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    expect(api).not.toContain('lingjiLogin');
+    expect(api).not.toContain('LingjiAccount');
+    expect(preload).not.toContain('lingji-login');
+    expect(main).not.toContain('lingji-login');
+  });
 });

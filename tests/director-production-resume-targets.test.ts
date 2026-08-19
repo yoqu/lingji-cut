@@ -98,6 +98,16 @@ describe('恢复制作的镜头补生成目标', () => {
     );
     expect(targets).toEqual(['seg-3']);
   });
+
+  it('素材轨重新冻结组合输入时强制重生成对应卡片，避免沿用旧素材绑定', () => {
+    const targets = generationTargets(
+      plan(),
+      production({ impact: { ...noopImpact(), segmentIds: ['seg-1'] } }),
+      [card('seg-1'), card('seg-2'), card('seg-3')],
+      ['seg-2'],
+    );
+    expect(targets).toEqual(['seg-2']);
+  });
 });
 
 describe('恢复制作的封面提示词', () => {

@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import * as Remotion from 'remotion';
 import { compileCardTsx } from './compile-card-node';
 import { createMotionKit, MOTION_CAMERA_MAX_SCALE, type MotionKitRemotion } from '../../src/remotion/motion-kit';
+import { resolveAgentMediaAssets, type AgentMediaAsset } from '../../src/remotion/card-asset';
 import type { CardAssetBinding } from '../../src/types/assets';
 import type {
   MotionCardMechanicalValidation,
@@ -70,6 +71,7 @@ export interface MotionCardContactSheetOptions {
   thumbWidth?: number;
   columns?: number;
   assetBindings?: CardAssetBinding[];
+  qualityProfile?: MotionCardValidationInput['qualityProfile'];
   timingPlan?: TimingPlan;
   durationInFrames?: number;
 }
@@ -148,6 +150,48 @@ function evalCardComponent(
   return (exported.default as React.ComponentType<Record<string, unknown>>) ?? null;
 }
 
+type SmokeBoundMediaProps = {
+  slot?: string;
+  assetId?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  fit?: React.CSSProperties['objectFit'];
+  objectPosition?: React.CSSProperties['objectPosition'];
+  muted?: boolean;
+};
+
+function makeSmokeBoundMedia(
+  assets: AgentMediaAsset[],
+  bindings: CardAssetBinding[] | undefined,
+): React.ComponentType<SmokeBoundMediaProps> {
+  const BoundMedia = ({ slot, assetId, className, style, fit = 'cover', objectPosition, muted = true }: SmokeBoundMediaProps) => {
+    const asset = assets.find((candidate) => assetId ? candidate.assetId === assetId : candidate.slot === slot);
+    if (!asset) return null;
+    const binding = bindings?.find((candidate) => candidate.assetId === asset.assetId && candidate.slot === asset.slot);
+    const diagnostics = {
+      'data-agent-media-slot': asset.slot,
+      'data-agent-media-asset-id': asset.assetId,
+      'data-agent-media-required': asset.required ? 'true' : 'false',
+      'data-agent-media-locked': asset.lockedByUser ? 'true' : 'false',
+    };
+    const mediaStyle = { width: '100%', height: '100%', objectFit: fit, objectPosition, ...style };
+    if (asset.kind === 'image') {
+      return React.createElement('img', { src: asset.src, className, style: mediaStyle, alt: '', ...diagnostics });
+    }
+    return React.createElement('video', {
+      src: asset.src,
+      poster: binding?.thumbnailFile,
+      className,
+      style: mediaStyle,
+      muted,
+      playsInline: true,
+      ...diagnostics,
+    });
+  };
+  BoundMedia.displayName = 'SmokeBoundMedia';
+  return BoundMedia;
+}
+
 function normalizeFrames(frames: number[]): number[] {
   return Array.from(
     new Set(
@@ -162,7 +206,7 @@ export async function renderMotionCardKeyframeMarkups(
   tsx: string,
   options: Pick<
     MotionCardContactSheetOptions,
-    'frames' | 'cues' | 'cardAsset' | 'timingPlan' | 'durationInFrames'
+    'frames' | 'cues' | 'cardAsset' | 'assetBindings' | 'timingPlan' | 'durationInFrames'
   >,
 ): Promise<MotionCardKeyframeMarkup[]> {
   const compiled = await compileCardTsx('contact-sheet', tsx);
@@ -172,6 +216,8 @@ export async function renderMotionCardKeyframeMarkups(
 
   const frames = normalizeFrames(options.frames);
   const durationInFrames = Math.max(1, Math.round(options.durationInFrames ?? SMOKE_DURATION_IN_FRAMES));
+  const mediaAssets = resolveAgentMediaAssets(options.assetBindings, (src) => src);
+  const BoundMedia = makeSmokeBoundMedia(mediaAssets, options.assetBindings);
   const markups: MotionCardKeyframeMarkup[] = [];
   for (const frame of frames) {
     const Comp = evalCardComponent(compiled.js, frame, options.cardAsset, durationInFrames);
@@ -183,6 +229,8 @@ export async function renderMotionCardKeyframeMarkups(
       markup: renderToStaticMarkup(React.createElement(Comp, {
         cues: options.cues ?? [],
         timingPlan: options.timingPlan,
+        mediaAssets,
+        BoundMedia,
       })),
     });
   }
@@ -195,6 +243,7 @@ function contactSheetHtml(
     thumbWidth: number;
     columns: number;
     assetBindings?: CardAssetBinding[];
+    qualityProfile?: MotionCardValidationInput['qualityProfile'];
     timingPlan?: TimingPlan;
     durationInFrames: number;
   },
@@ -206,7 +255,8 @@ function contactSheetHtml(
   const rows = Math.max(1, Math.ceil(markups.length / columns));
   const width = columns * thumbWidth + (columns + 1) * gap;
   const height = rows * (thumbHeight + 28) + (rows + 1) * gap;
-  const assetMarkup = (frame: number, underlay: boolean) => (options.assetBindings ?? [])
+  const legacyBindings = options.qualityProfile === 'agent-composite' ? [] : options.assetBindings ?? [];
+  const assetMarkup = (frame: number, underlay: boolean) => legacyBindings
     .filter((binding) => isMotionAssetUnderlay(binding) === underlay)
     .map((binding) => renderToStaticMarkup(React.createElement('img', {
       key: `${binding.slot}:${binding.assetId}`,
@@ -220,7 +270,7 @@ function contactSheetHtml(
       }),
     })))
     .join('');
-  const hasUnderlay = options.assetBindings?.some(isMotionAssetUnderlay) === true;
+  const hasUnderlay = legacyBindings.some(isMotionAssetUnderlay);
   const cells = markups
     .map(
       ({ frame, markup }) => `
@@ -281,6 +331,7 @@ export async function renderMotionCardContactSheet(
     thumbWidth,
     columns,
     assetBindings: options.assetBindings,
+    qualityProfile: options.qualityProfile,
     timingPlan: options.timingPlan,
     durationInFrames: options.durationInFrames ?? SMOKE_DURATION_IN_FRAMES,
   });
@@ -328,6 +379,59 @@ function visibleTextRuns(markup: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+function compositeMediaUsageIssues(
+  markups: MotionCardKeyframeMarkup[],
+  bindings: CardAssetBinding[] | undefined,
+  layoutNodes?: LayoutProbe[],
+): CardValidationIssue[] {
+  const source = markups.map((item) => item.markup).join('\n');
+  const availableBindings = bindings ?? [];
+  const visibleEnough = (node: LayoutProbe) => (
+    node.visibleWidth >= 48
+    && node.visibleHeight >= 48
+    && node.visibleArea >= 1920 * 1080 * 0.005
+  );
+  const anyBoundMediaUsed = availableBindings.some((binding) => (
+    source.includes(`data-agent-media-asset-id="${binding.assetId}"`)
+  ));
+  const anyBoundMediaVisible = layoutNodes?.some((node) => (
+    availableBindings.some((binding) => binding.assetId === node.agentMediaAssetId)
+    && visibleEnough(node)
+  ));
+  const issues: CardValidationIssue[] = availableBindings.length > 0
+    && (!anyBoundMediaUsed || (layoutNodes && !anyBoundMediaVisible))
+    ? [{
+        severity: 'error',
+        code: 'agent-composite-media-not-visible',
+        message: 'Agent 合成镜头没有在关键帧中实际呈现任何已批准素材，不能退化为纯 Motion 画面。',
+      }]
+    : [];
+  issues.push(...availableBindings
+    .filter((binding) => binding.usage === 'required' || binding.required === true)
+    .flatMap((binding) => {
+      if (!source.includes(`data-agent-media-asset-id="${binding.assetId}"`)) {
+        return [{
+          severity: 'error' as const,
+          code: 'required-composite-media-not-visible',
+          message: `必用素材“${binding.slot}”未通过 BoundMedia 出现在任何关键帧，不能将仅绑定未使用的镜头视为完成。`,
+          element: binding.slot,
+        }];
+      }
+      if (!layoutNodes) return [];
+      const visible = layoutNodes.some((node) => {
+        if (node.agentMediaAssetId !== binding.assetId) return false;
+        return visibleEnough(node);
+      });
+      return visible ? [] : [{
+        severity: 'error' as const,
+        code: 'required-composite-media-not-visible',
+        message: `必用素材“${binding.slot}”虽被 BoundMedia 引用，但在关键帧中不可见或面积过小，不能视为已实际使用。`,
+        element: binding.slot,
+      }];
+    }));
+  return issues;
+}
+
 function countPattern(source: string, pattern: RegExp): number {
   return source.match(pattern)?.length ?? 0;
 }
@@ -342,6 +446,10 @@ interface LayoutProbe {
   y: number;
   width: number;
   height: number;
+  /** 与画布及所有 overflow 裁切祖先求交后的真实可见盒。 */
+  visibleWidth: number;
+  visibleHeight: number;
+  visibleArea: number;
   scrollWidth: number;
   scrollHeight: number;
   clientWidth: number;
@@ -369,6 +477,7 @@ interface LayoutProbe {
   motionLayer?: string;
   motionDepth?: string;
   allowOverlap?: boolean;
+  agentMediaAssetId?: string;
 }
 
 /** 解析 computed style 的 rgb()/rgba() 颜色为 [r,g,b,a]。 */
@@ -451,6 +560,7 @@ async function inspectRenderedLayout(
   markups: MotionCardKeyframeMarkup[],
   options: {
     assetBindings?: CardAssetBinding[];
+    qualityProfile?: MotionCardValidationInput['qualityProfile'];
     timingPlan?: TimingPlan;
     durationInFrames: number;
   },
@@ -462,17 +572,18 @@ async function inspectRenderedLayout(
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
     try {
       const nodes: LayoutProbe[] = [];
+      const legacyBindings = options.qualityProfile === 'agent-composite' ? [] : options.assetBindings ?? [];
       for (const { frame, markup } of markups) {
         const underlay = validationAssetMarkup(
           frame,
-          options.assetBindings ?? [],
+          legacyBindings,
           true,
           options.timingPlan,
           options.durationInFrames,
         );
         const foreground = validationAssetMarkup(
           frame,
-          options.assetBindings ?? [],
+          legacyBindings,
           false,
           options.timingPlan,
           options.durationInFrames,
@@ -489,6 +600,26 @@ async function inspectRenderedLayout(
             const s = getComputedStyle(el as Element);
             const directText = Array.from(el.childNodes).some((n) => Boolean(n.nodeType === Node.TEXT_NODE && n.textContent?.trim()));
             const text = (el.textContent ?? '').trim();
+            let visibleLeft = Math.max(0, r.left);
+            let visibleTop = Math.max(0, r.top);
+            let visibleRight = Math.min(1920, r.right);
+            let visibleBottom = Math.min(1080, r.bottom);
+            let clipNode = el.parentElement;
+            while (clipNode && clipNode.id !== 'root') {
+              const clipStyle = getComputedStyle(clipNode);
+              const clipRect = clipNode.getBoundingClientRect();
+              if (['hidden', 'clip', 'scroll', 'auto'].includes(clipStyle.overflowX)) {
+                visibleLeft = Math.max(visibleLeft, clipRect.left);
+                visibleRight = Math.min(visibleRight, clipRect.right);
+              }
+              if (['hidden', 'clip', 'scroll', 'auto'].includes(clipStyle.overflowY)) {
+                visibleTop = Math.max(visibleTop, clipRect.top);
+                visibleBottom = Math.min(visibleBottom, clipRect.bottom);
+              }
+              clipNode = clipNode.parentElement;
+            }
+            const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+            const visibleHeight = Math.max(0, visibleBottom - visibleTop);
             let effectiveOpacity = 1;
             let opacityNode: Element | null = el as Element;
             while (opacityNode && opacityNode.id !== 'root') {
@@ -534,6 +665,9 @@ async function inspectRenderedLayout(
               tag: (el as Element).tagName.toLowerCase(),
               text,
               x: r.x, y: r.y, width: r.width, height: r.height,
+              visibleWidth,
+              visibleHeight,
+              visibleArea: visibleWidth * visibleHeight,
               scrollWidth: (el as HTMLElement).scrollWidth,
               scrollHeight: (el as HTMLElement).scrollHeight,
               clientWidth: (el as HTMLElement).clientWidth,
@@ -558,6 +692,7 @@ async function inspectRenderedLayout(
               motionLayer: (el as HTMLElement).dataset.motionLayer || undefined,
               motionDepth: (el as HTMLElement).dataset.motionDepth || undefined,
               allowOverlap: (el as HTMLElement).dataset.motionAllowOverlap === 'true',
+              agentMediaAssetId: (el as HTMLElement).dataset.agentMediaAssetId || undefined,
             };
           });
           }, frame)).map((node) => ({
@@ -589,6 +724,7 @@ async function inspectLayoutRisks(
   checkRenderedLayout: boolean,
   options: {
     assetBindings?: CardAssetBinding[];
+    qualityProfile?: MotionCardValidationInput['qualityProfile'];
     timingPlan?: TimingPlan;
     durationInFrames: number;
   },
@@ -675,16 +811,52 @@ async function inspectLayoutRisks(
       message: '整卡缓动种类不足 2 种且未使用 spring，动效可能单调（运动多样性不足）。',
     });
   }
-  if (!checkRenderedLayout) return issues;
+  if (!checkRenderedLayout) {
+    if (options.qualityProfile === 'agent-composite') {
+      issues.push(...compositeMediaUsageIssues(markups, options.assetBindings));
+      if ((options.assetBindings ?? []).length > 0) {
+        const hasRequired = (options.assetBindings ?? []).some((binding) => (
+          binding.usage === 'required' || binding.required === true
+        ));
+        issues.push({
+          severity: 'error',
+          code: hasRequired
+            ? 'required-composite-visibility-unverified'
+            : 'agent-composite-visibility-unverified',
+          message: `${hasRequired ? '必用' : '合成'}素材未执行真实盒模型可见性探针，不能确认其透明度、画内面积与裁切后面积。`,
+        });
+      }
+    }
+    return issues;
+  }
 
   const layoutNodes = await inspectRenderedLayout(markups, options);
   if (layoutNodes === null) {
+    const hasRequiredCompositeBinding = options.qualityProfile === 'agent-composite'
+      && (options.assetBindings ?? []).some((binding) => (
+        binding.usage === 'required' || binding.required === true
+      ));
+    if (options.qualityProfile === 'agent-composite') {
+      issues.push(...compositeMediaUsageIssues(markups, options.assetBindings));
+    }
     issues.push({
-      severity: 'warning',
-      code: 'layout-probe-unavailable',
-      message: 'Playwright 布局探针不可用，已跳过真实盒模型的文字裁切/越界/遮挡检查。',
+      severity: options.qualityProfile === 'agent-composite'
+        && (options.assetBindings ?? []).length > 0
+        ? 'error'
+        : 'warning',
+      code: options.qualityProfile === 'agent-composite'
+        ? hasRequiredCompositeBinding
+          ? 'required-composite-visibility-unverified'
+          : 'agent-composite-visibility-unverified'
+        : 'layout-probe-unavailable',
+      message: options.qualityProfile === 'agent-composite'
+        ? `Playwright 布局探针不可用，无法确认${hasRequiredCompositeBinding ? '必用' : '合成'}素材的真实可见面积，Agent 合成已阻断。`
+        : 'Playwright 布局探针不可用，已跳过真实盒模型的文字裁切/越界/遮挡检查。',
     });
     return issues;
+  }
+  if (options.qualityProfile === 'agent-composite') {
+    issues.push(...compositeMediaUsageIssues(markups, options.assetBindings, layoutNodes));
   }
   const issueCounts = new Map<string, number>();
   const pushCappedIssue = (issue: CardValidationIssue, limit = 3) => {
@@ -762,7 +934,10 @@ async function inspectLayoutRisks(
     // 内容盒累计高度溢出：CardStage 内容区（data-role="cardstage-content"）是 flex column 无 overflow，
     // 子内容超过 0.72H 时 scrollHeight > clientHeight（布局尺寸，不受镜头 scale 影响），
     // 居中对称溢出会被外层 overflow:hidden 裁切，视觉上即"元素全挤叠在一起"。
+    // Agent 原子合成允许把 CardStage 只当画布/运镜容器，内容以 absolute/遮罩自主组织；
+    // 对它套普通 Motion 的 0.72H 纵向容量预算会把合法叠层误判为堆叠。
     if (
+      options.qualityProfile !== 'agent-composite' &&
       node.role === 'cardstage-content' &&
       node.clientHeight > 0 &&
       node.scrollHeight > node.clientHeight + 1
@@ -910,6 +1085,8 @@ export async function validateMotionCardTsx(
     (options.frames ?? [0, Math.floor(durationInFrames / 2), durationInFrames - 1])
       .map((frame) => Math.min(durationInFrames - 1, frame)),
   );
+  const mediaAssets = resolveAgentMediaAssets(options.assetBindings, (src) => src);
+  const BoundMedia = makeSmokeBoundMedia(mediaAssets, options.assetBindings);
   const markups: MotionCardKeyframeMarkup[] = [];
   for (const frame of frames) {
     try {
@@ -928,6 +1105,8 @@ export async function validateMotionCardTsx(
         markup: renderToStaticMarkup(React.createElement(Comp, {
           cues: options.cues ?? [],
           timingPlan: options.timingPlan,
+          mediaAssets,
+          BoundMedia,
         })),
       });
     } catch (error) {
@@ -946,6 +1125,7 @@ export async function validateMotionCardTsx(
     options.checkRenderedLayout !== false,
     {
       assetBindings: options.assetBindings,
+      qualityProfile: options.qualityProfile,
       timingPlan: options.timingPlan,
       durationInFrames,
     },

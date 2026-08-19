@@ -60,12 +60,19 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 | `director.approved` | 人工批准导演方案并开始制作 | `taskId`, `directorRevision`, `impact` |
 | `checkpoint.auto-approved` | 一键模式自动批准导演方案或 Animatic | `checkpoint`, `taskId`, `directorRevision` |
 | `checkpoint.waiting` | 导演模式到达人工检查点 | `checkpoint`, `taskId`, `directorRevision` |
-| `production.tracks.start` / `production.tracks.end` | 画面、封面、声音、高亮四轨并行 | `taskId`, `directorRevision`, `impact`, `cardErrors`, `coverError`, `audioOutcome` |
+| `production.tracks.start` / `production.tracks.end` | 画面、封面、声音、高亮四轨 + footage 轨并行（footage 先跑完检索再开四轨） | `taskId`, `directorRevision`, `impact`, `cardErrors`, `coverError`, `audioOutcome`, `footagePlacements`, `footageUnavailable`, `footageError` |
 | `production.resume` | 从持久化输出状态恢复制作 | `taskId`, `mode` |
 | `planning.done.received` | renderer 收到 `analyze-planning-done` 事件，封面轨道启动 | `coverPrompts`, `segments` |
 | `card.start` / `card.end` | 单段卡片生成 | `segmentIndex`, `visualType`, `durationMs`, `ok` |
 | `card.compile.start` / `card.compile.end` | motion 卡 template 模式确定性编译（storyboard → TSX，不经 LLM） | `segmentId`, `carrier`, `durationMs`, `ok`, `error?`；分镜声明 assets 时附 `assetRequested` / `assetResolved` / `assetUnresolved`（物化失败 → 编译退回纯文字布局，靠这三个字段观测降级） |
 | `card.image.start` / `card.image.end` | image 卡片调图像 provider 物化资产 | `segmentIndex`, `durationMs` |
+| `stage.start` / `stage.end`（footage 轨） | footage 轨素材检索整轨 | `stage:"footage"`, `segments`, `durationMs`, `adopted`, `unavailable?` |
+| `footage.match` | 单个 footage 段的素材检索决策 | `segmentIndex`, `segmentId`, `query`, `topScore`, `decision:'adopt'\|'fallback-image'\|'fallback-motion'\|'none'`, `error?` |
+| `kacut.unavailable` | KaCut（灵机素材 MCP）健康检查失败，footage 整轨跳过（每轮只记一次） | `error`；不得记录含访问 Token 的 endpoint |
+| `kacut.digest` | planning 前获取素材库摘要（注入 footage 选项；失败则 prompt 不出现 footage） | `ok`, `durationMs`, `itemCount`, `error?` |
+| `stage.start` / `stage.end`（发布识别） | 发布中心 Pi ingest 回填工作目录 | `stage:"publish.ingest"`, `durationMs`, `ok` |
+| `publish.ingest.start` / `publish.ingest.end` | 识别开跑 / 结束 | `model`（Pi 候选首位）、`ok`、`durationMs`、`toolCalls`；不含用户文案 |
+| `publish.ingest.tool` / `tool-use` / `tool-result` | ingest 单次工具调用 | `name`；payload 不含用户文案全文 |
 | `highlight.batch.start` / `highlight.batch.end` | 字幕高亮单 batch | `batchIndex`, `batchTotal`, `durationMs` |
 | `llm.start` / `llm.firstChunk` / `llm.end` | 每次结构化 / 文本 LLM 调用 | `label`, `attempt`, `thinking`, `latencyMs`, `durationMs`, `outputChars`, `retry`, `willRetry`, `error` |
 
@@ -73,7 +80,7 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 - `planning.segment` — 规划分段（最容易卡 10 分钟以上的那一步）
 - `cards.segment#i/N(seg-x)` — 每段卡片
 - `card.image(seg-x)` — image 卡片的中文 prompt 二次调用
-- `cover.regeneration` — 单独重生封面 prompt
+- `cover.regeneration` — 单独重生封面 prompt；发布识别里的封面提示词工具也走这个 label
 - `highlights#i/N` — 单 batch 字幕高亮
 
 ### 标准诊断流程
@@ -93,11 +100,11 @@ ls -lt "$LOGDIR"/*.jsonl | head -10
 6. **TTS 慢**：MiniMax 服务端问题，本地能做的只有换 model
 7. **cover 慢**：基本是 image provider 慢，看 `stage.end{stage:"cover"}` 的 durationMs 与 candidates count
 
-### 导演门禁与四轨并行的预期形态
+### 导演门禁与五轨并行的预期形态
 
 TTS 之后先单独执行 `director.plan`。导演模式停在 `checkpoint.waiting{checkpoint:"director-review"}`；一键模式记录 `checkpoint.auto-approved`。批准前不得出现卡片 Agent、图像 Provider、封面出图、声音 Provider 或高亮调用。
 
-批准后 `production.tracks.start` 同时启动四路：cards、cover、audio、highlights。全部完成后原子替换时间线；导演模式进入 Animatic 等待，一键模式自动批准 Animatic 并完成。若恢复运行，先出现 `production.resume`，已是 current 且 provenance 匹配的产物不应重复调用。
+批准后 `production.tracks.start` 启动五路：footage 轨先做素材检索（本机 HTTP，秒级；拿到认领名单后 cards 轨跳过已认领段），随后 cards、cover、audio、highlights 四轨并行。全部完成后原子替换时间线（footage placements 一并上 `visual-2` 轨）；导演模式进入 Animatic 等待，一键模式自动批准 Animatic 并完成。若恢复运行，先出现 `production.resume`，已是 current 且 provenance 匹配的产物不应重复调用（footage 产物存于 `production.footage`，复用时不重新检索 KaCut）。KaCut 不可用只有一条 `kacut.unavailable`，footage 段全部退回出卡，流程不断。
 
 ### 把发现转成行动
 
@@ -116,13 +123,17 @@ TTS 之后先单独执行 `director.plan`。导演模式停在 `checkpoint.waiti
 - `electron/preload.ts` — `appendAutoRunEvent / listAutoRunLogs / readAutoRunLog / getLatestAutoRunLog / getAutoRunLogDir / onAnalyzePlanningDone`
 - `src/lib/telemetry/auto-run.ts` — `createAutoRunTelemetry(runId)` 包装 + `TelemetryHook` 类型，被 lib 层共用
 - `src/lib/llm/index.ts` — `generateStructuredData` 接 `telemetry`，emits `llm.start / firstChunk / end`
-- `src/lib/ai-analysis.ts` — `analyzeSrt` 接 `telemetry` 与 `onPlanningDone`；emits `stage.start/end{stage:"analyze.planning"|"analyze.cards"}`、`card.start/end`、`card.image.start/end`
+- `src/lib/ai-analysis.ts` — `analyzeSrt` 接 `telemetry` 与 `onPlanningDone`；emits `stage.start/end{stage:"analyze.planning"|"analyze.cards"}`、`card.start/end`、`card.image.start/end`；planning 前经注入的 `kacutDigestProvider` 取素材库摘要并 emit `kacut.digest`
+- `electron/footage/kacut-client.ts` — 灵机素材（KaCut）本机 MCP client（JSON-RPC over HTTP，5s 超时，错误带 `kacut` 前缀）；`footage:health|search-clips|library-digest` IPC 在 `electron/main.ts` 注册，preload 暴露 `kacutHealth/kacutSearchClips/kacutLibraryDigest`
+- `src/lib/footage-match.ts` — footage 纯逻辑：素材库摘要 prompt 块、规划后处理（连续 ≤2 段 / 首尾禁 footage / 无 query 回落）、匹配决策矩阵（≥0.7 adopt，0.4–0.7 按 footageFallback 降级，<0.4 与无结果退 motion）
+- `src/lib/director-production-tracks.ts` — `generateFootageTrack`：emits `stage.start/end{stage:"footage"}`、`footage.match`、`kacut.unavailable`；与 cards 轨的认领协调（visualTypeOverrides）也在本文件
 - `electron/pipeline/motion-agent-run.ts` — motion 卡编排器；template 模式（默认）emits `card.compile.start/end`（确定性编译，不经 LLM），agent 模式经 `emit()` emits `llm.end{label:"<seg>:director|storyboard|validate|review|fallback"}`；`AISettings.motionCardMode` 切换两条路径；hybrid 模式的分流决议以 `motionPath` / `motionPathReason` 附加字段挂在这两组既有事件上
 - `electron/pipeline/motion-hybrid.ts` — hybrid 分段筛选纯函数（阈值 / 每期上限截断 / 单卡兜底）+ `buildHybridSelectionFromPlan`（从导演方案构建预选表）。批量预选注入 `ctx.hybridDecision` 的三处入口（均须保留 `motionCardMode:'hybrid'` 让遥测带 `motionPathReason`）：headless `electron/pipeline/runs/analyze-run.ts`、renderer 一键的 `analyze-srt` IPC（projectDir 分支）与逐段生成的 `generate-ai-card-for-segment` IPC（后两者在 `electron/ai-generation-ipc.ts`，从 project.json 的 approvedPlan 构建）
 - `src/lib/subtitle-highlight-runner.ts` — `concurrency`、`telemetry`；emits `stage.*` + `highlight.batch.*`
 - `src/hooks/useAIVideoWorkflow.ts` — 写稿 / TTS 后进入导演编排器，维护两个检查点与恢复入口
 - `src/lib/director-production-client.ts` — 批准后四轨并行与 revision/task 隔离
 - `src/lib/director-production-persistence.ts` — 产物状态、原子时间线替换和 Animatic 检查点
+- `electron/publish-agent/ingest-run.ts` — 发布中心 Pi ingest；模型取全局 `publish.metadata` 绑定（发布中心页可切换，同时约束封面提示词工具），emits `stage.start/end{stage:"publish.ingest"}`、`publish.ingest.start{model}`、`publish.ingest.tool*`；禁止把路径里的用户文案全文写入 payload。已有封面或已有 `coverPrompt` 时跳过封面提示词 LLM。`PublishHub` 必须传 `telemetryRunId` 与 `projectBindings: null`
 
 新增耗时操作时也按这个套路接入，不要再发明独立日志。
 

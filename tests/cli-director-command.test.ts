@@ -75,6 +75,7 @@ describe('runDirectorCommand', () => {
         coverPrompts: [], summary: '摘要', keywords: [],
       },
       plan: {
+        segments: [],
         motionBible: {
           visualThesis: '测试',
           rhythm: { density: 'balanced', heavySegments: [], quietSegments: [] },

@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AICardInspector } from '../src/components/AICardInspector';
+import type { MotionStoryboard } from '../src/lib/motion-storyboard';
 import type { AICard } from '../src/types/ai';
 
 // 让 React 在 jsdom 下识别 act() 边界。
@@ -151,6 +152,158 @@ describe('AICardInspector · 分镜', () => {
       await Promise.resolve();
     });
     expect(onRegenerate.mock.calls[1]?.[1]).toEqual({ refineExistingMotion: true });
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it('Agent 合成卡不开放旧的单次生成分镜入口', async () => {
+    const compositeCard: AICard = {
+      id: 'card-composite',
+      segmentId: 'segment-1',
+      type: 'motion',
+      title: 'Agent 合成卡片',
+      content: '真实素材与观点共同出现',
+      startMs: 0,
+      endMs: 5_000,
+      displayDurationMs: 5_000,
+      displayMode: 'fullscreen',
+      template: 'motion-default',
+      enabled: true,
+      style: baseCardStyle,
+      renderStrategy: 'agent-composite',
+    };
+    const onGenerateAnimationDirection = vi.fn();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AICardInspector
+          card={compositeCard}
+          onRegenerate={async () => null}
+          onSave={() => undefined}
+          onGenerateAnimationDirection={onGenerateAnimationDirection}
+        />,
+      );
+    });
+
+    const storyboardButton = Array.from(container.querySelectorAll('button')).find((element) =>
+      (element.textContent ?? '').includes('生成分镜'),
+    );
+    expect(storyboardButton).toBeUndefined();
+    expect(container.textContent).toContain('交由 Pi 精雕');
+    expect(onGenerateAnimationDirection).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it('Agent 合成回退上一版时清除当前质检报告并请求失效制作输出', async () => {
+    const previousStoryboard: MotionStoryboard = {
+      claim: '上一版观点',
+      carrier: 'concept',
+      scene: '上一版真实素材与观点关系',
+      focus: { beat: 0, subject: '上一版焦点' },
+      beats: [{ cue: null, kind: 'build', adds: '上一版内容', motion: '上一版运动' }],
+      media: [{ assetId: 'asset-1', slot: 'media-1', purpose: '事实证据', beats: [0] }],
+    };
+    const currentStoryboard: MotionStoryboard = {
+      claim: '当前版本',
+      carrier: 'concept',
+      scene: '当前版本场景',
+      beats: [],
+    };
+    const compositeCard: AICard = {
+      id: 'card-composite-history',
+      segmentId: 'segment-1',
+      type: 'motion',
+      title: 'Agent 合成卡片',
+      content: '真实素材与观点共同出现',
+      startMs: 0,
+      endMs: 5_000,
+      displayDurationMs: 5_000,
+      displayMode: 'fullscreen',
+      template: 'motion-default',
+      enabled: true,
+      style: baseCardStyle,
+      renderStrategy: 'agent-composite',
+      animationDirection: JSON.stringify(currentStoryboard),
+      generationProvenance: {
+        directorRevision: 2,
+        fingerprint: 'card-current',
+        generatedAt: 2,
+        modifiedByUser: false,
+      },
+      motionCard: {
+        tsx: 'export default function Current(){ return null; }',
+        compiledAt: 2,
+        compileError: '当前版本错误',
+        prompt: '',
+        retryCount: 0,
+        storyboard: currentStoryboard,
+        storyboardHistory: [{
+          savedAt: 1,
+          tsx: 'export default function Previous(){ return null; }',
+          storyboard: previousStoryboard,
+        }],
+        productionReport: {
+          status: 'pass',
+          generatedAt: 2,
+          framesChecked: [0, 30],
+          lintIssues: [],
+          layoutIssues: [],
+          reviewIssues: [],
+          assetIssues: [],
+          fallbackUsed: false,
+          fixRounds: 0,
+          reviewRounds: 1,
+          renderOk: true,
+          visualReviewAvailable: true,
+          contactSheetPath: '/tmp/current-contact-sheet.png',
+          contactSheetCacheKey: 'current-cache-key',
+        },
+      },
+    };
+    const onSave = vi.fn();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AICardInspector
+          card={compositeCard}
+          onRegenerate={async () => null}
+          onSave={onSave}
+        />,
+      );
+    });
+
+    const restoreButton = Array.from(container.querySelectorAll('button')).find((element) =>
+      (element.textContent ?? '').includes('回退上一版'),
+    );
+    expect(restoreButton).toBeTruthy();
+
+    await act(async () => {
+      restoreButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const [cardId, updates, options] = onSave.mock.calls[0];
+    expect(cardId).toBe(compositeCard.id);
+    expect(updates.animationDirection).toBe(JSON.stringify(previousStoryboard, null, 2));
+    expect(updates.motionCard).toMatchObject({
+      tsx: 'export default function Previous(){ return null; }',
+      storyboard: previousStoryboard,
+      storyboardHistory: [],
+      compiledAt: 1,
+    });
+    expect(updates.motionCard.productionReport).toBeUndefined();
+    expect(updates.motionCard.compileError).toBeUndefined();
+    expect(updates.generationProvenance.modifiedByUser).toBe(true);
+    expect(options).toEqual({ invalidateProduction: true });
 
     await act(async () => root.unmount());
     container.remove();

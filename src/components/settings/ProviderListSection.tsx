@@ -15,7 +15,6 @@ import {
   getPiBuiltinProviderId,
 } from '../../lib/llm/pi-provider-presets';
 import { testProviderModel } from '../../lib/llm/test-provider';
-import { isLingjiManagedProviderId } from '../../lib/llm/lingji-gateway';
 import {
   Badge,
   Button,
@@ -36,7 +35,6 @@ import {
 } from '../../ui';
 import type { SelectOption } from '../../ui';
 import { normalizeProviderDraft, validateProviderDraft } from './ai-config-utils';
-import { LingjiGatewayConnect } from './LingjiGatewayConnect';
 import styles from './ProviderListSection.module.css';
 
 /** 生成唯一 ID */
@@ -1133,10 +1131,6 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
     onChange(next, newDefaultId);
   };
 
-  const handleGatewayConnected = (provider: LLMProvider) => {
-    onChange([...providers, provider], provider.id);
-  };
-
   const openAdd = () => {
     setEditTarget(emptyProvider());
     setIsAdding(true);
@@ -1160,12 +1154,9 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
           title="暂无文本生成服务"
           description="点击下方按钮添加你的第一个文本生成服务。"
           actions={
-            <div className={styles.providerActions}>
-              <LingjiGatewayConnect onConnected={handleGatewayConnected} />
-              <Button type="button" variant="secondary" leftIcon={<Plus size={14} />} onClick={openAdd}>
-                添加文本生成服务
-              </Button>
-            </div>
+            <Button type="button" variant="secondary" leftIcon={<Plus size={14} />} onClick={openAdd}>
+              添加文本生成服务
+            </Button>
           }
         />
       ) : (
@@ -1183,26 +1174,18 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
                     ) : null}
                   </div>
                   <div className={styles.providerActions}>
-                    {isLingjiManagedProviderId(p.id) ? (
-                      <Badge variant="secondary" size="xs">
-                        服务端托管
-                      </Badge>
-                    ) : (
-                      <>
-                        <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => openEdit(p)}>
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          leftIcon={<Trash2 size={12} />}
-                          onClick={() => handleDelete(p.id)}
-                        >
-                          删除
-                        </Button>
-                      </>
-                    )}
+                    <Button type="button" variant="ghost" size="sm" leftIcon={<Pencil size={12} />} onClick={() => openEdit(p)}>
+                      编辑
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      leftIcon={<Trash2 size={12} />}
+                      onClick={() => handleDelete(p.id)}
+                    >
+                      删除
+                    </Button>
                   </div>
                 </div>
 
@@ -1235,7 +1218,6 @@ export function ProviderListSection({ providers, defaultProviderId, onChange }: 
           </div>
 
           <div className={styles.providerActions}>
-            <LingjiGatewayConnect onConnected={handleGatewayConnected} />
             <Button
               type="button"
               variant="secondary"

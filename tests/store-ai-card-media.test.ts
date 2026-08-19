@@ -121,6 +121,56 @@ describe('AI store: media card actions', () => {
     expect(deleted?.motionCard?.productionReport?.assetIssues[0]?.code).toBe('asset-binding-missing');
   });
 
+  it('不删除导演已冻结但不属于 Asset Center 的用户锁定素材', () => {
+    const binding = {
+      slot: 'media-1',
+      assetId: 'lingji-material-1',
+      filePath: '/external/evidence.jpg',
+      kind: 'image' as const,
+      usage: 'required' as const,
+      required: true,
+      lockedByUser: true,
+      fileFingerprint: 'stat:1:2',
+      treatment: DEFAULT_ASSET_TREATMENT,
+      placement: { x: 0, y: 0, width: 1920 },
+    };
+    useAIStore.setState({
+      analysisResult: {
+        ...makeAnalysis(),
+        cards: [{
+          id: 'composite-1',
+          segmentId: 'seg-1',
+          type: 'motion',
+          title: 'Composite',
+          content: 'content',
+          startMs: 0,
+          endMs: 1_000,
+          displayDurationMs: 1_000,
+          displayMode: 'fullscreen',
+          template: 'motion',
+          enabled: true,
+          style: {} as never,
+          renderStrategy: 'agent-composite',
+          assetBindings: [binding],
+          motionCard: { tsx: 'export default () => null', compiledAt: 0, prompt: '', retryCount: 0 },
+        }],
+      },
+    });
+    useAIStore.getState().reconcileAssetBindings({
+      version: 2,
+      libraryId: 'empty',
+      settings: { rootDir: '/tmp', defaultImportMode: 'copy', defaultProjectReferenceMode: 'copy-to-project' },
+      updatedAt: '2026-07-31T00:00:00.000Z',
+      assets: [],
+    });
+
+    const card = useAIStore.getState().analysisResult?.cards[0];
+    expect(card?.assetBindings).toEqual([binding]);
+    expect(card?.motionCard?.productionReport?.assetIssues ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'asset-binding-missing' })]),
+    );
+  });
+
   it('regenerateCardMedia 成功后写回 ready 与新内容', async () => {
     const fakeMedia: MediaCardContent = {
       mediaType: 'image',

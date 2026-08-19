@@ -62,7 +62,11 @@ export function useAICardInspector(cardId: string | null) {
   );
 
   const saveCard = useCallback(
-    (targetCardId: string, updates: Partial<AICard>) => {
+    (
+      targetCardId: string,
+      updates: Partial<AICard>,
+      options: { invalidateProduction?: boolean } = {},
+    ) => {
       const nextResult = updateCardInResult(analysisResult, targetCardId, updates);
       if (!nextResult) {
         return;
@@ -85,6 +89,19 @@ export function useAICardInspector(cardId: string | null) {
         ) {
           addAICardsToTimeline([buildAICardTimelineDraft(updatedCard, persistedResult.motionBible)]);
         }
+        if (options.invalidateProduction) {
+          const projectDir = getProjectDir();
+          if (projectDir) {
+            return window.electronAPI.mutateProjectProduction(projectDir, {
+              kind: 'invalidate-outputs',
+              outputs: ['cards', 'timeline'],
+            }).then(() => undefined);
+          }
+        }
+        return undefined;
+      }).catch((error) => {
+        console.error('卡片保存后的制作状态失效标记失败:', error);
+        setAnalysisError(error instanceof Error ? error.message : '制作状态失效标记失败');
       });
     },
     [

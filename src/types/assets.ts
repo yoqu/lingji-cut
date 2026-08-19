@@ -328,10 +328,34 @@ export interface CardAssetBinding {
   slot: string;
   assetId: string;
   filePath: string;
+  /** Agent 合成媒体的真实类型；旧图片绑定可缺省，由文件扩展名推断。 */
+  kind?: 'image' | 'video';
+  /** Agent 可自行舍弃可选素材，但必须使用 required 素材。 */
+  usage?: 'required' | 'optional';
+  /** 视频从源文件的该时间点开始播放。 */
+  trimStartMs?: number;
+  /** 媒体源时长；视频渲染时用于限制 trimAfter。 */
+  durationMs?: number;
+  /** 旧版布尔字段兼容；新数据优先使用 usage。 */
+  required?: boolean;
+  /** 用户已锁定，制作链路不得静默替换。 */
+  lockedByUser?: boolean;
+  /** 锁定时记录的本机文件指纹，制作 / 恢复阶段用于验证没有被静默替换。 */
+  fileFingerprint?: string;
+  /** 视频候选的预览缩略图，不参与最终真帧渲染。 */
+  thumbnailFile?: string;
   treatment: AssetTreatment;
   metadata?: Pick<
     AssetMetadata,
-    'width' | 'height' | 'hasAlpha' | 'processedAt' | 'processedColorKey'
+    | 'width'
+    | 'height'
+    | 'durationMs'
+    | 'hasAlpha'
+    | 'processedAt'
+    | 'processedColorKey'
+    | 'mimeHint'
+    | 'normalizedContentHash'
+    | 'video'
   >;
   placement: {
     x: number;

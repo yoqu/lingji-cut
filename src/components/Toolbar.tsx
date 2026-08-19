@@ -32,7 +32,7 @@ const pageTitleMap: Record<Exclude<AppPage, 'editor'>, string> = {
   publish: '发布',
   settings: '系统设置',
   'auto-run': '自动剪辑',
-  'free-publish': '自由发布',
+  'publish-hub': '发布中心',
 };
 
 const pageStatusMap: Record<Exclude<AppPage, 'editor'>, string> = {
@@ -44,7 +44,7 @@ const pageStatusMap: Record<Exclude<AppPage, 'editor'>, string> = {
   publish: '多平台发布',
   settings: '全局配置',
   'auto-run': '自动剪辑运行中',
-  'free-publish': '发布任意视频到全平台',
+  'publish-hub': '工作目录识别与多平台发布',
 };
 
 export function Toolbar({

@@ -19,7 +19,7 @@ const indent = (block: string, pad: string): string =>
 
 const PRODUCTION_DIRECTOR = `name: production.director
 description: 导演制作规则（自动注入分段规划与 Motion Bible）
-version: 3
+version: 4
 user: |-
   你正在为知识类播客制作专业 MG 视频。以下规则决定整片的导演节奏与视听组织，必须结合口播语义执行，不机械套模板。
 
@@ -32,6 +32,10 @@ user: |-
   真实性与新闻伦理（最高优先级铁律）：
   - 对真实发生的新闻、财经、商业或公共事件（上市敲钟、发布会、签约、会议、庭审、事故与灾害等），禁止用 AI 生成可被误认为真实现场记录的写实画面，不得伪造真实人物在场、动作、场馆、媒体镜头或机构标识。
   - 素材优先级固定：来源可核验的真实素材 > Motion Card / 信息图 / 符号化表达 > 明显非写实的卡通或编辑插画；没有真实素材时绝不以写实 AI 图"补拍"现场。
+  - 禁止的是用合成画面冒充现场或事实证据，不是禁止整期使用图片。真实议题中的单一物件、产品外观、抽象场景和明显非写实的编辑插画仍可用 image，不能因为主题属于新闻或公共议题就把全片都做成 Motion。
+  - evidence 画面必须能核验到口播所述人物、机构、产品、地点或事件；context、emotion、demonstration 与 breath 镜头可使用相关且不误导的通用真实 B-roll。通用素材不得暗示自己就是特定事件现场。
+  - 素材检索分只用于候选排序。最终采用以成功检视、可见内容、明确媒介角色和非误导判断为准；人工或导演 Agent 明确选择的低分素材可以执行。
+  - 不给 footage、image 或 agent-composite 设置数量、占比、连续段数与首尾禁用配额；逐镜头按叙事收益决定，也不得为了避免全 Motion 而强塞素材。
 
   动作与转场：
   - 信息镜头按 anticipation → reveal → emphasis → hold → resolve 组织，重点落点对齐口播重音。
@@ -50,37 +54,41 @@ user: |-
 
 const PLANNING_SEGMENT = `name: planning.segment
 description: 字幕分段规划提示词
-version: 8
+version: 11
 user: |-
   你是一个播客内容分析助手。请先完整理解整篇字幕，再把节目拆成有明确语义边界的段落。
   {{globalPromptLine}}
 
+  作品信息：
+  - title：提炼 8-14 个汉字的作品标题，像自然表达而不是广告口号；忠于原文，不编造数字或结论。
+  - summary：生成 1-2 句、约 30-80 字的作品简介，直接讲清本期在说什么，不写“本期视频将”等套话。
+
   段落拆分：
   - 按真实话题边界拆分，不按 token 长度硬切；同一话题可拆 2-3 段承载更细的子主题。
-  - 每个 segment 是一个可独立制作的 MG 镜头；镜头时长与密度遵循下方导演制作规则，整期镜头数约为总时长 ÷ 6 秒。
+  - 每个 segment 是一个语义完整的候选镜头单元；这里只给初始视觉建议，整片导演会在下一步通看全部段落后统一分配最终媒介、构图、运镜与转场。
   - startMs / endMs 对应该段真正开始与结束的字幕时间，铺垫不提前算入；transcriptExcerpt 只保留当前镜头覆盖的字幕。
 
-  visualType 选择：默认 "motion"。仅当同时满足以下 ≥2 条强信号才选 "image"：
+  visualType 初始建议：不要默认全选 "motion"。满足以下任一明确画面条件即可选 "image"：
   1. 段落核心是一个可被单张静态图清晰呈现的具体对象（单一产品 / 人物 / 地点 / 场景 / 物件特写）；
   2. 出现专有名词 / 品牌 / 型号 / 地点 / 人名，且该名词就是本段视觉主体（不是顺带提到）；
   3. 段落在做画面化描写（长相 / 场景 / 氛围 / 姿态），口播在"带观众看"而不是"讲道理"。
-  观点、数据、清单、流程、铺垫、转场或拿不准 → 一律 motion。整期 image 段数不得超过总段数的 1/3。选 image 的段落须在 transcriptExcerpt 或 summary 中体现上述具体名词 / 描写，便于复核。
+  观点、数据、清单、流程、铺垫、转场或拿不准 → motion。若下方明确提供素材库 footage 轨道，叙事、场景建立、产品实拍、人物行动与事实证据可建议 footage。evidence 必须是来源特定素材；context、emotion、demonstration 与 breath 可使用相关且不误导的通用真实 B-roll。不要设置 image / footage 的数量、占比、连续段数或首尾配额；逐段按叙事价值决定。选 image 的段落须在 transcriptExcerpt 或 summary 中体现具体名词 / 描写，便于复核。禁止的只是用 AI 图冒充真实现场；真实新闻或公共议题中的单一产品、物件、抽象场景与明显非写实编辑插画仍可选 image，不得仅因整期主题真实就全部选择 motion。
 
   coverPrompts（1 条，16:9 播客封面文生图提示词，120-200 字）：
 ${indent(T2I_RULES, '  ')}
   - 主体居中突出、信息聚焦，紧扣节目核心主题 / 关键人物 / 冲突感
-  - 必须包含画面文字标题：从整期提炼 8-14 个汉字的节目标题，用中文引号“”精确包裹；排版给出具体约束——字体族（现代中文无衬线，如思源黑体 / 苹方）、字重（默认 Bold）、字号占画面高度 6%-12%、主文字颜色（十六进制、与背景强对比）、描边 / 阴影 / 光晕 / 渐变任选 1-2 种、排版位置（避开主体）
+  - 必须包含画面文字标题：逐字使用顶层 title，用中文引号“”精确包裹，不得缩写、改写或另造标题；排版给出具体约束——字体族（现代中文无衬线，如思源黑体 / 苹方）、字重（默认 Bold）、字号占画面高度 6%-12%、主文字颜色（十六进制、与背景强对比）、描边 / 阴影 / 光晕 / 渐变任选 1-2 种、排版位置（避开主体）
   - 除该标题外画面禁止任何其它文字（副标题 / 署名 / 水印 / logo / 日期）与拼写错误
 `;
 
 const COVER_REGENERATION = `name: cover.regeneration
 description: 封面提示词重生成（短视频缩略图 · B站知识区 / YouTube thumbnail 风）
-version: 11
+version: 12
 user: |-
   你是知识类短视频 / 播客的封面提示词工程师。请结合本期字幕，重生成 1 条可直接喂给 AI 生图模型的 16:9 高点击率缩略图封面提示词。
 
   本期作品标题：{{title}}
-  主文案来源（最高优先级，覆盖风格规范中"从字幕提炼主标题"的指令）：标题不为"无"时，封面主标题必须直接取自作品标题，优先逐字使用；超出字数上限时截取标题原文核心短语，禁止另造立意或绕开标题从字幕另造。标题为"无"时才按风格规范从字幕提炼。
+  主文案来源（最高优先级，覆盖风格规范中"从字幕提炼主标题"的指令）：标题不为"无"时，封面主标题必须逐字使用作品标题；即使标题较长，也只能通过换行、字号或排版适配，禁止截取、缩写、改写或另造。标题为"无"时才按风格规范从字幕提炼。
 
   已有整期创作提示词：{{globalPrompt}}
   当前封面提示词（仅供参考，可改写）：{{currentPrompt}}
@@ -89,10 +97,10 @@ user: |-
 `;
 
 const MOTION_BIBLE = `name: motion.bible
-description: 整片 Motion Bible（全片 motion 视觉导演策略）
-version: 6
+description: 整片导演镜头方案（最终媒介与镜头语言）
+version: 10
 user: |-
-  你是知识视频的 motion director。在单卡生成前为整期制定 Motion Bible，统一风格、节奏、载体分布与卡间转场：让每张卡服务整期论证；重点段更重、过渡段更轻；保持克制的专业工具感（短标题、强数字、轻说明，风格沿用系统 tokens）。
+  你是知识视频的总导演。在任何素材检索、图片生成和 Motion Card 制作前，先通看整期内容，为每个段落一次性制定最终镜头方案。你的任务不是把每段都包装成 MG 卡，而是在真实素材、图片与 Motion 之间做有叙事理由的分配，再统一构图、运镜、强弱与转场。
 
   输入：
   - 全局提示：{{globalPrompt}}
@@ -102,6 +110,15 @@ user: |-
   {{segments}}
 
   规划要点：
+  - visualType 是批准后制作轨严格执行的最终决定：来源特定的事实证据优先使用可核验 footage；产品 / 地点实拍、人物行动、环境、情绪、示范与留白可使用相关且不误导的通用真实 B-roll；单一静态对象或非写实编辑插画用 image；数据、关系、步骤、抽象观点与需要精确论证的内容用 motion。
+  - renderStrategy 决定谁来制作，不规定版式：motion / image 通常用 motion-card，纯素材画面用 standalone-media；只有真实素材与文字、数字或图形各自都提供独立叙事价值时才用 agent-composite。不要为了显得复杂而合成，也不要把所有 footage 都改成合成。
+  - agent-composite 必须同时写与必用素材一致的 visualType（视频为 footage，静态图片为 image）、可检索的 mediaQuery、合法 Motion preferredCarrier、compositionIntent 与 fallbackPolicy。compositionIntent 只描述叙事目标、视觉焦点、时序关系、必须呈现和避免表达；禁止写坐标、CSS、画中画、分屏或其它固定布局，最终空间与时间组织交给制作 Agent。
+  - compositionIntent 结构：{ narrativeGoal, focalPriority, temporalRelationship, mustShow: string[], avoid: string[] }。mustShow 只写必须出现的事实/素材关系；avoid 写广告式陈列、误导性证据等禁区。fallbackPolicy 默认 block；只有导演理由充分时才明确改为 standalone-media 或 motion。
+  - footage 仅在下方出现可用素材库摘要时选择，mediaQuery 用 2-6 个贴近素材标签的中文关键词；检索失败退路写 footageFallback。真实新闻或商业事件的退路只能是 motion，不能 image。
+  - “真实事件不能用 image”只约束把 AI 图当作现场或事实证据的具体镜头，不扩散到同一节目里的产品物件、概念场景或明显非写实编辑插画。只要段落里存在可展示的具体对象，就不得因为节目属于新闻或公共议题而把整片机械地设为 motion。
+  - 非 agent-composite 才填写 composition：motion 通常 graphic；证据画面通常 full-bleed；普通独立画面可用 media-window / split。cameraMove 要跟语义动作一致，没必要运动时明确 static，不要每镜都推拉。
+  - mediaRole 说明镜头为什么存在：evidence=来源特定且可核验的事实证据；context=建立场景，emotion=情绪与留白，demonstration=解释对象或过程，后三者可以使用相关且不误导的通用真实 B-roll。
+  - 素材检索分只用于排序，不是采用门槛；最终选择必须来自成功检视与具体采用理由。不要设置素材或 agent-composite 的数量、占比、连续段数和首尾配额。
   - preferredCarrier 从 data-hero / comparison / table / trend / list-build / process / quote / concept / timeline / matrix / funnel / network / before-after / stacked-composition 中选；拿不准时选最能证明该段 claim 的。
   - intensity：1=轻信息/过渡，2=常规信息，3=全片重点。低密度过渡 / 铺垫段不规划满版字卡——intensity=1、preferredCarrier=concept 即可，系统会进一步降级为 anchor 关键词锚点卡；满版强卡留给重点段，视觉有张有弛。
   - transitionRules.default 选 crossfade / hard-cut / push / wipe 之一；matchCutCandidates 只列真有共同视觉母题的相邻段。
@@ -114,11 +131,14 @@ user: |-
 
 const CARDS_SEGMENT = `name: cards.segment
 description: Motion Card 组件构建（组合 @lingji/motion-kit 实现 JSON 分镜；file-first 写入 motionCard.tsx）
-version: 26
+version: 29
 user: |-
   任务：把下面的分镜（storyboard）实现为 Remotion 单文件组件，写入工作目录的 motionCard.tsx。
 
-  结构契约：根节点固定 <CardStage tokens={TOKENS}><SafeLayout variant="分镜 layout 的实际字符串">...</SafeLayout></CardStage>；每个语义区块放入与 storyboard element.slot 对应的 MotionSlot，禁止自由 absolute 定位。
+  ===== 镜头合成契约（优先于下方普通 Motion Card 布局规则）=====
+  {{compositionContract}}
+
+  结构契约：标准 Motion Card 的根节点固定 <CardStage tokens={TOKENS}><SafeLayout variant="分镜 layout 的实际字符串">...</SafeLayout></CardStage>，每个语义区块放入对应 MotionSlot，禁止自由 absolute 定位。若上方契约明确为 Agent 原子合成，则允许使用 AbsoluteFill / absolute / clipPath / mask / transform 自主组织整帧，SafeLayout / MotionSlot 只作为可选的局部信息图能力。
 
   ===== motion-kit API（优先用它，工艺参数已调好）=====
   {{motionKitApi}}
@@ -134,19 +154,19 @@ user: |-
 
   ===== 实现要领 =====
   1. 节拍：const beats = useTimingPlan(timingPlan, cues, anchors)，anchors 按分镜每拍的 cue 填（第 0 拍填 null）；旧写法 useBeats(cues, anchors) 仍兼容。揭示帧一律由 kit 计算，严禁手写帧窗、严禁按比例均摊。
-  2. 载体 → 主原语（每卡只选 1 个主原语；变体匹配分镜 motion 意图，拿不准用斜杠前第一个）：
+  2. 标准 Motion Card 的载体 → 主原语（每卡只选 1 个主原语；变体匹配分镜 motion 意图，拿不准用斜杠前第一个）；Agent 原子合成按 focus / beats / media 自主开发，可围绕真实素材使用必要的局部图形或信息原语，不受整帧 SafeLayout 模板和单一模板原语限制，但仍保持一个视觉焦点：
      data-hero→StatHero / RingCounter / MetricPulse / ScaleImpact / StatGrid；comparison→CompareRow / HorizontalBars / ColumnChart；table→DataTable；trend→TrendLine；list-build→ListBuild / RankList / ChecklistPop；process→ProcessFlow / CauseChain；quote→QuoteBlock / CitationCard / KeyPointMarker；concept→ConceptCard / SectionTitle / ListBuild；timeline→TimelineRail；matrix→MatrixQuadrant；funnel→FunnelStack；network→NetworkMap；before-after→BeforeAfter / MythFactSwap；stacked-composition→StackedComposition / DonutChart
      标题只能用 Kicker 放 header 槽位，禁止叠加第二个主原语。
-  3. 状态演进：严格执行每拍 lifecycle.enter/update/collapse/exit，并把 elements 的整体生命周期传给对应 MotionSlot.lifecycle；collapse 后只留弱背景证据，exit 后必须离场，禁止 adds 永久堆积。focus 拍到来前为焦点元素腾出 main 槽位。list-build / process / timeline 的逐项建立必须传 beats 数组；不臆造原语未提供的内部状态接口。
+  3. 状态演进：普通 Motion Card 严格执行每拍 lifecycle.enter/update/collapse/exit，并把 elements 的整体生命周期传给对应 MotionSlot.lifecycle；list-build / process / timeline 的逐项建立必须传 beats 数组，不臆造原语未提供的内部状态接口。Agent 原子合成没有固定 elements / slot / lifecycle，按 beats 让旧焦点在新 focus 到来前明确让位，并按 media 指定拍使用批准素材。
   4. 运动多样：不同元素用不同手法（fadeUp / slideIn / riseIn / popIn / trackIn / drawOn 缓动各不相同），别整卡一招；分镜 motion 意图优先。
   5. 焦点：分镜 focus 指到的那一拍是唯一语义焦点，视觉上最大最重，主原语显式传 emphasis={分镜 focus.emphasis}（自定义元素用同名 kind 的 emphasize()）；其余元素一律让它。
-  6. 字大字少、大量留白、严守 storyboard.capacity：每行 ≤ 14 个汉字，口播整句不上屏（提炼成关键词 / 短语）；正文字号 ≥ H*0.026，放不下就删文案而不是缩字号。内容区可用 0.72H（底部 20% 字幕区），焦点垂直居中（CardStage 已处理），横向用满内容区宽 CW（useStage 提供；写 W 全宽必溢出判失败）。一张卡最多 1 个主原语 + 1 个辅助（标题/kicker）。原语限项（按载体计）：${CAPACITY_LIMITS}。分镜元素明显超容量（≥3 个原语 / list≥5 条）时主动回退为「标题+单焦点元素」，把多余信息让给口播，并在 productionReport 注明删减。
-  7. 文案与数字只能来自分镜和逐字稿，不改写、不编造；不出现 Source / AI Generated / 水印小字。
+  6. 字大字少、大量留白：每行 ≤ 14 个汉字，口播整句不上屏（提炼成关键词 / 短语）；正文字号 ≥ H*0.026，放不下就删文案而不是缩字号。底部 20% 保留字幕安全区。普通 Motion Card 继续严守 storyboard.capacity、单主原语与 CardStage 内容盒；Agent 原子合成不使用该容量模板，改由渲染期真实溢出、遮挡、字幕安全与 required 素材可见性门禁约束。
+  7. 文案与数字只能来自分镜和逐字稿，不改写、不编造；卡面数量、金额、比例、日期、排名一律使用阿拉伯数字与原单位，不得重新写回中文数字；专有名词（如“一叶知秋”）不改。不出现 Source / AI Generated / 水印小字。
 
   ===== 分镜（storyboard，本卡的设计蓝图）=====
   {{animationDirection}}
 
-  ===== 已解析资产（外部资产层植入）=====
+  ===== 已解析资产（渲染方式以镜头合成契约为准）=====
   {{assetContext}}
 
   ===== 逐句字幕节拍（索引 k 即运行时 cues[k]，与分镜的 cue 字段对应）=====
@@ -164,12 +184,20 @@ user: |-
 
 const CARDS_ANIMATION = `name: cards.animation
 description: 视觉论证分镜（导演产出结构化 JSON storyboard，供 cards.segment 组件构建遵循）
-version: 17
+version: 20
 user: |-
   你是知识类解说视频的动效导演。为下面这段口播设计一张 Motion Card 的分镜。
 
+  ===== 镜头合成契约 =====
+  {{compositionContract}}
+
+  模式优先级：若上方明确为「Agent 原子合成镜头」，下方关于 carrier 枚举、固定 layout、elements、capacity、MotionSlot、模板 data 与 lifecycle 的要求全部不适用；改为严格遵守合成契约中的独立语义分镜结构。普通 Motion Card 才执行这些模板规则。
+
   ===== 卡面文字铁律：只上增量，不复述口播 =====
   底部已有完整字幕通道，卡面文字必须是字幕没有的增量：数据 / 结构 / 出处 / 注释。concept / list-build / process / timeline 卡的上屏文案与该段逐字稿字符重合 >70% 且 >14 字会被机器打回（数字、≤6 字短标签、concept 的 term / keywords、quote 原话上屏豁免）。被打回的正确做法：优先提炼增量（数据 / 结构 / 出处），或改走图形 / 素材载体——不要在原文上打转；关键词锚点仅当该段是章节路标或系统已标弱卡时可用，不得以锚点逃避复述打回。
+
+  ===== 卡面数字铁律：听中文，看阿拉伯数字 =====
+  所有会上屏的数量、金额、百分比、比例、年份、月份、排名、序号都必须写成阿拉伯数字并保留原始单位与精度；逐字稿里的中文读法只用于事实核对，禁止原样抄到卡面。例：“四十一万九千两百一十一辆”→“419,211辆”，“百分之一百二十四点三”→“124.3%”，“四成三”→“43%”，“一百五十万辆”→“150万辆”，“第三问”→“第3问”。不得为了缩短而换算、四舍五入或改写数量；专有名词（如“一叶知秋”）保持原样。
 
   ===== 设计方法（按序思考）=====
   1. 提炼论点：这段口播在证明什么？写成一句 claim。
@@ -198,7 +226,7 @@ user: |-
      - camera：把镜头推到正在讲的那块内容。focus=推近并把目标槽位带到画面中心（讲细节）｜push-in=推近（收紧注意力）｜pull-out=拉开看全局（收束 / 从细节回到整体）｜pan-left / pan-right=横移。整卡 ≤2 次，只在焦点拍或收束拍用；短卡（≤2 拍）通常不用。
      - annotate：讲解者的手，圈出正在说的那块。circle=圈出关键块｜box=框出一个区域｜underline=划线强调｜highlight=荧光笔扫过｜strike=划掉（专用于"这个说法是错的"）｜spotlight=压暗其余只留这块（最强，一卡至多一次）｜arrow=箭头指入（side 定方向）。整卡 ≤2 个，只标真正的焦点；纯图形不带文字，要写字用卡面文案。
      - 二者都不是装饰：没有"必须指出来的那一块"就不要写。系统会机械夹到合法范围，越界项直接丢弃。
-  7. 规划资产（可选）：仅"没有物件就抽象难懂"时输出 assets，单卡 0~3 个。primary 资产必须同时在 elements 声明 role="asset"、slot="asset"、assetSlot 对应资产 slot；asset-led 必须声明 1 个 primary。素材物化失败时 asset 布局确定性退为纯文字——声明了资产就接受这个降级。
+  7. 规划资产（可选）：标准 Motion Card 仅在"没有物件就抽象难懂"时输出 assets，单卡 0~3 个。primary 资产必须同时在 elements 声明 role="asset"、slot="asset"、assetSlot 对应资产 slot；asset-led 必须声明 1 个 primary。素材物化失败时 asset 布局确定性退为纯文字——声明了资产就接受这个降级。Agent 原子合成的素材池已在批准时冻结，不得输出新的 assets；required 素材必须进入关键画面，optional 可按叙事取舍，layout / slot 只表达语义分工，不预设画中画或分屏模板。
 
   ===== 硬约束（机器逐条校验，违反直接打回）=====
   - role 只能是 anticipation / reveal / emphasis / hold / resolve；focus 所在拍优先 role="emphasis"，末拍通常 role="resolve"。
@@ -281,6 +309,7 @@ user: |-
   {{segmentId}}｜{{segmentTitle}}
   摘要：{{segmentSummary}}
   字幕摘录：{{segmentExcerpt}}
+  导演镜头指令：{{directorShot}}
 
   ===== 当前卡片结构（cards.segment 已确定，保持视觉一致）=====
   标题：{{cardTitle}}｜描述：{{cardContent}}
@@ -291,7 +320,7 @@ user: |-
   结构与规则：
 ${indent(T2I_RULES, '  ')}
   - 主体给出形态 / 材质 / 数量 / 外貌等可视化要素；画面风格选 1 种为主（写实摄影 / 编辑插画 / 极简线条 / 3D 渲染 / 中式水墨 / 赛博朋克 / 等距信息图 等）；质量词 2-3 个
-  - 按 displayMode 与 aspectRatio 设计构图（横 / 方 / 竖），不要让主体被裁掉
+  - 严格执行导演镜头指令，并按 displayMode 与 aspectRatio 设计构图（横 / 方 / 竖），不要让主体被裁掉
   - 禁止裸露、暴力、政治敏感、品牌侵权等违规元素`;
 
 const CARD_VIDEO = `name: card.video

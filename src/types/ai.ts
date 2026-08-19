@@ -3,6 +3,7 @@ import type { GenerationProvenance } from './director';
 import type { CardAssetBinding, StoryboardAssetRequest } from './assets';
 import type { PromptKind } from '../lib/prompts/types';
 import type { CoverEditState } from '../lib/cover-editor/contracts';
+import { DEFAULT_KACUT_MCP_ENDPOINT, normalizeKacutMcpEndpoint } from '../lib/kacut-endpoint';
 export type { MotionCardPayload } from './motion';
 
 /** 卡片渲染形态；文字语义分类统一由 storyboard.carrier 承担。 */
@@ -14,6 +15,8 @@ export const LEGACY_TEXT_CARD_TYPES = ['summary', 'data', 'insight', 'chapter', 
 export type AICardMediaType = 'image' | 'video';
 export type AICardDisplayMode = 'fullscreen' | 'pip';
 export type AICardRenderMode = 'legacy' | 'motion-card';
+/** 决定镜头由哪条制作链路执行，不约束 Agent 生成组件的具体布局。 */
+export type AICardRenderStrategy = 'motion-card' | 'standalone-media' | 'agent-composite';
 
 export interface DataContent {
   chartType: 'bar' | 'comparison' | 'ranking' | 'stat';
@@ -165,10 +168,13 @@ export type AISegmentPacingNeed = 'steady' | 'accent' | 'transition';
  * 段落最适合的卡片可视化形式：
  * - motion：抽象 / 摘要 / 数据演示 / 时间线 / 概念对比 → 适合 HyperFrames 动画卡片
  * - image：产品 / 参数 / 界面 / 物件 / 复杂场景 → 适合 AI 生成的实拍/插画图片
+ * - footage：叙事 / 氛围 / 举例段落 → 直接检索本机素材库（KaCut）真实素材上屏，
+ *   仅在 settings.kacut.enabled 且素材库摘要可用时由 planning 产出；匹配失败按
+ *   footageFallback 退回 image / motion 卡。
  *
  * planning.segment LLM 自行判定；缺省回退 motion。
  */
-export type AISegmentVisualType = 'motion' | 'image';
+export type AISegmentVisualType = 'motion' | 'image' | 'footage';
 
 export interface AISegmentAnalysis extends AISegment {
   semanticType: AISegmentSemanticType;
@@ -178,6 +184,10 @@ export interface AISegmentAnalysis extends AISegment {
   keywords: string[];
   entities: string[];
   visualType?: AISegmentVisualType;
+  /** 仅 visualType='footage'：素材库检索词（中文关键词，尽量贴合素材库高频场景标签）。 */
+  footageQuery?: string;
+  /** 仅 visualType='footage'：素材匹配失败时的出卡退路；缺省视为 'motion'。 */
+  footageFallback?: 'image' | 'motion';
 }
 
 export interface AICard {
@@ -194,12 +204,13 @@ export interface AICard {
   enabled: boolean;
   style: CardStyle;
   renderMode?: AICardRenderMode;
+  renderStrategy?: AICardRenderStrategy;
   cardPrompt?: string;
   /** AI 生成的 JSON 分镜（storyboard），由 cards.animation 产出，注入 cards.segment 指导出卡。仅 motion 卡使用。 */
   animationDirection?: string;
   /** 导演规划的卡片资产需求；由资产中心解析为 bindings 或待生成队列。 */
   assetRequests?: StoryboardAssetRequest[];
-  /** 已解析并可渲染的资产绑定；预览 / 导出由 AICardOverlay 按 placement 合成。 */
+  /** 已解析绑定；普通卡按 placement 叠加，Agent 合成卡改由生成组件自由编排。 */
   assetBindings?: CardAssetBinding[];
   motionCard?: MotionCardPayload;
   /** 单卡级风格覆盖；缺省继承项目 / 全局 / 内置默认 */
@@ -248,6 +259,8 @@ export interface AIAnalysisResult {
   segments: AISegment[];
   cards: AICard[];
   coverPrompts: string[];
+  /** 封面提示词所依据的导演方案版本；导演台用它隔离旧 revision。 */
+  coverPromptProvenance?: GenerationProvenance;
   summary: string;
   keywords: string[];
   globalPrompt?: string;
@@ -434,6 +447,26 @@ export interface SunoAudioGenerationSettings {
   timeoutMs?: number;
 }
 
+/** 灵机素材（KaCut）本机 MCP 服务配置；footage 轨的总开关。 */
+export interface KacutSettings {
+  enabled: boolean;
+  baseUrl: string;
+}
+
+export const DEFAULT_KACUT_BASE_URL = DEFAULT_KACUT_MCP_ENDPOINT;
+
+export function buildDefaultKacutSettings(): KacutSettings {
+  return { enabled: false, baseUrl: DEFAULT_KACUT_BASE_URL };
+}
+
+/** 归一化 KaCut 配置：兼容根地址、完整 MCP URL 与 mcpServers JSON。 */
+export function normalizeKacutSettings(value: unknown): KacutSettings {
+  if (!value || typeof value !== 'object') return buildDefaultKacutSettings();
+  const candidate = value as Partial<KacutSettings>;
+  const baseUrl = normalizeKacutMcpEndpoint(candidate.baseUrl) ?? DEFAULT_KACUT_BASE_URL;
+  return { enabled: candidate.enabled === true, baseUrl };
+}
+
 export interface AISettings {
   // 多 Provider
   llmProviders: LLMProvider[];
@@ -498,6 +531,12 @@ export interface AISettings {
    * 走 agent 精雕，其余段走 template，每期 agent 段有上限，超出回落 template。
    */
   motionCardMode?: 'template' | 'agent' | 'hybrid';
+  /**
+   * 灵机素材（KaCut）本机 MCP 服务。开启后 planning 可把叙事 / 氛围 / 举例段落
+   * 标记为 footage，制作期 footage 轨检索素材库真实素材上屏；关闭或不可用时不影响
+   * 既有四轨流程。baseUrl 兼容标准 MCP endpoint（含 token query）与旧根地址。
+   */
+  kacut?: KacutSettings;
 }
 
 export const DEFAULT_JIMENG_MODEL = 'jimeng-5.0';
@@ -523,6 +562,7 @@ export interface AICardOverlayData {
   displayMode: AICardDisplayMode;
   style: CardStyle;
   renderMode?: AICardRenderMode;
+  renderStrategy?: AICardRenderStrategy;
   cardPrompt?: string;
   assetRequests?: StoryboardAssetRequest[];
   assetBindings?: CardAssetBinding[];
@@ -610,6 +650,7 @@ export function buildAICardOverlayData(card: AICard, motionBible?: MotionBible):
     displayMode: card.displayMode,
     style: card.style,
     renderMode: card.renderMode ?? 'legacy',
+    renderStrategy: card.renderStrategy,
     cardPrompt: card.cardPrompt,
     assetRequests: card.assetRequests,
     assetBindings: card.assetBindings,

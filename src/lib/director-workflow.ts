@@ -9,6 +9,8 @@ import type {
 } from '../types/director';
 import type { MotionBible } from '../types/motion';
 import type { VisualShotPurpose } from '../types/production';
+import { alignCoverPromptTitle, resolveCoverPromptTitle } from './cover-title';
+import { isCurrentShowDirectorPlan } from './show-director-version';
 
 function stableHash(value: string): string {
   let hash = 0x811c9dc5;
@@ -71,6 +73,10 @@ export function compareDirectorPlans(before: DirectorPlan, after: DirectorPlan):
     impact.timeline = true;
     addReason(impact.reasons, 'global-strategy');
   }
+  if ((before.title ?? '').trim() !== (after.title ?? '').trim()) {
+    impact.cover = true;
+    addReason(impact.reasons, 'work-title');
+  }
   if (!same(before.motionBible.transitionRules, after.motionBible.transitionRules)) {
     impact.timeline = true;
     addReason(impact.reasons, 'transition-rules');
@@ -96,7 +102,6 @@ export function compareDirectorPlans(before: DirectorPlan, after: DirectorPlan):
       previous.title !== next.title
       || previous.summary !== next.summary
       || previous.enabled !== next.enabled
-      || previous.visualType !== next.visualType
       || previous.startMs !== next.startMs
       || previous.endMs !== next.endMs
     ) impact.cover = true;
@@ -130,7 +135,9 @@ export function compareDirectorPlans(before: DirectorPlan, after: DirectorPlan):
  * refining 阶段仅在存在失败产出时开放，避免正常精修期出现无意义入口。
  */
 export function canResumeProduction(production: ProjectProductionState): boolean {
-  if (!production.approvedPlan) return false;
+  const plan = production.approvedPlan;
+  if (!plan) return false;
+  if (production.workflow.mode === 'director' && !isCurrentShowDirectorPlan(plan)) return false;
   const { stage } = production.workflow;
   if (stage === 'production-paused' || stage === 'error' || stage === 'quality-blocked') return true;
   if (stage !== 'refining') return false;
@@ -152,6 +159,7 @@ export function createEmptyProductionState(now = Date.now()): ProjectProductionS
       cover: { ...emptyOutput },
       audio: { ...emptyOutput },
       timeline: { ...emptyOutput },
+      footage: { ...emptyOutput },
     },
     legacyProtected: false,
     updatedAt: now,
@@ -167,13 +175,89 @@ function purposeFor(segment: AISegmentAnalysis): VisualShotPurpose {
 
 function directorSegment(segment: AISegmentAnalysis, bible: MotionBible): DirectorSegmentPlan {
   const directive = bible.carrierPlan.find((item) => item.segmentId === segment.id);
+  const visualType = directive?.visualType ?? segment.visualType ?? 'motion';
+  const renderStrategy = directive?.renderStrategy
+    ?? (visualType === 'footage' ? 'standalone-media' : 'motion-card');
   return {
     ...segment,
+    visualType,
+    footageQuery: visualType === 'footage' ? directive?.mediaQuery ?? segment.footageQuery : undefined,
+    footageFallback: visualType === 'footage'
+      ? directive?.footageFallback ?? segment.footageFallback ?? 'motion'
+      : undefined,
     enabled: true,
     purpose: purposeFor(segment),
-    carrier: directive?.preferredCarrier ?? (segment.visualType === 'image' ? 'image' : 'concept'),
+    carrier: renderStrategy === 'agent-composite'
+      ? directive?.preferredCarrier ?? 'concept'
+      : visualType === 'motion' ? directive?.preferredCarrier ?? 'concept' : visualType,
     intensity: directive?.intensity ?? (segment.pacingNeed === 'accent' ? 3 : 2),
+    renderStrategy,
+    compositionIntent: renderStrategy === 'agent-composite'
+      ? directive?.compositionIntent ?? {
+          narrativeGoal: directive?.reason ?? segment.summary,
+          focalPriority: segment.title,
+          temporalRelationship: '',
+          mustShow: [],
+          avoid: [],
+        }
+      : undefined,
+    fallbackPolicy: renderStrategy === 'agent-composite'
+      ? directive?.fallbackPolicy ?? 'block'
+      : undefined,
+    composition: renderStrategy === 'agent-composite'
+      ? undefined
+      : directive?.composition ?? (visualType === 'motion' ? 'graphic' : 'full-bleed'),
+    cameraMove: directive?.cameraMove ?? (visualType === 'motion' ? 'static' : 'push-in'),
+    mediaRole: directive?.mediaRole ?? (segment.semanticType === 'data' ? 'evidence' : 'context'),
+    transition: directive?.transition,
     rationale: directive?.reason ?? '由旧项目分析结果恢复。',
+  };
+}
+
+/**
+ * 导演台的逐镜头字段是批准后的最终真源。旧项目和手工编辑可能让 motionBible.carrierPlan
+ * 与 segments 暂时不同步，制作前统一物化一份执行 Bible，避免 UI 里改了镜头却仍按旧分镜出卡。
+ */
+export function syncDirectorPlanMotionBible(plan: DirectorPlan): MotionBible {
+  const existing = new Map(plan.motionBible.carrierPlan.map((item) => [item.segmentId, item]));
+  return {
+    ...plan.motionBible,
+    carrierPlan: plan.segments.map((segment) => {
+      const previous = existing.get(segment.id);
+      const visualType = segment.visualType ?? previous?.visualType ?? 'motion';
+      const renderStrategy = segment.renderStrategy ?? previous?.renderStrategy
+        ?? (visualType === 'footage' ? 'standalone-media' : 'motion-card');
+      return {
+        ...previous,
+        segmentId: segment.id,
+        visualType,
+        preferredCarrier: renderStrategy === 'agent-composite'
+          ? segment.carrier
+          : visualType === 'motion' ? segment.carrier : visualType,
+        intensity: segment.intensity,
+        renderStrategy,
+        compositionIntent: renderStrategy === 'agent-composite'
+          ? segment.compositionIntent ?? previous?.compositionIntent
+          : undefined,
+        fallbackPolicy: renderStrategy === 'agent-composite'
+          ? segment.fallbackPolicy ?? previous?.fallbackPolicy ?? 'block'
+          : undefined,
+        composition: renderStrategy === 'agent-composite'
+          ? undefined
+          : segment.composition ?? previous?.composition
+            ?? (visualType === 'motion' ? 'graphic' : 'full-bleed'),
+        cameraMove: segment.cameraMove ?? previous?.cameraMove
+          ?? (visualType === 'motion' ? 'static' : 'push-in'),
+        mediaRole: segment.mediaRole ?? previous?.mediaRole
+          ?? (segment.semanticType === 'data' ? 'evidence' : 'context'),
+        mediaQuery: visualType === 'footage' ? segment.footageQuery ?? previous?.mediaQuery : undefined,
+        footageFallback: visualType === 'footage'
+          ? segment.footageFallback ?? previous?.footageFallback ?? 'motion'
+          : undefined,
+        transition: segment.transition ?? previous?.transition,
+        reason: segment.rationale || previous?.reason || '按导演方案执行。',
+      };
+    }),
   };
 }
 
@@ -182,8 +266,16 @@ function legacyDirectorPlan(
   now: number,
   approved: boolean,
 ): DirectorPlan {
+  const summary = analysis.summary.trim()
+    || analysis.segments.map((segment) => segment.summary.trim()).filter(Boolean).slice(0, 2).join('；')
+    || analysis.segments.find((segment) => segment.title.trim())?.title.trim()
+    || '';
+  const rawCoverPrompt = analysis.coverPrompts[0]?.trim() ?? '';
+  const title = resolveCoverPromptTitle(rawCoverPrompt)
+    || analysis.segments.find((segment) => segment.title.trim())?.title.trim()
+    || summary;
   const bible = analysis.motionBible ?? {
-    visualThesis: analysis.summary || '信息清晰、节奏克制的专业 MG 视频',
+    visualThesis: summary || '信息清晰、节奏克制的专业 MG 视频',
     rhythm: { density: 'balanced' as const, heavySegments: [], quietSegments: [] },
     carrierPlan: [],
     styleRules: { paletteUse: '沿用项目风格', typographyUse: '沿用项目字体层级' },
@@ -193,13 +285,14 @@ function legacyDirectorPlan(
   return {
     revision: 1,
     inputFingerprint: stableHash(JSON.stringify(analysis.segments)),
-    summary: analysis.summary,
+    title,
+    summary,
     keywords: analysis.keywords,
     globalPrompt: analysis.globalPrompt,
     segments: analysis.segments.map((segment) => directorSegment(segment as AISegmentAnalysis, bible)),
     motionBible: bible,
     coverDirection: {
-      prompt: analysis.coverPrompts[0] ?? '',
+      prompt: alignCoverPromptTitle(rawCoverPrompt, title),
       composition: '沿用旧项目封面构图',
     },
     audioDirection: {

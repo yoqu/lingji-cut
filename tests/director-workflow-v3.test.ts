@@ -5,6 +5,7 @@ import {
   createDirectorInputFingerprint,
   createEmptyProductionState,
   migrateLegacyProductionState,
+  syncDirectorPlanMotionBible,
 } from '../src/lib/director-workflow';
 import { generateCardsFromDirectorPlan } from '../src/lib/director-production';
 import type { DirectorPlan, ProjectProductionState } from '../src/types/director';
@@ -114,6 +115,21 @@ describe('director workflow v3 contract', () => {
     });
   });
 
+  it('marks only cover output stale when the work title changes', () => {
+    const before = plan({ title: '旧标题' });
+    const after = plan({ revision: 2, title: '新标题' });
+
+    expect(compareDirectorPlans(before, after)).toEqual({
+      allCards: false,
+      segmentIds: [],
+      cover: true,
+      audio: false,
+      timeline: false,
+      quality: true,
+      reasons: ['work-title'],
+    });
+  });
+
   it('selectively invalidates one card and timeline for a segment carrier change', () => {
     const before = plan();
     const after = plan({
@@ -122,6 +138,25 @@ describe('director workflow v3 contract', () => {
         segment.id === 'seg-1' ? { ...segment, carrier: 'comparison' } : segment,
       ),
     });
+    expect(compareDirectorPlans(before, after)).toMatchObject({
+      allCards: false,
+      segmentIds: ['seg-1'],
+      cover: false,
+      audio: false,
+      timeline: true,
+      quality: true,
+    });
+  });
+
+  it('does not invalidate cover for a visualType-only segment change', () => {
+    const before = plan();
+    const after = plan({
+      revision: 2,
+      segments: before.segments.map((segment) =>
+        segment.id === 'seg-1' ? { ...segment, visualType: 'footage' as const, footageQuery: '城市 航拍' } : segment,
+      ),
+    });
+    // 只切素材形式：该段卡片与 footage 轨失效（segmentIds），时间线重排，但封面不受影响
     expect(compareDirectorPlans(before, after)).toMatchObject({
       allCards: false,
       segmentIds: ['seg-1'],
@@ -173,6 +208,48 @@ describe('director workflow v3 contract', () => {
     expect(migrated.draftPlan).toBeNull();
     expect(migrated.workflow.stage).toBe('animatic-review');
     expect(migrated.legacyProtected).toBe(true);
+  });
+
+  it('旧方案补默认路由，编辑后的 Agent 合成字段以 segment 为执行真源', () => {
+    const legacy = plan();
+    expect(syncDirectorPlanMotionBible(legacy).carrierPlan[0]).toMatchObject({
+      renderStrategy: 'motion-card',
+    });
+
+    const compositionIntent = {
+      narrativeGoal: '真实素材负责证据，图形负责结论',
+      focalPriority: '先看道路，再看数字',
+      temporalRelationship: '中段进入结论',
+      mustShow: ['世界第91位'],
+      avoid: ['广告式陈列'],
+    };
+    const edited: DirectorPlan = {
+      ...legacy,
+      segments: legacy.segments.map((segment) => segment.id === 'seg-1' ? {
+        ...segment,
+        visualType: 'footage',
+        carrier: 'data-hero',
+        renderStrategy: 'agent-composite',
+        compositionIntent,
+        fallbackPolicy: 'standalone-media',
+      } : segment),
+      motionBible: {
+        ...legacy.motionBible,
+        carrierPlan: legacy.motionBible.carrierPlan.map((directive) => directive.segmentId === 'seg-1' ? {
+          ...directive,
+          visualType: 'footage',
+          renderStrategy: 'standalone-media',
+        } : directive),
+      },
+    };
+
+    expect(syncDirectorPlanMotionBible(edited).carrierPlan[0]).toMatchObject({
+      visualType: 'footage',
+      preferredCarrier: 'data-hero',
+      renderStrategy: 'agent-composite',
+      compositionIntent,
+      fallbackPolicy: 'standalone-media',
+    });
   });
 
   it('creates a clean empty v3 workspace', () => {
@@ -230,7 +307,13 @@ describe('director workflow v3 contract', () => {
 
   it('canResumeProduction 覆盖暂停/出错/质检阻断与 refining 失败产出', () => {
     const base = createEmptyProductionState(100);
-    const approved = { ...base, approvedPlan: plan() };
+    const currentPlan = plan({
+      agentPlanning: {
+        roleVersion: '5', workflowVersion: '5', completedAt: 100,
+        toolCalls: 12, repairRounds: 0,
+      },
+    });
+    const approved = { ...base, approvedPlan: currentPlan };
     const withStage = (stage: ProjectProductionState['workflow']['stage']) => ({
       ...approved,
       workflow: { ...approved.workflow, stage },
@@ -248,6 +331,23 @@ describe('director workflow v3 contract', () => {
         ...approved.outputs,
         timeline: { status: 'failed', updatedAt: 100, error: '21 个镜头未通过质量门禁' },
       },
+    })).toBe(true);
+
+    expect(canResumeProduction({
+      ...withStage('production-paused'),
+      approvedPlan: {
+        ...currentPlan,
+        agentPlanning: { ...currentPlan.agentPlanning!, roleVersion: '2', workflowVersion: '2' },
+      },
+    })).toBe(false);
+    expect(canResumeProduction({
+      ...withStage('production-paused'),
+      approvedPlan: { ...currentPlan, agentPlanning: undefined },
+    })).toBe(false);
+    expect(canResumeProduction({
+      ...withStage('production-paused'),
+      approvedPlan: { ...currentPlan, agentPlanning: undefined },
+      workflow: { ...approved.workflow, mode: 'auto', stage: 'production-paused' },
     })).toBe(true);
   });
 });

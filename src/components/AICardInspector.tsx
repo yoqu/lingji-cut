@@ -43,7 +43,11 @@ interface AICardInspectorProps {
     options?: { refineExistingMotion?: boolean },
   ) => Promise<AICard | null>;
   onGenerateAnimationDirection?: (card: AICard) => Promise<string>;
-  onSave: (cardId: string, updates: Partial<AICard>) => void;
+  onSave: (
+    cardId: string,
+    updates: Partial<AICard>,
+    options?: { invalidateProduction?: boolean },
+  ) => void;
   storyboardCueOptions?: StoryboardCueOption[];
   onOpenAssetCenter?: (assetId?: string) => void;
 }
@@ -216,6 +220,7 @@ export function AICardInspector({
   };
 
   const motion = card.motionCard;
+  const isAgentComposite = card.renderStrategy === 'agent-composite';
   const hasCompiledMotion = Boolean(motion?.tsx?.trim());
   const storyboardHistory = motion?.storyboardHistory ?? [];
   const productionReport = motion?.productionReport;
@@ -301,17 +306,35 @@ export function AICardInspector({
     if (!last || !card.motionCard) return;
     const restoredDirection = last.storyboard
       ? JSON.stringify(last.storyboard, null, 2)
-      : persistedDirection;
+      : undefined;
+    const {
+      productionReport: _currentProductionReport,
+      compileError: _currentCompileError,
+      tsx: _currentTsx,
+      tsxPath: currentTsxPath,
+      storyboard: _currentStoryboard,
+      ...motionCardWithoutCurrentEvidence
+    } = card.motionCard;
     const restoredMotionCard = {
-      ...card.motionCard,
-      ...(last.tsx ? { tsx: last.tsx } : {}),
+      ...motionCardWithoutCurrentEvidence,
+      ...(last.tsx ? {
+        tsx: last.tsx,
+        ...(currentTsxPath ? { tsxPath: currentTsxPath } : {}),
+      } : {}),
       ...(last.storyboard ? { storyboard: last.storyboard } : {}),
+      compiledAt: last.savedAt,
       storyboardHistory: storyboardHistory.slice(0, -1),
     };
     onSave(card.id, {
       animationDirection: restoredDirection,
       motionCard: restoredMotionCard,
-    });
+      ...(card.generationProvenance ? {
+        generationProvenance: {
+          ...card.generationProvenance,
+          modifiedByUser: true,
+        },
+      } : {}),
+    }, { invalidateProduction: true });
   };
 
   const replaceAssetBinding = (binding: CardAssetBinding, assetId: string) => {
@@ -421,17 +444,19 @@ export function AICardInspector({
                   回退上一版
                 </Button>
               ) : null}
-              <Button
-                variant="secondary"
-                size="xs"
-                leftIcon={<AppIcon name="sparkles" size={12} />}
-                disabled={isGeneratingDirection}
-                onClick={() => {
-                  void handleGenerateDirection();
-                }}
-              >
-                {isGeneratingDirection ? '生成分镜中…' : '生成分镜'}
-              </Button>
+              {!isAgentComposite ? (
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  leftIcon={<AppIcon name="sparkles" size={12} />}
+                  disabled={isGeneratingDirection}
+                  onClick={() => {
+                    void handleGenerateDirection();
+                  }}
+                >
+                  {isGeneratingDirection ? '生成分镜中…' : '生成分镜'}
+                </Button>
+              ) : null}
               <Button
                 variant="secondary"
                 size="xs"
@@ -478,7 +503,9 @@ export function AICardInspector({
             </div>
           ) : (
             <p className={styles.summaryEmpty}>
-              尚未生成分镜；可先「生成分镜」，或「编辑分镜」手动编写。
+              {isAgentComposite
+                ? '尚未生成分镜；请重新生成动画，或编辑分镜后交由 Pi 精雕。'
+                : '尚未生成分镜；可先「生成分镜」，或「编辑分镜」手动编写。'}
             </p>
           )
         ) : (

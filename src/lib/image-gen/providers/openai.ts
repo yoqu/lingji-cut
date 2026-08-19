@@ -1,5 +1,4 @@
 import type { ImageProviderCapabilities } from '../../../types/ai';
-import { INSUFFICIENT_CREDITS_MESSAGE, isLingjiGatewayKey } from '../../llm/credits-error';
 import { ImageGenerationError, httpStatusToErrorCode } from '../errors';
 import type {
   ImageAspectRatio,
@@ -125,9 +124,7 @@ export const openaiImageProvider: ImageGenerationProvider = {
       throw new ImageGenerationError(
         errorCode,
         'openai_image',
-        errorCode === 'quota' && isLingjiGatewayKey(config.apiKey)
-          ? INSUFFICIENT_CREDITS_MESSAGE
-          : `OpenAI API 错误 ${response.status}`,
+        `OpenAI API 错误 ${response.status}`,
         undefined,
         raw,
       );

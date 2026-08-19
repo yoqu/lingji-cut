@@ -55,6 +55,16 @@ export interface AudioOverlayData {
   };
 }
 
+/** footage 轨放置的素材 overlay 标记；用于提交时整批替换与后续 UI 识别。 */
+export interface FootageOverlayData {
+  segmentId: string;
+  /** KaCut 检索分 0-1；只用于排序与审计，人工或 Agent 明确选材不受自动阈值限制。 */
+  score: number;
+  thumbnailFile?: string;
+  cameraMove?: import('./types/motion').MotionDirectiveCameraMove;
+  mediaRole?: import('./types/motion').MotionDirectiveMediaRole;
+}
+
 export interface OverlayItem {
   id: string;
   type: 'video' | 'image' | 'text' | 'audio';
@@ -66,6 +76,10 @@ export interface OverlayItem {
   motion?: OverlayMotion;
   overlayType?: 'media' | 'ai-card';
   overlayRole?: OverlayRole;
+  /** 仅 type='video'：源视频裁剪起点（毫秒），渲染时透传 startFrom；缺省 0。 */
+  trimStartMs?: number;
+  /** 仅 footage 轨产物存在；系统管理的素材 overlay 标识。 */
+  footageData?: FootageOverlayData;
   aiCardData?: AICardOverlayData;
   textData?: TextOverlayData;
   audioData?: AudioOverlayData;

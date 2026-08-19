@@ -15,6 +15,12 @@ import type {
   VideoAspectRatio,
 } from '../types/ai';
 import type { MotionBible } from '../types/motion';
+import type {
+  DirectorCompositionIntent,
+  DirectorFallbackPolicy,
+  DirectorRenderStrategy,
+} from '../types/director';
+import type { FootageCompositionInput } from '../types/footage';
 import type { MediaAssetCandidate } from './media-asset-resolution';
 import type { MediaAssetRequest } from '../types/production';
 import type {
@@ -72,7 +78,7 @@ export type AppPage =
   | 'settings'
   | 'auto-run'
   | 'publish'
-  | 'free-publish';
+  | 'publish-hub';
 
 /** 控制服务操作事件（agent 经 CLI 驱动应用；驱动全局「AI 正在操作」反馈层） */
 export interface ControlOpEvent {
@@ -87,6 +93,16 @@ export interface FileEntry {
   name: string;
   type: 'file' | 'directory';
   children?: FileEntry[];
+}
+
+/** 声呐（灵机采风）本机联动桥端点与活跃度。 */
+export interface SonarBridgeInfo {
+  port: number;
+  token: string;
+  /** 桥服务是否在监听 */
+  running: boolean;
+  /** 扩展最近一次访问桥（配对 / 探活 / 推送）的时间；无记录为 null */
+  lastSeenAt: number | null;
 }
 
 export interface WorkbenchTabContextMenuRequest {
@@ -236,6 +252,11 @@ export interface GenerateAICardForSegmentArgs {
   prevSegment?: AISegment;
   nextSegment?: AISegment;
   visualType?: AISegmentVisualType;
+  renderStrategy?: DirectorRenderStrategy;
+  compositionIntent?: DirectorCompositionIntent;
+  compositionInputs?: FootageCompositionInput[];
+  fallbackPolicy?: DirectorFallbackPolicy;
+  approvedFallbackExecution?: 'motion';
   qualityMode?: 'auto' | 'director';
   /** 观测面板关联键（渲染端任务 id）；缺省不上报 agent 观测事件。 */
   feedId?: string;
@@ -292,18 +313,6 @@ export interface RecentProjectEntry {
   stage?: RecentProjectStage;
   /** 已成功发布的平台 id（stage 为 published 时非空）。 */
   publishedPlatforms?: string[];
-}
-
-/** 灵机剪影缓存账户（主进程 safeStorage 落盘结构，含长效网关密钥 lj_ 与服务端下发配置）。 */
-export interface LingjiAccount {
-  email: string;
-  displayName?: string;
-  avatarUrl?: string;
-  tier: string;
-  balance: number;
-  apiKey: string;
-  connectedAt: string;
-  providers?: import('./llm/lingji-gateway').LingjiGatewayConfig;
 }
 
 export interface ElectronAPI {
@@ -407,16 +416,16 @@ export interface ElectronAPI {
     currentPrompt?: string;
     projectDir?: string;
     projectBindings?: PromptBindingMap | null;
-    /** 自由发布（无项目）：跳过导演审批门禁。 */
-    standalone?: boolean;
-    /** 显式作品标题（standalone 场景传自由发布草稿标题）。 */
+    /** 发布中心 / 无项目封面：跳过导演审批门禁。 */
+    skipDirectorGate?: boolean;
+    /** 显式作品标题（无 project.json 可读时传入）。 */
     workTitle?: string;
   }) => Promise<string[]>;
   generateCoverImages: (args: {
     prompts: string[];
     settings: AISettings;
     projectDir?: string;
-    /** 显式输出目录（自由发布，无项目）；提供时跳过导演审批门禁。 */
+    /** 显式输出目录（发布中心工作目录）；提供时跳过导演审批门禁。 */
     outputDir?: string;
     projectBindings?: PromptBindingMap | null;
     telemetryRunId?: string | null;
@@ -460,22 +469,6 @@ export interface ElectronAPI {
     args: import('./cover-editor/contracts').SaveCoverEditArgs,
   ) => Promise<import('./cover-editor/contracts').SaveCoverEditResult>;
   listSystemFonts: () => Promise<import('./cover-editor/contracts').ListSystemFontsResult>;
-  /** 灵机剪影账户浏览器授权登录；返回会话与烘焙服务器基址（用于 upsert 兜底 provider）。 */
-  lingjiLogin: () => Promise<{
-    session: import('./llm/lingji-gateway').LingjiSession;
-    base: string;
-  }>;
-  lingjiLogout: () => Promise<void>;
-  lingjiGetAccount: () => Promise<LingjiAccount | null>;
-  /**
-   * 用缓存账户拉取最新下发配置与余额并回灌；返回可重建四类 provider 的 session 与基址，
-   * 未登录返回 null；key 被服务端吊销时 expired=true（UI 应提示重新登录）。
-   */
-  lingjiRefreshConfig: () => Promise<{
-    session: import('./llm/lingji-gateway').LingjiSession;
-    base: string;
-    expired?: boolean;
-  } | null>;
   loadProject: (projectDir: string) => Promise<string>;
   saveProjectSection: (
     projectDir: string,
@@ -547,6 +540,11 @@ export interface ElectronAPI {
   scanCoverImages: (
     projectDir: string,
   ) => Promise<{ path: string; width: number; height: number; mtimeMs: number }[]>;
+  /** 手动选择本地图片复制进 <dir>/covers/（文件名带比例标记）；取消返回空数组。 */
+  importCoverImages: (
+    dir: string,
+    ratio?: string,
+  ) => Promise<{ path: string; width: number; height: number; mtimeMs: number }[]>;
   getPathForFile: (file: File) => string;
   addAsset: () => Promise<{
     path: string;
@@ -593,6 +591,7 @@ export interface ElectronAPI {
     patch: Partial<AssetGenerationRequest>;
   }) => Promise<ProjectAssetManifest | null>;
   renderVideo: (args: {
+    projectDir: string;
     timeline: string;
     outputPath: string;
     exportConfig: ExportConfig;
@@ -640,7 +639,7 @@ export interface ElectronAPI {
   sonarInboxRemove: (id: string) => Promise<boolean>;
   /** 清空待创作箱全部素材，返回删除条数。 */
   sonarInboxClear: () => Promise<number>;
-  sonarBridgeInfo: () => Promise<{ port: number; token: string }>;
+  sonarBridgeInfo: () => Promise<SonarBridgeInfo>;
   /** 收件箱新增/刷新时触发（扩展推送到桥后），用于待创作箱实时刷新。返回取消订阅函数。 */
   onSonarInboxUpdated: (callback: () => void) => () => void;
   selectTextFile: () => Promise<{ path: string; content: string } | null>;
@@ -747,6 +746,13 @@ export interface ElectronAPI {
     events: import('./telemetry/auto-run').AutoRunEvent[];
   } | null>;
   getAutoRunLogDir: () => Promise<string>;
+  // footage 轨：灵机素材（KaCut）本机 MCP 服务
+  kacutHealth: (baseUrl: string) => Promise<boolean>;
+  kacutSearchClips: (
+    args: { baseUrl: string } & import('../types/footage').KacutSearchClipsArgs,
+  ) => Promise<import('../types/footage').KacutClip[]>;
+  kacutLibraryDigest: (baseUrl: string) => Promise<import('../types/footage').KacutLibraryDigest>;
+  getLocalFileFingerprint: (args: { filePath: string; baseDir?: string }) => Promise<string | null>;
   // 最近项目管理
   loadRecentProjects: () => Promise<RecentProjectEntry[]>;
   addRecentProject: (projectDir: string, projectName?: string) => Promise<RecentProjectEntry[]>;
@@ -958,9 +964,38 @@ export interface PublishAPI {
   setSettings(patch: Partial<PublishSettings>): Promise<PublishSettings>;
   run(job: PublishJobInput, headless?: boolean): Promise<void>;
   cancel(): Promise<void>;
-  /** 自由发布（无项目）状态读写：state 结构由渲染层拥有（StandalonePublishState）。 */
-  loadStandaloneState(): Promise<{ root: string; coversDir: string; state: unknown }>;
-  saveStandaloneState(state: unknown): Promise<void>;
+  listHubJobs(): Promise<import('./publish/hub-state').HubJobSummary[]>;
+  addHubJob(workDir: string): Promise<import('./publish/hub-state').HubJobSummary>;
+  removeHubJob(workDir: string): Promise<import('./publish/hub-state').HubJobSummary[]>;
+  loadHubJob(workDir: string): Promise<import('./publish/hub-state').HubJobState>;
+  saveHubJob(
+    workDir: string,
+    state: import('./publish/hub-state').HubJobState,
+  ): Promise<import('./publish/hub-state').HubJobSummary>;
+  startIngest(args: {
+    taskId: string;
+    workDir: string;
+    settings: AISettings;
+    projectBindings?: PromptBindingMap | null;
+    telemetryRunId?: string | null;
+  }): Promise<import('./publish/hub-state').HubJobState>;
+  cancelIngest(): Promise<void>;
+  onIngestProgress(
+    cb: (payload: {
+      taskId: string;
+      workDir: string;
+      phase: string;
+      percent: number;
+      toolName?: string;
+    }) => void,
+  ): () => void;
+  onIngestEvent(
+    cb: (payload: {
+      taskId: string;
+      workDir: string;
+      event: import('./publish/ingest-trace').PublishIngestTraceEvent;
+    }) => void,
+  ): () => void;
   onQrcode(cb: (p: { platform: string; accountName: string; png: string }) => void): () => void;
   onProgress(cb: (payload: PublishProgressPayload) => void): () => void;
   /** 查询 B 站 biliup 二进制是否已安装到用户目录。 */

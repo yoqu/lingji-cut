@@ -10,6 +10,8 @@ import {
   rebalanceCarrierPlan,
   validateMotionBible,
 } from '../src/lib/motion-bible';
+import { generateMotionBible } from '../src/lib/ai-analysis';
+import { buildDefaultAISettings } from '../src/store/ai';
 
 const segments: AISegmentAnalysis[] = [
   {
@@ -117,6 +119,249 @@ describe('motion bible', () => {
     });
     expect(warnings.some((issue) => issue.code === 'carrier-fatigue')).toBe(true);
     expect(warnings.some((issue) => issue.code === 'intensity-fatigue')).toBe(true);
+  });
+});
+
+describe('整片导演媒介与镜头语言', () => {
+  const directedSegments: AISegmentAnalysis[] = Array.from({ length: 4 }, (_, index) => ({
+    id: `shot-${index + 1}`,
+    title: `镜头 ${index + 1}`,
+    summary: index === 1 ? '工厂生产现场' : index === 2 ? '产品外观特写' : '观点说明',
+    startMs: index * 6_000,
+    endMs: (index + 1) * 6_000,
+    transcriptExcerpt: index === 1 ? '工厂里的生产线正在运转。' : '口播内容。',
+    semanticType: index === 0 ? 'data' : 'narration',
+    complexityLevel: 'medium',
+    visualizationScore: 70,
+    pacingNeed: 'steady',
+    keywords: [],
+    entities: [],
+    visualType: index === 1 ? 'footage' : index === 2 ? 'image' : 'motion',
+    footageQuery: index === 1 ? '汽车 工厂 生产线' : undefined,
+    footageFallback: index === 1 ? 'motion' : undefined,
+  }));
+
+  it('解析并保留最终媒介、构图、运镜、用途、检索词和段级转场', () => {
+    const bible = parseMotionBible({
+      carrierPlan: [
+        { segmentId: 'shot-1', visualType: 'motion', preferredCarrier: 'data-hero', intensity: 3, composition: 'graphic', cameraMove: 'static', mediaRole: 'evidence', reason: '数据开场' },
+        { segmentId: 'shot-2', visualType: 'footage', preferredCarrier: 'footage', intensity: 2, composition: 'full-bleed', cameraMove: 'tracking', mediaRole: 'context', mediaQuery: '汽车 工厂 生产线', footageFallback: 'motion', transition: 'hard-cut', reason: '建立真实场景' },
+        { segmentId: 'shot-3', visualType: 'image', preferredCarrier: 'image', intensity: 2, composition: 'media-window', cameraMove: 'push-in', mediaRole: 'demonstration', reason: '展示产品' },
+        { segmentId: 'shot-4', visualType: 'motion', preferredCarrier: 'concept', intensity: 1, composition: 'graphic', cameraMove: 'static', mediaRole: 'emotion', reason: '收束观点' },
+      ],
+    }, directedSegments, { footageAvailable: true });
+
+    expect(bible?.carrierPlan[1]).toMatchObject({
+      visualType: 'footage',
+      preferredCarrier: 'footage',
+      composition: 'full-bleed',
+      cameraMove: 'tracking',
+      mediaRole: 'context',
+      mediaQuery: '汽车 工厂 生产线',
+      transition: 'hard-cut',
+    });
+    expect(bible?.carrierPlan[2]).toMatchObject({ visualType: 'image', composition: 'media-window' });
+  });
+
+  it('保留 AI 导演选择的原子合成路由与开放式合成意图', () => {
+    const bible = parseMotionBible({
+      carrierPlan: [
+        { segmentId: 'shot-1', visualType: 'motion', renderStrategy: 'motion-card', preferredCarrier: 'data-hero', intensity: 3, reason: '数据开场' },
+        {
+          segmentId: 'shot-2',
+          visualType: 'footage',
+          renderStrategy: 'agent-composite',
+          preferredCarrier: 'concept',
+          intensity: 2,
+          cameraMove: 'tracking',
+          mediaRole: 'evidence',
+          mediaQuery: '汽车 工厂 生产线',
+          composition: 'split',
+          compositionIntent: {
+            narrativeGoal: '用真实生产线证明长期积累',
+            focalPriority: '先看生产线，再出现结论',
+            temporalRelationship: '中段叠入观点',
+            mustShow: ['生产线', '长期积累'],
+            avoid: ['广告式产品陈列'],
+          },
+          fallbackPolicy: 'block',
+          reason: '真实素材与观点共同完成论证',
+        },
+        { segmentId: 'shot-3', visualType: 'image', renderStrategy: 'motion-card', preferredCarrier: 'image', intensity: 2, reason: '产品图' },
+        { segmentId: 'shot-4', visualType: 'motion', renderStrategy: 'motion-card', preferredCarrier: 'concept', intensity: 1, reason: '收束' },
+      ],
+    }, directedSegments, { footageAvailable: true });
+
+    expect(bible?.carrierPlan[1]).toMatchObject({
+      visualType: 'footage',
+      renderStrategy: 'agent-composite',
+      preferredCarrier: 'concept',
+      composition: undefined,
+      fallbackPolicy: 'block',
+      compositionIntent: {
+        narrativeGoal: '用真实生产线证明长期积累',
+        mustShow: ['生产线', '长期积累'],
+        avoid: ['广告式产品陈列'],
+      },
+    });
+    expect(buildMotionBibleDirectiveBlock(bible!, 'shot-2')).toContain('renderStrategy=agent-composite');
+  });
+
+  it('模型把整片重新塌成 motion 时，恢复 planning 已确认的素材与图片建议', () => {
+    const bible = parseMotionBible({
+      carrierPlan: directedSegments.map((segment) => ({
+        segmentId: segment.id,
+        visualType: 'motion',
+        preferredCarrier: 'concept',
+        intensity: 2,
+        reason: '全部做卡',
+      })),
+    }, directedSegments, { footageAvailable: true });
+
+    expect(bible?.carrierPlan.map((item) => item.visualType)).toEqual([
+      'motion', 'footage', 'image', 'motion',
+    ]);
+    expect(bible?.carrierPlan[1].reason).toContain('系统防塌陷');
+  });
+
+  it('素材库不可用时，footage 指令由机器回落到卡片轨', () => {
+    const bible = parseMotionBible({
+      carrierPlan: directedSegments.map((segment) => ({
+        segmentId: segment.id,
+        visualType: segment.id === 'shot-2' ? 'footage' : 'motion',
+        preferredCarrier: 'concept',
+        mediaQuery: segment.id === 'shot-2' ? '汽车 工厂' : undefined,
+        intensity: 2,
+        reason: '测试',
+      })),
+    }, directedSegments, { footageAvailable: false });
+
+    expect(bible?.carrierPlan[1].visualType).toBe('motion');
+    expect(bible?.carrierPlan[1].renderStrategy).toBe('motion-card');
+    expect(bible?.carrierPlan[1].mediaQuery).toBeUndefined();
+  });
+
+  it('图片服务可用且最终全 Motion 时，恢复约一成具体物件或场景图片', () => {
+    const concreteSegments: AISegmentAnalysis[] = Array.from({ length: 44 }, (_, index) => ({
+      id: `concrete-${index + 1}`,
+      title: `汽车场景 ${index + 1}`,
+      summary: `展示车辆外观与车灯细节 ${index + 1}`,
+      transcriptExcerpt: '这辆汽车的车灯在道路上亮起。',
+      startMs: index * 5_000,
+      endMs: (index + 1) * 5_000,
+      semanticType: 'narration',
+      complexityLevel: 'medium',
+      visualizationScore: 70,
+      pacingNeed: 'steady',
+      keywords: ['汽车'],
+      entities: [],
+      visualType: 'motion',
+    }));
+    const bible = parseMotionBible({
+      carrierPlan: concreteSegments.map((segment) => ({
+        segmentId: segment.id,
+        visualType: 'motion',
+        preferredCarrier: 'concept',
+        intensity: 2,
+        reason: '模型全部做卡',
+      })),
+    }, concreteSegments, { imageAvailable: true });
+
+    const images = bible!.carrierPlan.filter((directive) => directive.visualType === 'image');
+    expect(images).toHaveLength(4);
+    expect(images.every((directive) => directive.reason.includes('系统防塌陷'))).toBe(true);
+  });
+
+  it('图片服务不可用时不自动新增 image', () => {
+    const bible = parseMotionBible({
+      carrierPlan: directedSegments.map((segment) => ({
+        segmentId: segment.id,
+        visualType: 'motion',
+        preferredCarrier: 'concept',
+        intensity: 2,
+        reason: '全部做卡',
+      })),
+    }, directedSegments.map((segment) => ({ ...segment, visualType: 'motion' })), { imageAvailable: false });
+
+    expect(bible?.carrierPlan.every((directive) => directive.visualType === 'motion')).toBe(true);
+  });
+
+  it('上市敲钟等必须使用可核验现场的段落不会被恢复成 image', () => {
+    const eventSegments: AISegmentAnalysis[] = [
+      { ...directedSegments[0], id: 'event-open', title: '开场', visualType: 'motion' },
+      {
+        ...directedSegments[1],
+        id: 'event-news',
+        title: '汽车企业上市敲钟现场',
+        summary: '企业代表参加上市敲钟仪式',
+        transcriptExcerpt: '汽车企业正式上市并举行敲钟仪式。',
+        visualType: 'motion',
+      },
+      { ...directedSegments[3], id: 'event-end', title: '结尾', visualType: 'motion' },
+    ];
+    const bible = parseMotionBible({
+      carrierPlan: eventSegments.map((segment) => ({
+        segmentId: segment.id,
+        visualType: 'motion',
+        preferredCarrier: 'concept',
+        intensity: 2,
+        reason: '测试',
+      })),
+    }, eventSegments, { imageAvailable: true });
+
+    expect(bible?.carrierPlan.every((directive) => directive.visualType === 'motion')).toBe(true);
+  });
+
+  it('generateMotionBible 只在 card.image 绑定真实可用时启用图片防塌陷', async () => {
+    const providerSegments = [
+      { ...directedSegments[0], id: 'provider-open', title: '开场', visualType: 'motion' as const },
+      {
+        ...directedSegments[1],
+        id: 'provider-car',
+        title: '汽车车灯特写',
+        summary: '展示车辆外观和车灯',
+        visualType: 'motion' as const,
+      },
+      { ...directedSegments[3], id: 'provider-end', title: '结尾', visualType: 'motion' as const },
+    ];
+    const payload = {
+      carrierPlan: providerSegments.map((segment) => ({
+        segmentId: segment.id,
+        visualType: 'motion',
+        preferredCarrier: 'concept',
+        intensity: 2,
+        reason: '模型全部做卡',
+      })),
+    };
+    const settings = buildDefaultAISettings();
+    settings.llmProviders = [{
+      id: 'llm', name: 'LLM', type: 'openai_compatible', baseUrl: '', apiKey: '', models: ['model'],
+    }];
+    settings.defaultProviderId = 'llm';
+    settings.defaultModel = 'model';
+    settings.imageProviders = [{
+      id: 'image', name: 'Image', type: 'apimart', baseUrl: '', apiKey: '', models: ['gpt-image-2'],
+    }];
+    settings.defaultImageProviderId = 'image';
+    settings.defaultImageModel = 'gpt-image-2';
+    const planning = { segments: providerSegments, summary: '摘要', keywords: ['汽车'] };
+
+    const withImage = await generateMotionBible(planning, settings, {
+      projectBindings: null,
+      generateStructuredData: (async () => payload) as never,
+    });
+    expect(withImage.carrierPlan[1].visualType).toBe('image');
+
+    const withoutImage = await generateMotionBible(planning, {
+      ...settings,
+      imageProviders: [],
+      defaultImageProviderId: null,
+      defaultImageModel: null,
+    }, {
+      projectBindings: null,
+      generateStructuredData: (async () => payload) as never,
+    });
+    expect(withoutImage.carrierPlan.every((directive) => directive.visualType === 'motion')).toBe(true);
   });
 });
 

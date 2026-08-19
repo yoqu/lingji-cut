@@ -123,6 +123,60 @@ describe('loadProjectFile', () => {
     // 旧文件不再被读取或删除
     expect(files).toContain('timeline.json');
   });
+
+  it('加载导演审查项目时持久清理上一制作任务的 generating 中间态', async () => {
+    await loadProjectFile(tmpDir);
+    const production = createEmptyProductionState(1);
+    production.draftPlan = directorPlan(2);
+    production.approvedPlan = directorPlan(1);
+    production.workflow = {
+      ...production.workflow,
+      stage: 'director-review',
+      updatedAt: 20,
+      activeTaskId: 'director-production-old',
+      error: '28 个镜头未通过质量门禁',
+      failedStage: 'production-running',
+    };
+    production.outputs.footage = {
+      status: 'generating', directorRevision: 1, updatedAt: 10, error: '旧任务仍在保存',
+    };
+    await saveProjectSection(tmpDir, 'production', production);
+
+    const project = await loadProjectFile(tmpDir);
+
+    expect(project.production?.outputs.footage).toEqual({
+      status: 'stale', directorRevision: 1, updatedAt: 20, error: undefined,
+    });
+    expect(project.production?.workflow.activeTaskId).toBeUndefined();
+    expect(project.production?.workflow.error).toBeUndefined();
+    expect(project.production?.workflow.failedStage).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(path.join(tmpDir, 'project.json'), 'utf-8'));
+    expect(persisted.production.outputs.footage).toEqual({
+      status: 'stale', directorRevision: 1, updatedAt: 20,
+    });
+    expect(persisted.production.workflow.activeTaskId).toBeUndefined();
+    expect(persisted.production.workflow.error).toBeUndefined();
+    expect(persisted.production.workflow.failedStage).toBeUndefined();
+  });
+
+  it('加载期间保留仍标记为 production-running 的制作中状态', async () => {
+    await loadProjectFile(tmpDir);
+    const production = createEmptyProductionState(1);
+    production.approvedPlan = directorPlan(1);
+    production.workflow = {
+      ...production.workflow,
+      stage: 'production-running',
+      updatedAt: 20,
+      activeTaskId: 'director-production-live',
+    };
+    production.outputs.footage = { status: 'generating', directorRevision: 1, updatedAt: 10 };
+    await saveProjectSection(tmpDir, 'production', production);
+
+    const project = await loadProjectFile(tmpDir);
+
+    expect(project.production?.workflow.activeTaskId).toBe('director-production-live');
+    expect(project.production?.outputs.footage.status).toBe('generating');
+  });
 });
 
 describe('mutateProjectProduction', () => {
@@ -143,6 +197,102 @@ describe('mutateProjectProduction', () => {
     const project = await loadProjectFile(tmpDir);
     expect(project.production?.outputs.cards.status).toBe('current');
     expect(project.production?.outputs.cover).toMatchObject({ status: 'failed', error: 'cover failed' });
+  });
+
+  it('normalizes legacy review state before checking a late production task guard', async () => {
+    await loadProjectFile(tmpDir);
+    const production = createEmptyProductionState(1);
+    production.draftPlan = directorPlan(2);
+    production.approvedPlan = directorPlan(1);
+    production.workflow = {
+      ...production.workflow,
+      stage: 'director-review',
+      updatedAt: 20,
+      activeTaskId: 'director-production-old',
+      error: '上一轮制作失败',
+      failedStage: 'production-running',
+    };
+    production.outputs.footage = { status: 'generating', directorRevision: 1, updatedAt: 10 };
+    await saveProjectSection(tmpDir, 'production', production);
+
+    await expect(mutateProjectProduction(tmpDir, {
+      kind: 'set-output',
+      output: 'footage',
+      state: { status: 'current', directorRevision: 1, updatedAt: 30 },
+      expectedDirectorRevision: 1,
+      expectedTaskId: 'director-production-old',
+    })).rejects.toThrow('制作任务已变化');
+
+    const project = await loadProjectFile(tmpDir);
+    expect(project.production?.outputs.footage.status).toBe('stale');
+    expect(project.production?.workflow.activeTaskId).toBeUndefined();
+  });
+
+  it('validates the latest project snapshot inside the production write lock', async () => {
+    await loadProjectFile(tmpDir);
+    await saveProjectSection(tmpDir, 'meta', { title: 'newer input' });
+
+    await expect(mutateProjectProduction(tmpDir, {
+      kind: 'set-output',
+      output: 'cards',
+      state: { status: 'current', directorRevision: 1, updatedAt: 10 },
+    }, (current) => {
+      if (current.meta?.title === 'newer input') throw new Error('snapshot changed');
+    })).rejects.toThrow('snapshot changed');
+
+    const project = await loadProjectFile(tmpDir);
+    expect(project.production).toBeUndefined();
+  });
+
+  it('saves a director draft title and intro into project and publish metadata atomically', async () => {
+    await loadProjectFile(tmpDir);
+    const plan = {
+      ...directorPlan(2),
+      title: '世界第91位不是突然发生的',
+      summary: '从全球排名回看长期积累，这不是一次突然的跃升。',
+    };
+
+    await mutateProjectProduction(tmpDir, { kind: 'replace-draft', plan });
+
+    const project = await loadProjectFile(tmpDir);
+    expect(project.production?.draftPlan?.title).toBe(plan.title);
+    expect(project.production?.draftPlan?.coverDirection.prompt).toContain(`“${plan.title}”`);
+    expect(project.meta?.title).toBe(plan.title);
+    expect(project.publish?.title).toBe(plan.title);
+    expect(project.publish?.desc).toBe(plan.summary);
+  });
+
+  it('does not overwrite project metadata when saving a legacy draft without title', async () => {
+    await loadProjectFile(tmpDir);
+    await saveProjectSection(tmpDir, 'meta', { title: '已有作品标题' });
+    await saveProjectSection(tmpDir, 'publish', {
+      title: '已有作品标题', desc: '已有简介', tagsInput: '', thumbnail: '',
+    });
+
+    await mutateProjectProduction(tmpDir, { kind: 'replace-draft', plan: directorPlan(2) });
+
+    const project = await loadProjectFile(tmpDir);
+    expect(project.meta?.title).toBe('已有作品标题');
+    expect(project.publish?.title).toBe('已有作品标题');
+    expect(project.publish?.desc).toBe('已有简介');
+  });
+
+  it('keeps a manually edited publish intro when saving a titled director draft', async () => {
+    await loadProjectFile(tmpDir);
+    await saveProjectSection(tmpDir, 'publish', {
+      title: '旧标题', desc: '发布台人工修改的简介', tagsInput: '', thumbnail: '',
+    });
+    const plan = {
+      ...directorPlan(2),
+      title: '世界第91位不是突然发生的',
+      summary: '导演新生成的简介',
+    };
+
+    await mutateProjectProduction(tmpDir, { kind: 'replace-draft', plan });
+
+    const project = await loadProjectFile(tmpDir);
+    expect(project.publish?.title).toBe(plan.title);
+    expect(project.publish?.desc).toBe('发布台人工修改的简介');
   });
 });
 

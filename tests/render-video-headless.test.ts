@@ -59,4 +59,34 @@ describe('render-video extraction', () => {
     expect(render).toContain("phase: 'render-media.end'");
     expect(render).toContain("logLevel: 'verbose'");
   });
+
+  it('revalidates frozen footage fingerprints at every quality gate', () => {
+    const headless = readFileSync(
+      new URL('../electron/remotion/render-video-headless.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(headless).toContain('auditProductionFingerprints');
+    expect(headless.match(/const fingerprintAudit = await auditProductionFingerprints/g)?.length ?? 0)
+      .toBe(3);
+    expect(headless).toContain('inputPath: temporaryOutputPath');
+    expect(headless.indexOf('await atomicallyReplaceOutput'))
+      .toBeGreaterThan(headless.lastIndexOf('const fingerprintAudit = await auditProductionFingerprints'));
+    expect(headless).toContain('qualityExportSnapshotHash');
+    expect(headless.lastIndexOf('await assertQualityExportSnapshotCurrent'))
+      .toBeLessThan(headless.indexOf('await atomicallyReplaceOutput'));
+    expect(headless).toContain('if (temporaryOutputPath) {');
+    expect(headless.lastIndexOf('await fs.rm(temporaryOutputPath, { force: true })'))
+      .toBeGreaterThan(headless.indexOf('} finally {'));
+  });
+
+  it('runs the production gate for every encoding preset', () => {
+    const headless = readFileSync(
+      new URL('../electron/remotion/render-video-headless.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(headless).toContain('const report = evaluateProductionQuality');
+    expect(headless).not.toContain("if (args.exportConfig.quality === 'quality' && qualityProjectDir) {");
+  });
 });

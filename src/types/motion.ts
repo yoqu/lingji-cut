@@ -97,19 +97,56 @@ export interface MotionCardValidationInput {
   frames?: number[];
   durationInFrames?: number;
   assetBindings?: CardAssetBinding[];
+  /** 组合镜头放开固定布局约束，但继续执行确定性、字幕安全和可见性检查。 */
+  qualityProfile?: 'motion-card' | 'agent-composite';
   checkRenderedLayout?: boolean;
 }
 
 export type MotionBibleDensity = 'quiet' | 'balanced' | 'dense';
 export type MotionBibleTransition = 'crossfade' | 'hard-cut' | 'push' | 'wipe' | 'match-cut';
 export type MotionBibleIssueSeverity = 'warning' | 'error';
+export type MotionDirectiveVisualType = 'motion' | 'image' | 'footage';
+export type MotionDirectiveComposition = 'graphic' | 'full-bleed' | 'media-window' | 'split';
+export type MotionDirectiveCameraMove =
+  | 'static'
+  | 'push-in'
+  | 'pull-out'
+  | 'pan-left'
+  | 'pan-right'
+  | 'tracking';
+export type MotionDirectiveMediaRole = 'evidence' | 'context' | 'emotion' | 'demonstration';
+export type MotionDirectiveRenderStrategy = 'motion-card' | 'standalone-media' | 'agent-composite';
+export type MotionDirectiveFallbackPolicy = 'standalone-media' | 'motion' | 'block';
+
+export interface MotionDirectiveCompositionIntent {
+  narrativeGoal: string;
+  focalPriority: string;
+  temporalRelationship: string;
+  mustShow: string[];
+  avoid: string[];
+}
 
 export interface MotionSegmentDirective {
   segmentId: string;
+  /** 整片导演最终分配的主视觉媒介；批准后它覆盖 planning.segment 的初始建议。 */
+  visualType?: MotionDirectiveVisualType;
   preferredCarrier?: string;
   /** 载体内变体提示（目前仅 'anchor'：concept 关键词锚点卡，由弱卡降级 pass 写入）。 */
   preferredVariant?: string;
   intensity: 1 | 2 | 3;
+  composition?: MotionDirectiveComposition;
+  cameraMove?: MotionDirectiveCameraMove;
+  mediaRole?: MotionDirectiveMediaRole;
+  /** 决定制作执行路由，不规定画中画、分屏等具体布局。 */
+  renderStrategy?: MotionDirectiveRenderStrategy;
+  /** 仅 agent-composite 使用，由下游 Agent 自主转译为 React/Remotion 构图。 */
+  compositionIntent?: MotionDirectiveCompositionIntent;
+  fallbackPolicy?: MotionDirectiveFallbackPolicy;
+  /** footage 的素材库检索词；其它媒介可省略。 */
+  mediaQuery?: string;
+  footageFallback?: 'image' | 'motion';
+  /** 进入本段的转场；缺省沿用整片 transitionRules.default。 */
+  transition?: MotionBibleTransition;
   reason: string;
 }
 

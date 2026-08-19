@@ -7,6 +7,7 @@ import type { AgentStreamEvent } from '../../electron/agent-runtime/event-model'
 import {
   extractFinalAssistantError,
   PiInProcessSession,
+  stringifyToolResult,
 } from '../../electron/agent-runtime/pi-inprocess';
 
 interface PiSessionHarness {
@@ -68,6 +69,21 @@ describe('extractFinalAssistantError', () => {
         { role: 'assistant', content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' },
       ]),
     ).toBeNull();
+  });
+});
+
+describe('stringifyToolResult', () => {
+  it('keeps image payloads out of event text', () => {
+    const secretBytes = Buffer.from('representative frame').toString('base64');
+    const text = stringifyToolResult({
+      content: [
+        { type: 'text', text: 'candidate-1' },
+        { type: 'image', data: secretBytes, mimeType: 'image/jpeg' },
+      ],
+    });
+
+    expect(text).toBe('candidate-1\n[image:image/jpeg]');
+    expect(text).not.toContain(secretBytes);
   });
 });
 

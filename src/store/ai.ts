@@ -8,7 +8,6 @@ import {
 } from '../lib/ai-persistence';
 import { getProductionSaveGuard } from '../lib/production-save-guard';
 import { migrateToProviders } from '../lib/llm/provider-utils';
-import { isLingjiManagedProviderId } from '../lib/llm/lingji-gateway';
 import { migrateImageProviders } from '../lib/llm/migrate-image-providers';
 import { normalizeTTSSettings } from '../lib/tts-settings';
 import { normalizeSunoAudioSettings } from '../lib/audio-gen/settings';
@@ -19,6 +18,8 @@ import {
   getDefaultTemplate,
   buildAICardTimelineDraft,
   normalizeCardGenerationConcurrency,
+  normalizeKacutSettings,
+  buildDefaultKacutSettings,
   type AIAnalysisResult,
   type AICard,
   type AICardDisplayMode,
@@ -225,6 +226,7 @@ export function buildDefaultAISettings(): AISettings {
     cardGenerationConcurrency: normalizeCardGenerationConcurrency(undefined),
     motionCardMode: 'template',
     defaultStylePresetId: DEFAULT_STYLE_PRESET_ID,
+    kacut: buildDefaultKacutSettings(),
   };
 }
 
@@ -613,10 +615,12 @@ export const useAIStore = create<AIStore>((set, get) => ({
     const changedCards: AICard[] = [];
     const cards = result.cards.map((card) => {
       if (!card.assetBindings?.length) return card;
-      const missing = card.assetBindings.filter((binding) => !byId.has(binding.assetId));
+      const missing = card.assetBindings.filter((binding) => (
+        !byId.has(binding.assetId) && !binding.lockedByUser
+      ));
       const bindings = card.assetBindings.flatMap((binding) => {
         const asset = byId.get(binding.assetId);
-        if (!asset) return [];
+        if (!asset) return binding.lockedByUser ? [binding] : [];
         return [{
           ...binding,
           filePath: asset.files.processed || asset.files.thumbnail || asset.files.original,
@@ -1157,33 +1161,53 @@ export const useAIStore = create<AIStore>((set, get) => ({
 }));
 
 /**
- * 清洗已下线的视频 / TTS provider 类型：
- * - 网关托管视频（lingji-fallback-video，历史下发过 'custom'）归一为 'vidu'；
- * - 其余无运行时实现的类型（kling/runway/minimax_video/custom_openai_audio）直接剔除。
+ * 清洗已下线 / 已移除的 provider：
+ * - 账号体系托管项（id 以 lingji-fallback- 开头）整行剔除；
+ * - 无运行时实现的视频类型（kling/runway/minimax_video/custom）直接剔除，仅保留 vidu；
+ * - 无运行时实现的 TTS 类型 custom_openai_audio 剔除。
  */
+function isRetiredLingjiManagedProviderId(id: string): boolean {
+  return id.startsWith('lingji-fallback-');
+}
+
+function pickDefaultProviderId(
+  list: { id: string }[],
+  current: string | null | undefined,
+): string | null {
+  if (current && list.some((p) => p.id === current)) return current;
+  return list[0]?.id ?? null;
+}
+
 function sanitizeRemovedMediaProviders(raw: AISettings): Pick<
   AISettings,
-  'videoProviders' | 'defaultVideoProviderId' | 'ttsProviders' | 'defaultTtsProviderId'
+  | 'llmProviders'
+  | 'defaultProviderId'
+  | 'imageProviders'
+  | 'defaultImageProviderId'
+  | 'videoProviders'
+  | 'defaultVideoProviderId'
+  | 'ttsProviders'
+  | 'defaultTtsProviderId'
 > {
-  const videoProviders = (raw.videoProviders ?? [])
-    .map((p) =>
-      (p.type as string) !== 'vidu' && isLingjiManagedProviderId(p.id)
-        ? { ...p, type: 'vidu' as const }
-        : p,
-    )
-    .filter((p) => (p.type as string) === 'vidu');
-  const ttsProviders = (raw.ttsProviders ?? []).filter(
+  const dropManaged = <T extends { id: string }>(list: T[] | undefined): T[] =>
+    (list ?? []).filter((p) => !isRetiredLingjiManagedProviderId(p.id));
+
+  const llmProviders = dropManaged(raw.llmProviders);
+  const imageProviders = dropManaged(raw.imageProviders);
+  const videoProviders = dropManaged(raw.videoProviders).filter((p) => (p.type as string) === 'vidu');
+  const ttsProviders = dropManaged(raw.ttsProviders).filter(
     (p) => (p.type as string) !== 'custom_openai_audio',
   );
+
   return {
+    llmProviders,
+    defaultProviderId: pickDefaultProviderId(llmProviders, raw.defaultProviderId),
+    imageProviders,
+    defaultImageProviderId: pickDefaultProviderId(imageProviders, raw.defaultImageProviderId),
     videoProviders,
-    defaultVideoProviderId: videoProviders.some((p) => p.id === raw.defaultVideoProviderId)
-      ? (raw.defaultVideoProviderId ?? null)
-      : (videoProviders[0]?.id ?? null),
+    defaultVideoProviderId: pickDefaultProviderId(videoProviders, raw.defaultVideoProviderId),
     ttsProviders,
-    defaultTtsProviderId: ttsProviders.some((p) => p.id === raw.defaultTtsProviderId)
-      ? (raw.defaultTtsProviderId ?? null)
-      : (ttsProviders[0]?.id ?? null),
+    defaultTtsProviderId: pickDefaultProviderId(ttsProviders, raw.defaultTtsProviderId),
   };
 }
 
@@ -1192,8 +1216,8 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
   const media = sanitizeRemovedMediaProviders(raw);
   const filled: AISettings = {
     ...raw,
-    llmProviders: raw.llmProviders ?? [],
-    defaultProviderId: raw.defaultProviderId ?? null,
+    llmProviders: media.llmProviders,
+    defaultProviderId: media.defaultProviderId,
     defaultModel: raw.defaultModel ?? null,
     enableThinking: raw.enableThinking ?? true,
     minimaxApiKey: raw.minimaxApiKey ?? '',
@@ -1208,8 +1232,8 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
     defaultTtsVoiceId: raw.defaultTtsVoiceId ?? null,
     ttsVoices: raw.ttsVoices ?? [],
     audioGeneration: normalizeSunoAudioSettings(raw.audioGeneration),
-    imageProviders: raw.imageProviders ?? [],
-    defaultImageProviderId: raw.defaultImageProviderId ?? null,
+    imageProviders: media.imageProviders,
+    defaultImageProviderId: media.defaultImageProviderId,
     defaultImageModel: raw.defaultImageModel ?? null,
     globalCoverImagePrompt: raw.globalCoverImagePrompt ?? '',
     videoProviders: media.videoProviders,
@@ -1223,6 +1247,7 @@ function normalizeRawAISettings(raw: AISettings): AISettings {
       typeof raw.defaultStylePresetId === 'string' && raw.defaultStylePresetId.trim()
         ? raw.defaultStylePresetId
         : DEFAULT_STYLE_PRESET_ID,
+    kacut: normalizeKacutSettings(raw.kacut),
   };
   return normalizeTTSSettings(migrateImageProviders(migrateToProviders(filled)));
 }

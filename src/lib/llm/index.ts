@@ -8,21 +8,6 @@ import {
   parseStructuredOutput,
 } from './content';
 import { createChatModelFromProvider } from './model';
-import {
-  INSUFFICIENT_CREDITS_MESSAGE,
-  isInsufficientCreditsError,
-  isLingjiGatewayKey,
-  normalizeCreditsError,
-  normalizeCreditsErrorForKey,
-} from './credits-error';
-
-/** 解析本次调用实际使用的 provider apiKey（binding 优先，回落默认 provider）。 */
-function resolveProviderApiKey(settings: AISettings, binding?: ResolvedBinding): string | undefined {
-  return (
-    binding?.provider?.apiKey ??
-    settings.llmProviders?.find((p) => p.id === settings.defaultProviderId)?.apiKey
-  );
-}
 
 export interface StreamCallbacks {
   onReasoningChunk?: (chunk: string) => void;
@@ -238,7 +223,6 @@ async function streamWithRetry<T>(
   const hardTimeoutMs = options.hardTimeoutMs ?? STRUCTURED_HARD_TIMEOUT_MS;
   const thinking = isThinkingBinding(binding);
   const tel = options.telemetry;
-  const gatewayKey = resolveProviderApiKey(settings, binding);
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= STRUCTURED_MAX_RETRIES; attempt++) {
@@ -289,20 +273,6 @@ async function streamWithRetry<T>(
       });
       return parsed;
     } catch (error) {
-      // 托管网关积分不足：重试无意义，补齐失败日志/遥测配对后直接给可行动的错误。
-      if (isLingjiGatewayKey(gatewayKey) && isInsufficientCreditsError(error)) {
-        llmLog(`${label} ✗ 积分不足 attempt=${attempt} 耗时=${Date.now() - callStart}ms`);
-        tel?.emit('llm.end', {
-          label: telemetryLabel,
-          attempt,
-          durationMs: Date.now() - callStart,
-          ok: false,
-          retry: attempt > 0,
-          error: INSUFFICIENT_CREDITS_MESSAGE,
-          willRetry: false,
-        });
-        throw normalizeCreditsError(error) as Error;
-      }
       lastError = error;
       const willRetry = attempt < STRUCTURED_MAX_RETRIES;
       llmLog(
@@ -353,15 +323,11 @@ export async function generateText(
   binding?: ResolvedBinding,
   signal?: AbortSignal,
 ): Promise<string> {
-  try {
-    const response = await pickModel(settings, binding).invoke(
-      buildPromptMessages(systemPrompt, userMessage),
-      signal ? { signal } : undefined,
-    );
-    return assertNonEmptyContent(extractTextContent(response.content), 'LLM 返回空内容');
-  } catch (error) {
-    throw normalizeCreditsErrorForKey(resolveProviderApiKey(settings, binding), error);
-  }
+  const response = await pickModel(settings, binding).invoke(
+    buildPromptMessages(systemPrompt, userMessage),
+    signal ? { signal } : undefined,
+  );
+  return assertNonEmptyContent(extractTextContent(response.content), 'LLM 返回空内容');
 }
 
 export async function streamText(
@@ -373,33 +339,29 @@ export async function streamText(
   binding?: ResolvedBinding,
   signal?: AbortSignal,
 ): Promise<string> {
-  try {
-    // signal 透传给底层 SDK fetch：用户取消时直接中断网络请求，而非仅停本地播放。
-    const stream = await pickModel(settings, binding).stream(
-      buildPromptMessages(systemPrompt, userMessage),
-      signal ? { signal } : undefined,
-    );
-    let fullText = '';
+  // signal 透传给底层 SDK fetch：用户取消时直接中断网络请求，而非仅停本地播放。
+  const stream = await pickModel(settings, binding).stream(
+    buildPromptMessages(systemPrompt, userMessage),
+    signal ? { signal } : undefined,
+  );
+  let fullText = '';
 
-    for await (const chunk of stream) {
-      const reasoningChunk = extractReasoningContent(chunk);
-      if (reasoningChunk) {
-        callbacks?.onReasoningChunk?.(reasoningChunk);
-      }
-
-      const textChunk = extractTextContent(chunk.content);
-      if (!textChunk) {
-        continue;
-      }
-
-      fullText += textChunk;
-      onChunk(textChunk);
+  for await (const chunk of stream) {
+    const reasoningChunk = extractReasoningContent(chunk);
+    if (reasoningChunk) {
+      callbacks?.onReasoningChunk?.(reasoningChunk);
     }
 
-    return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
-  } catch (error) {
-    throw normalizeCreditsErrorForKey(resolveProviderApiKey(settings, binding), error);
+    const textChunk = extractTextContent(chunk.content);
+    if (!textChunk) {
+      continue;
+    }
+
+    fullText += textChunk;
+    onChunk(textChunk);
   }
+
+  return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
 }
 
 export async function streamTextWithProvider(
@@ -410,30 +372,26 @@ export async function streamTextWithProvider(
   onChunk: (chunk: string) => void,
   options?: { enableThinking?: boolean; signal?: AbortSignal } & StreamCallbacks,
 ): Promise<string> {
-  try {
-    // 默认沿用 provider.enableThinking；调用方显式传入 options.enableThinking 时优先生效
-    const chatModel = createChatModelFromProvider(provider, model, {
-      enableThinking: options?.enableThinking,
-    });
-    const stream = await chatModel.stream(
-      buildPromptMessages(systemPrompt, userMessage),
-      options?.signal ? { signal: options.signal } : undefined,
-    );
-    let fullText = '';
+  // 默认沿用 provider.enableThinking；调用方显式传入 options.enableThinking 时优先生效
+  const chatModel = createChatModelFromProvider(provider, model, {
+    enableThinking: options?.enableThinking,
+  });
+  const stream = await chatModel.stream(
+    buildPromptMessages(systemPrompt, userMessage),
+    options?.signal ? { signal: options.signal } : undefined,
+  );
+  let fullText = '';
 
-    for await (const chunk of stream) {
-      const reasoningChunk = extractReasoningContent(chunk);
-      if (reasoningChunk) {
-        options?.onReasoningChunk?.(reasoningChunk);
-      }
-      const textChunk = extractTextContent(chunk.content);
-      if (!textChunk) continue;
-      fullText += textChunk;
-      onChunk(textChunk);
+  for await (const chunk of stream) {
+    const reasoningChunk = extractReasoningContent(chunk);
+    if (reasoningChunk) {
+      options?.onReasoningChunk?.(reasoningChunk);
     }
-
-    return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
-  } catch (error) {
-    throw normalizeCreditsErrorForKey(provider.apiKey, error);
+    const textChunk = extractTextContent(chunk.content);
+    if (!textChunk) continue;
+    fullText += textChunk;
+    onChunk(textChunk);
   }
+
+  return assertNonEmptyContent(fullText, 'LLM 流式返回空内容');
 }

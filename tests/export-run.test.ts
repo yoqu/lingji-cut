@@ -27,6 +27,7 @@ describe('runExportHeadless', () => {
         { render: async (args) => { calledWith = args; return { outputPath: args.outputPath }; } },
       );
       expect((res as any).outputPath).toBe(path.join(dir, 'myout.mp4'));
+      expect(calledWith.projectDir).toBe(dir);
       expect(JSON.parse(calledWith.timeline)).toEqual({ tracks: [], podcast: {} });
       expect(calledWith.exportConfig.quality).toBe('balanced');
     } finally { rmSync(dir, { recursive: true, force: true }); }

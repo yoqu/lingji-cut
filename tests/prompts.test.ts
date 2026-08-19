@@ -76,11 +76,23 @@ describe('PROMPT_KINDS and metadata', () => {
     }
   });
 
-  it('exposes director rules as an editable non-model prompt', () => {
+  it('exposes the Pi show director as an independently bindable prompt', () => {
     expect(PROMPT_KINDS).toContain('production.director');
     expect(PROMPT_KIND_META['production.director'].label).toBe('导演制作规则');
-    expect(PROMPT_KIND_META['production.director'].supportsBinding).toBe(false);
+    expect(PROMPT_KIND_META['production.director'].supportsBinding).toBe(true);
     expect(getBuiltinPromptTemplate('production.director').user).toContain('每分钟 2-4 次');
+  });
+
+  it('lets reviewed real B-roll serve non-evidence roles without media quotas', () => {
+    const director = getBuiltinPromptTemplate('production.director').user;
+    const planning = getBuiltinPromptTemplate('planning.segment').user;
+
+    expect(director).toContain('evidence 画面必须能核验');
+    expect(director).toContain('context、emotion、demonstration 与 breath');
+    expect(director).toContain('素材检索分只用于候选排序');
+    expect(director).toContain('人工或导演 Agent 明确选择的低分素材可以执行');
+    expect(director).toContain('不给 footage、image 或 agent-composite 设置数量、占比、连续段数与首尾禁用配额');
+    expect(planning).not.toContain('整期 image 段数不得超过总段数的 1/3');
   });
 });
 
@@ -118,6 +130,23 @@ describe('motion.bible default template（carrier 多样性软配额）', () => 
     expect(tpl.user).toContain('min(6');
     expect(tpl.user).toContain('stacked-composition');
   });
+
+  it('先规划最终媒介、构图、运镜和素材检索，不再是 motion-only', () => {
+    const rendered = renderUserPromptWithLock(
+      'motion.bible',
+      getBuiltinPromptTemplate('motion.bible'),
+      { globalPrompt: '无', programSummary: '总结', keywords: '关键词', segments: '[]' },
+    );
+    expect(rendered).toContain('最终镜头方案');
+    expect(rendered).toContain('visualType');
+    expect(rendered).toContain('composition');
+    expect(rendered).toContain('cameraMove');
+    expect(rendered).toContain('mediaQuery');
+    expect(rendered).toContain('renderStrategy');
+    expect(rendered).toContain('agent-composite');
+    expect(rendered).toContain('compositionIntent');
+    expect(rendered).toContain('禁止写坐标、CSS、画中画、分屏');
+  });
 });
 
 describe('renderUserPromptWithLock', () => {
@@ -139,6 +168,9 @@ describe('renderUserPromptWithLock', () => {
       { globalPromptLine: '' },
     );
     expect(planning).toContain('segments');
+    expect(planning).toContain('title: 8-14 个汉字的作品标题');
+    expect(planning).toContain('summary: 1-2 句、约 30-80 字的作品简介');
+    expect(planning).toContain('画面标题必须逐字等于顶层 title');
     expect(planning).toContain('semanticType');
     expect(planning).not.toContain('webCard');
 
@@ -165,6 +197,23 @@ describe('renderUserPromptWithLock', () => {
     expect(cards).toContain('useCurrentFrame');
     expect(cards).toContain('@lingji/motion-kit');
     expect(cards).not.toContain('webCard');
+  });
+
+  it('locks cover regeneration to the exact director title without shortening', () => {
+    const cover = renderUserPromptWithLock(
+      'cover.regeneration',
+      getBuiltinPromptTemplate('cover.regeneration'),
+      {
+        title: '世界第91位不是突然发生的',
+        globalPrompt: '无',
+        currentPrompt: '无',
+        styleSystemBlock: '',
+      },
+    );
+
+    expect(cover).toContain('世界第91位不是突然发生的');
+    expect(cover).toContain('禁止截取、缩写、改写或另造');
+    expect(cover).toContain('画面主标题必须逐字等于作品标题');
   });
 });
 
@@ -193,6 +242,9 @@ describe('cards.segment v19 / cards.animation v5 契约', () => {
     expect(anim).toContain('lifecycle 只操作 elements 中的整体语义区块');
     expect(anim).toContain('不要要求内部子项换位');
     expect(anim).toContain('{{segmentCues}}');
+    expect(anim).toContain('听中文，看阿拉伯数字');
+    expect(anim).toContain('“124.3%”');
+    expect(anim).toContain('不得为了缩短而换算、四舍五入');
   });
 
   it('cards.animation 锁定契约要求严格 JSON 输出', () => {
@@ -203,6 +255,8 @@ describe('cards.segment v19 / cards.animation v5 契约', () => {
     );
     expect(rendered).toContain('【系统契约 · 不可修改】');
     expect(rendered).toContain('"beats"');
+    expect(rendered).toContain('"assets"');
+    expect(rendered).toContain('visualTreatment');
     expect(rendered).toContain('单调不减');
   });
 });

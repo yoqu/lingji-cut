@@ -1,9 +1,9 @@
-// 由 electron/main.ts 的 render-video IPC 处理体抽取；无行为变更。
-// 唯一改动：三处 `mainWindow?.webContents.send('render-progress', X)` 替换为 `onProgress(X)`。
+// Electron UI 与 headless CLI 共用的 Remotion 导出入口。
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { app } from 'electron';
 import type { ExportConfig } from '../../src/lib/export-settings';
 import { buildExportRenderConfig } from '../../src/lib/export-settings';
@@ -16,7 +16,10 @@ import {
   selectRemotionComposition,
 } from './render';
 import { collectMotionCards } from '../../src/remotion/collect-cards';
-import { hydrateTimelineCards } from '../../src/lib/motion-card-externalize';
+import {
+  hydrateTimelineCards,
+  motionCardTsxPath,
+} from '../../src/lib/motion-card-externalize';
 import { prepareTimelineForHyperframes, type HyperframesAssetDescriptor } from '../../src/hyperframes/assets';
 import {
   collectMotionCardAssets,
@@ -24,8 +27,13 @@ import {
   rewriteMotionCardAssetReferences,
 } from './motion-card-assets';
 import type { ProjectData } from '../../src/lib/project-persistence';
-import { evaluateProductionQuality } from '../../src/lib/production-quality';
+import {
+  collectProductionFingerprintPaths,
+  evaluateProductionQuality,
+  type ProductionQualityFingerprintAudit,
+} from '../../src/lib/production-quality';
 import { mutateProjectProduction } from '../project-file';
+import { readLocalFileFingerprint } from '../footage/file-fingerprint';
 import { resolveFfmpegPath } from '../runtime-binaries';
 import { masterVideoAudio } from '../audio-mastering';
 import { resolveBundledRemotionBrowserExecutable } from './browser-runtime';
@@ -62,31 +70,112 @@ async function materializeRenderAssets(
   );
 }
 
-/**
- * 从 timeline 反推项目目录：podcast-audio.mp3 / podcast-subtitles.srt 都
- * 位于 projectDir 根，用 audioPath 的 dirname 即得（项目硬约定）。
- * 用于把 ai-card MediaCardContent 的相对路径解析为绝对，再做 public 映射。
- */
-function inferProjectDirFromTimeline(timeline: TimelineData): string | null {
-  const audio = timeline.podcast?.audioPath;
-  if (audio && path.isAbsolute(audio)) return path.dirname(audio);
-  const srt = timeline.podcast?.srtPath;
-  if (srt && path.isAbsolute(srt)) return path.dirname(srt);
-  return null;
+export function resolveRenderProjectDir(projectDir: string): string {
+  const normalized = typeof projectDir === 'string' ? projectDir.trim() : '';
+  if (!normalized) {
+    throw new Error('导出缺少项目目录，无法校验当前制作状态');
+  }
+  if (!path.isAbsolute(normalized)) {
+    throw new Error('导出项目目录必须是绝对路径，无法校验当前制作状态');
+  }
+  return path.normalize(normalized);
+}
+
+function normalizeTimelineForComparison(timeline: TimelineData): TimelineData {
+  const normalized = JSON.parse(JSON.stringify(timeline)) as TimelineData;
+  for (const overlay of normalized.overlays) {
+    const motionCard = overlay.aiCardData?.motionCard;
+    if (
+      overlay.aiCardData?.renderMode === 'motion-card'
+      && motionCard?.tsx?.trim()
+      && !motionCard.tsxPath
+    ) {
+      motionCard.tsxPath = motionCardTsxPath(overlay.id);
+    }
+  }
+  return normalized;
+}
+
+function assertRequestedTimelineCurrent(
+  requested: TimelineData,
+  persisted: TimelineData,
+): void {
+  if (!isDeepStrictEqual(
+    normalizeTimelineForComparison(requested),
+    normalizeTimelineForComparison(persisted),
+  )) {
+    throw new Error('导出时间线与项目当前时间线不一致，请等待保存完成后重试');
+  }
+}
+
+async function auditProductionFingerprints(
+  project: ProjectData,
+  projectDir: string,
+): Promise<ProductionQualityFingerprintAudit> {
+  const entries = await Promise.all(
+    collectProductionFingerprintPaths(project).map(async (persistedPath) => {
+      const resolvedPath = path.isAbsolute(persistedPath)
+        ? persistedPath
+        : path.resolve(projectDir, persistedPath);
+      const fingerprint = await readLocalFileFingerprint(resolvedPath);
+      return [persistedPath, fingerprint] as const;
+    }),
+  );
+  return { currentByPath: new Map(entries) };
+}
+
+function qualityExportSnapshotHash(project: ProjectData): string {
+  const production = project.production;
+  const execution = project.production?.execution;
+  const executionInput = execution
+    ? { ...execution, qualityReport: undefined }
+    : null;
+  const payload = {
+    timeline: project.timeline,
+    analysisResult: project.aiAnalysis.analysisResult,
+    stylePresetId: project.stylePresetId,
+    approvedPlan: production?.approvedPlan ?? null,
+    workflow: production?.workflow ?? null,
+    outputs: production?.outputs ?? null,
+    pendingImpact: production?.pendingImpact ?? null,
+    footage: production?.footage ?? null,
+    execution: executionInput,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function assertQualityExportSnapshot(
+  project: ProjectData,
+  expectedHash: string,
+): void {
+  if (qualityExportSnapshotHash(project) !== expectedHash) {
+    throw new Error('质量导出期间项目画面或制作输入已更新，请基于最新版本重新导出');
+  }
+}
+
+async function assertQualityExportSnapshotCurrent(
+  projectDir: string,
+  expectedHash: string,
+): Promise<void> {
+  const current = JSON.parse(
+    await fs.readFile(path.join(projectDir, 'project.json'), 'utf-8'),
+  ) as ProjectData;
+  assertQualityExportSnapshot(current, expectedHash);
 }
 
 export async function createRenderPublicDir(
   timeline: TimelineData,
+  projectDir: string,
 ): Promise<{
   timeline: TimelineData;
   publicDir: string;
 }> {
-  const projectDir = inferProjectDirFromTimeline(timeline);
+  const resolvedProjectDir = resolveRenderProjectDir(projectDir);
   const { timeline: renderTimeline, assets } = prepareTimelineForHyperframes(
     timeline,
-    projectDir,
+    resolvedProjectDir,
   );
-  const motionCardAssets = await collectMotionCardAssets(timeline, projectDir);
+  const motionCardAssets = await collectMotionCardAssets(timeline, resolvedProjectDir);
   const assetSources = [...new Map(
     [...assets, ...motionCardAssets].map((asset) => [asset.publicPath, asset]),
   ).values()];
@@ -232,28 +321,9 @@ function assertFinalMedia(
 
 async function atomicallyReplaceOutput(tempPath: string, outputPath: string): Promise<void> {
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const backupPath = `${outputPath}.lingji-backup-${crypto.randomUUID()}`;
-  let hadExistingOutput = false;
-  try {
-    await fs.access(outputPath);
-    hadExistingOutput = true;
-  } catch {
-    hadExistingOutput = false;
-  }
-  if (hadExistingOutput) await fs.rename(outputPath, backupPath);
-  try {
-    await fs.rename(tempPath, outputPath);
-    if (hadExistingOutput) await fs.rm(backupPath, { force: true });
-  } catch (error) {
-    if (hadExistingOutput) {
-      try {
-        await fs.rename(backupPath, outputPath);
-      } catch {
-        // Preserve the original error; the backup path remains recoverable beside the target.
-      }
-    }
-    throw error;
-  }
+  // tempPath 与 outputPath 位于同一目录；rename 会在同一文件系统内原子替换目标，
+  // 不先移走旧文件，避免进程在两次操作之间退出后正式路径消失。
+  await fs.rename(tempPath, outputPath);
 }
 
 /**
@@ -310,6 +380,7 @@ export function resolveExportConcurrency(cpuCount: number, envValue?: string): n
 }
 
 export interface RenderVideoArgs {
+  projectDir: string;
   timeline: string;
   outputPath: string;
   exportConfig: ExportConfig;
@@ -340,30 +411,39 @@ export async function renderVideoHeadless(
   const renderStartedAt = Date.now();
   const timestamp = () => `${((Date.now() - renderStartedAt) / 1000).toFixed(2)}s`;
 
-  const timelineData = JSON.parse(args.timeline) as TimelineData;
-  const qualityProjectDir = inferProjectDirFromTimeline(timelineData);
-  let qualityProject: ProjectData | null = null;
-  if (args.exportConfig.quality === 'quality' && qualityProjectDir) {
-    const projectPath = path.join(qualityProjectDir, 'project.json');
-    const project = JSON.parse(await fs.readFile(projectPath, 'utf-8')) as ProjectData;
-    qualityProject = project;
-    if (project.production) {
-      const report = evaluateProductionQuality(project, timelineData);
-      const execution = project.production.execution
-        ? { ...project.production.execution, qualityReport: report }
-        : null;
-      project.production = await mutateProjectProduction(qualityProjectDir, {
-        kind: 'set-execution',
-        execution,
-        expectedDirectorRevision: project.production.approvedPlan?.revision,
-      });
-      if (!report.exportAllowed) {
-        throw new Error(`质量导出被制作门禁阻止：${report.issues
-          .filter((issue) => issue.severity === 'error')
-          .map((issue) => issue.message)
-          .join('；')}`);
+  const requestedTimeline = JSON.parse(args.timeline) as TimelineData;
+  const qualityProjectDir = resolveRenderProjectDir(args.projectDir);
+  const projectPath = path.join(qualityProjectDir, 'project.json');
+  const qualityProject = JSON.parse(await fs.readFile(projectPath, 'utf-8')) as ProjectData;
+  if (!qualityProject.timeline) {
+    throw new Error('项目当前没有可导出的时间线');
+  }
+  const timelineData = await hydrateTimelineCards(qualityProject.timeline, {
+    readFile: async (relativePath) => {
+      try {
+        return await fs.readFile(path.join(qualityProjectDir, relativePath), 'utf-8');
+      } catch {
+        return null;
       }
-    }
+    },
+  });
+  assertRequestedTimelineCurrent(requestedTimeline, timelineData);
+  const qualitySnapshotHash = qualityExportSnapshotHash(qualityProject);
+  // Encoding quality changes speed/bitrate only. Every deliverable must pass the same production gate.
+  const fingerprintAudit = await auditProductionFingerprints(qualityProject, qualityProjectDir);
+  const report = evaluateProductionQuality(qualityProject, timelineData, undefined, fingerprintAudit);
+  if (qualityProject.production?.execution) {
+    qualityProject.production = await mutateProjectProduction(qualityProjectDir, {
+      kind: 'set-execution',
+      execution: { ...qualityProject.production.execution, qualityReport: report },
+      expectedDirectorRevision: qualityProject.production.approvedPlan?.revision,
+    }, (current) => assertQualityExportSnapshot(current, qualitySnapshotHash));
+  }
+  if (!report.exportAllowed) {
+    throw new Error(`导出被制作门禁阻止：${report.issues
+      .filter((issue) => issue.severity === 'error')
+      .map((issue) => issue.message)
+      .join('；')}`);
   }
   const srtEntries =
     args.srtEntries && args.srtEntries.length > 0
@@ -372,19 +452,8 @@ export async function renderVideoHeadless(
         ? parseSrt(await fs.readFile(timelineData.podcast.srtPath, 'utf-8'))
         : [];
 
-  // 字幕「跟随视觉主题」需要项目级 stylePresetId（与预览端同一字段）。
-  // quality 模式上面已读过 project.json 直接复用；其余档位补一次轻量读取，
-  // 读不到（无项目目录 / 文件损坏）不阻断导出，字幕按预设自身配色渲染。
-  let projectStylePresetId = qualityProject?.stylePresetId;
-  if (!projectStylePresetId && qualityProjectDir) {
-    try {
-      const projectPath = path.join(qualityProjectDir, 'project.json');
-      const project = JSON.parse(await fs.readFile(projectPath, 'utf-8')) as ProjectData;
-      projectStylePresetId = project.stylePresetId;
-    } catch {
-      projectStylePresetId = undefined;
-    }
-  }
+  // 字幕「跟随视觉主题」与制作门禁复用同一份项目快照。
+  const projectStylePresetId = qualityProject.stylePresetId;
 
   const cpuCount = os.cpus().length;
   // 帧渲染是 Chromium 截图主导的 CPU 任务；cpu-2 给系统留一点喘息，避免输入卡顿。
@@ -441,21 +510,23 @@ export async function renderVideoHeadless(
   });
   const projectPrepStart = assetsStart;
   // materialize 资源到临时 publicDir，并把 timeline 内绝对素材路径改写为 assets/... 相对路径。
-  const { timeline: renderTimeline, publicDir } = await createRenderPublicDir(timelineData);
+  const { timeline: renderTimeline, publicDir } = await createRenderPublicDir(
+    timelineData,
+    qualityProjectDir,
+  );
   // dev / 打包态统一组装出的可写临时 serve 目录，导出后在 finally 清理。
   let tempServeDir: string | undefined;
+  let temporaryOutputPath: string | undefined;
   let localServeServer: Awaited<ReturnType<typeof startRemotionLocalServer>> | undefined;
   // 打包态需要把 cwd 切到可写目录，让 Remotion 的浏览器缓存落点不是 `/.remotion`。
   // 在 finally 中恢复，避免影响后续主进程逻辑（譬如其它 IPC 的相对路径解析）。
   const originalCwd = process.cwd();
   const remotionCwd = await prepareRemotionCwd();
   // 防御性 hydrate：若上游传来的是磁盘态（只有 tsxPath 没有内存 tsx），读回源码，保证 collectMotionCards 能拿到卡片。
-  const projectDir = inferProjectDirFromTimeline(timelineData);
   const hydratedTimeline = await hydrateTimelineCards(renderTimeline, {
     readFile: async (rel) => {
-      if (!projectDir) return null;
       try {
-        return await fs.readFile(path.join(projectDir, rel), 'utf-8');
+        return await fs.readFile(path.join(qualityProjectDir, rel), 'utf-8');
       } catch {
         return null;
       }
@@ -633,7 +704,7 @@ export async function renderVideoHeadless(
         fallbackReason: 'Remotion binaries directory is unavailable',
       };
     }
-    tel.emit('export.encoder.probe', encoderProbe);
+    tel.emit('export.encoder.probe', { ...encoderProbe });
     const execution = resolveChunkExecutionConfig(
       cpuCount,
       process.env.LINGJI_EXPORT_CHUNK_WORKERS,
@@ -649,7 +720,7 @@ export async function renderVideoHeadless(
     });
     const resolvedOutputPath = requestedOutputPath;
     await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
-    const temporaryOutputPath = path.join(
+    temporaryOutputPath = path.join(
       path.dirname(resolvedOutputPath),
       `.${path.basename(resolvedOutputPath)}.lingji-${crypto.randomUUID()}.tmp.mp4`,
     );
@@ -734,8 +805,6 @@ export async function renderVideoHeadless(
         fps: renderResult.fps,
         totalFrames: renderResult.totalFrames,
       });
-      await atomicallyReplaceOutput(temporaryOutputPath, resolvedOutputPath);
-      onProgress(1);
       const renderDurationMs = Date.now() - renderStart;
       tel.emit('stage.end', {
         stage: 'export.render',
@@ -759,10 +828,23 @@ export async function renderVideoHeadless(
       throw err;
     }
 
-    if (args.exportConfig.quality === 'quality' && qualityProject?.production?.execution && qualityProjectDir) {
+    if (args.exportConfig.quality === 'quality' && qualityProject.production?.execution) {
       const qualityExecution = qualityProject.production.execution;
       const masteringStart = Date.now();
       tel.emit('stage.start', { stage: 'export.mastering' });
+      try {
+        await assertQualityExportSnapshotCurrent(qualityProjectDir, qualitySnapshotHash);
+      } catch (error) {
+        tel.emit('stage.end', {
+          stage: 'export.mastering',
+          durationMs: Date.now() - masteringStart,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await fs.rm(temporaryOutputPath, { force: true });
+        throw error;
+      }
+      let measurement: Awaited<ReturnType<typeof masterVideoAudio>>;
       try {
         const ffmpegPath = resolveFfmpegPath({
           appPath: app.getAppPath(),
@@ -772,34 +854,21 @@ export async function renderVideoHeadless(
         });
         if (!ffmpegPath) throw new Error('未找到 ffmpeg，无法执行质量母带');
         const mastering = qualityExecution.audioPlan.mastering;
-        const measurement = await masterVideoAudio({
+        measurement = await masterVideoAudio({
           ffmpegPath,
-          inputPath: requestedOutputPath,
+          inputPath: temporaryOutputPath,
           targetLufs: mastering.targetLufs,
           maxTruePeakDbtp: mastering.maxTruePeakDbtp,
           audioBitrate: renderConfig.audioBitrate,
         });
-        const report = evaluateProductionQuality(qualityProject, timelineData, measurement);
-        qualityProject.production = await mutateProjectProduction(qualityProjectDir, {
-          kind: 'set-execution',
-          execution: { ...qualityExecution, qualityReport: report },
-          expectedDirectorRevision: qualityProject.production.approvedPlan?.revision,
-        });
-        if (!report.exportAllowed) {
-          throw new Error(report.issues
-            .filter((issue) => issue.severity === 'error')
-            .map((issue) => issue.message)
-            .join('；'));
-        }
-        tel.emit('stage.end', {
-          stage: 'export.mastering',
-          durationMs: Date.now() - masteringStart,
-          ok: true,
-          integratedLufs: measurement.integratedLufs,
-          truePeakDbtp: measurement.truePeakDbtp,
-        });
       } catch (error) {
-        const report = evaluateProductionQuality(qualityProject, timelineData);
+        const fingerprintAudit = await auditProductionFingerprints(qualityProject, qualityProjectDir);
+        const report = evaluateProductionQuality(
+          qualityProject,
+          timelineData,
+          undefined,
+          fingerprintAudit,
+        );
         report.exportAllowed = false;
         report.degraded = true;
         report.issues.push({
@@ -812,16 +881,61 @@ export async function renderVideoHeadless(
           kind: 'set-execution',
           execution: { ...qualityExecution, qualityReport: report },
           expectedDirectorRevision: qualityProject.production.approvedPlan?.revision,
-        });
+        }, (current) => assertQualityExportSnapshot(current, qualitySnapshotHash));
         tel.emit('stage.end', {
           stage: 'export.mastering',
           durationMs: Date.now() - masteringStart,
           ok: false,
           error: error instanceof Error ? error.message : String(error),
         });
+        await fs.rm(temporaryOutputPath, { force: true });
         throw new Error(`质量导出响度母带失败：${error instanceof Error ? error.message : String(error)}`);
       }
+
+      const fingerprintAudit = await auditProductionFingerprints(qualityProject, qualityProjectDir);
+      const report = evaluateProductionQuality(
+        qualityProject,
+        timelineData,
+        measurement,
+        fingerprintAudit,
+      );
+      qualityProject.production = await mutateProjectProduction(qualityProjectDir, {
+        kind: 'set-execution',
+        execution: { ...qualityExecution, qualityReport: report },
+        expectedDirectorRevision: qualityProject.production.approvedPlan?.revision,
+      }, (current) => assertQualityExportSnapshot(current, qualitySnapshotHash));
+      if (!report.exportAllowed) {
+        const error = report.issues
+          .filter((issue) => issue.severity === 'error')
+          .map((issue) => issue.message)
+          .join('；');
+        tel.emit('stage.end', {
+          stage: 'export.mastering',
+          durationMs: Date.now() - masteringStart,
+          ok: false,
+          error,
+        });
+        await fs.rm(temporaryOutputPath, { force: true });
+        throw new Error(`质量导出被制作门禁阻止：${error}`);
+      }
+      tel.emit('stage.end', {
+        stage: 'export.mastering',
+        durationMs: Date.now() - masteringStart,
+        ok: true,
+        integratedLufs: measurement.integratedLufs,
+        truePeakDbtp: measurement.truePeakDbtp,
+      });
     }
+
+    await assertQualityExportSnapshotCurrent(qualityProjectDir, qualitySnapshotHash);
+
+    try {
+      await atomicallyReplaceOutput(temporaryOutputPath, resolvedOutputPath);
+    } catch (error) {
+      await fs.rm(temporaryOutputPath, { force: true });
+      throw error;
+    }
+    onProgress(1);
 
     if (isDev) {
       console.log(
@@ -846,7 +960,7 @@ export async function renderVideoHeadless(
     }
     await fs.rm(publicDir, { recursive: true, force: true });
     if (localServeServer) {
-      tel.emit('render.server.summary', localServeServer.getDiagnostics());
+      tel.emit('render.server.summary', { ...localServeServer.getDiagnostics() });
       try {
         await localServeServer.close();
       } catch {
@@ -855,6 +969,9 @@ export async function renderVideoHeadless(
     }
     if (tempServeDir) {
       await fs.rm(tempServeDir, { recursive: true, force: true });
+    }
+    if (temporaryOutputPath) {
+      await fs.rm(temporaryOutputPath, { force: true });
     }
   }
 }

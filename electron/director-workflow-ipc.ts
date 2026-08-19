@@ -1,11 +1,13 @@
 import { app, ipcMain, type BrowserWindow } from 'electron';
-import { createDirectorPlan } from '../src/lib/director-planning';
+import path from 'node:path';
 import type { AISettings, PromptBindingMap } from '../src/types/ai';
 import type { SrtEntry } from '../src/types';
 import { loadEffectivePromptTemplate } from './prompts-io';
 import { loadProjectFile, mutateProjectProduction } from './project-file';
 import { emitProjectUpdated } from './pipeline/headless-generation';
 import { makeMainTelemetry } from './telemetry/main-telemetry';
+import { runShowDirectorAgent } from './director-agent/show-director-run';
+import { resolveFfmpegPath } from './runtime-binaries';
 
 interface DirectorWorkflowIpcContext {
   getMainWindow: () => BrowserWindow | null;
@@ -52,26 +54,34 @@ export function registerDirectorWorkflowIpc(ctx: DirectorWorkflowIpcContext): vo
     telemetry.emit('stage.start', { stage: 'director.plan', revision: args.directorRevision });
     try {
       const userDataPath = app.getPath('userData');
-      const [planningTemplate, directorTemplate, motionBibleTemplate, project] = await Promise.all([
-        loadEffectivePromptTemplate('planning.segment', { userDataPath, projectDir: args.projectDir }),
+      const [directorTemplate] = await Promise.all([
         loadEffectivePromptTemplate('production.director', { userDataPath, projectDir: args.projectDir }),
-        loadEffectivePromptTemplate('motion.bible', { userDataPath, projectDir: args.projectDir }),
-        loadProjectFile(args.projectDir),
       ]);
-      const plan = await createDirectorPlan(args.entries, args.settings, {
+      const plan = await runShowDirectorAgent({
+        userDataPath,
+        projectDir: args.projectDir,
+        resourcesRoot: path.join(app.getAppPath(), 'resources', 'pi-agents'),
+        entries: args.entries,
+        settings: args.settings,
         revision: args.directorRevision,
         globalPrompt: args.globalPrompt,
-        stylePresetId: project.stylePresetId,
         bgmEnabled: args.bgmEnabled,
-        planningTemplate,
         directorTemplate,
-        motionBibleTemplate,
         projectBindings: args.projectBindings,
         telemetry,
+        ffmpegPath: resolveFfmpegPath({
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+          cwd: process.cwd(),
+          moduleDir: __dirname,
+        }),
         onProgress: (phase, percent) => emitProgress(ctx.getMainWindow(), args, phase, percent),
       });
-      const production = await mutateProjectProduction(args.projectDir, { kind: 'replace-draft', plan });
-      emitProjectUpdated(ctx.getMainWindow, args.projectDir, ['production']);
+      const production = (await loadProjectFile(args.projectDir)).production;
+      if (!production?.draftPlan || production.draftPlan.revision !== plan.revision) {
+        throw new Error('Pi 总导演已返回方案，但项目草案未成功落盘');
+      }
+      emitProjectUpdated(ctx.getMainWindow, args.projectDir, ['production', 'meta', 'publish']);
       telemetry.emit('stage.end', {
         stage: 'director.plan',
         ok: true,

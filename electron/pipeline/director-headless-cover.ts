@@ -43,7 +43,7 @@ export async function runHeadlessDirectorCover(options: {
     currentPrompt: options.plan.coverDirection.prompt,
     coverTemplate,
     projectBindings,
-    workTitle: resolveWorkTitle(project) || undefined,
+    workTitle: options.plan.title?.trim() || resolveWorkTitle(project) || undefined,
   });
   if (options.signal.aborted) throw new DOMException('制作已暂停', 'AbortError');
   const binding = resolvePromptBinding('cover.regeneration', options.settings, projectBindings);

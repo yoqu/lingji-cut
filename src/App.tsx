@@ -24,7 +24,7 @@ import { DirectorWorkbench } from './pages/DirectorWorkbench';
 import { ScriptWorkbench } from './pages/ScriptWorkbench';
 import { Settings, type SettingsTab } from './pages/Settings';
 import { Setup } from './pages/Setup';
-import { FreePublish } from './pages/FreePublish';
+import { PublishHub } from './pages/PublishHub';
 import { AutoRunController } from './components/AutoRunController';
 import { ImportProjectDialog } from './components/ImportProjectDialog';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
@@ -585,6 +585,15 @@ export default function App() {
     setPage('settings');
   }, [setPage]);
 
+  /** 状态栏连接弹窗的修复入口：定位到对应设置 tab。 */
+  const handleOpenSettingsTab = useCallback(
+    (tab: SettingsTab) => {
+      setSettingsInitialTab(tab);
+      setPage('settings');
+    },
+    [setPage],
+  );
+
   /**
    * 导入类入口（文稿 / 媒体）共用的空白工程引导：
    * 先清旧项目会话（避免自动保存订阅拿陈旧 projectDir 写脏旧工程），
@@ -1095,10 +1104,10 @@ export default function App() {
                   onOpenSettings={() => setPage('settings')}
                   onMediaImport={handleMediaImport}
                   onImportProject={handleOpenImportProject}
-                  onOpenFreePublish={() => setPage('free-publish')}
+                  onOpenPublishHub={() => setPage('publish-hub')}
                 />
-              ) : page === 'free-publish' ? (
-                <FreePublish onBack={() => setPage('welcome')} />
+              ) : page === 'publish-hub' ? (
+                <PublishHub onBack={() => setPage('welcome')} />
               ) : page === 'settings' ? (
                 <Settings onBack={() => setPage(previousPage)} initialTab={settingsInitialTab} />
               ) : page === 'auto-run' ? (
@@ -1154,7 +1163,7 @@ export default function App() {
           )}
         </AnimatePresence>
       </div>
-      <AppStatusBar />
+      <AppStatusBar onOpenSettings={handleOpenSettingsTab} />
       <AgentOpOverlay />
       <ImportProjectDialog
         open={importProjectDialogOpen}

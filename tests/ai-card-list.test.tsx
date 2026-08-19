@@ -414,4 +414,37 @@ describe('AICardList', () => {
     expect(item).not.toBeNull();
     expect(item!.props.disabled).toBe(true);
   });
+
+  it('Agent Composite 卡优先显示真实执行策略，不伪装成普通 Motion 载体', () => {
+    const card: AICard = {
+      id: 'composite-1', segmentId: 'seg-composite', type: 'motion', title: '素材与数据合成', content: '组合内容',
+      startMs: 0, endMs: 4_000, displayDurationMs: 4_000, displayMode: 'fullscreen',
+      template: 'motion', enabled: true, style: {} as never, renderMode: 'motion-card',
+      renderStrategy: 'agent-composite',
+      assetBindings: [],
+      motionCard: {
+        compiledAt: 1,
+        prompt: '',
+        retryCount: 0,
+        storyboard: {
+          claim: '组合镜头', carrier: 'concept', scene: '',
+          beats: [{ cue: null, kind: 'build', adds: '' }],
+        },
+      },
+    };
+    const html = renderToStaticMarkup(
+      <AICardList
+        cards={[card]}
+        onToggleEnabled={() => undefined}
+        onDeleteCard={() => undefined}
+        onEditCard={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('data-ai-card-render-strategy="agent-composite"');
+    expect(html).toContain('data-ai-card-thumbnail="agent-composite"');
+    expect(html).toContain('Agent Composite');
+    expect(html).toContain('0 项合成素材');
+    expect(html).not.toContain('>概念<');
+  });
 });

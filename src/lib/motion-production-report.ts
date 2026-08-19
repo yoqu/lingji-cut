@@ -97,6 +97,8 @@ export function buildMotionCardProductionReport(
   const assetIssues = (input.assetIssues ?? []).map((issue) => normalizeIssue(issue, 'asset'));
   const renderOk = input.renderOk !== false;
   const fallbackUsed = input.fallbackUsed === true;
+  const unavailableReason = input.unavailableReason?.trim() || undefined;
+  const visualReviewAvailable = unavailableReason ? false : input.visualReviewAvailable;
 
   return {
     status: determineMotionCardQualityStatus({
@@ -118,8 +120,8 @@ export function buildMotionCardProductionReport(
     fixRounds: Math.max(0, Math.round(input.fixRounds ?? 0)),
     reviewRounds: Math.max(0, Math.round(input.reviewRounds ?? 0)),
     renderOk,
-    visualReviewAvailable: input.visualReviewAvailable,
-    unavailableReason: input.unavailableReason,
+    visualReviewAvailable,
+    unavailableReason,
     contactSheetPath: input.contactSheetPath,
     contactSheetCacheKey: input.contactSheetCacheKey,
     contactSheetCached: input.contactSheetCached,

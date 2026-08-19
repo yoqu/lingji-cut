@@ -108,6 +108,149 @@ describe('validateMotionCardTsx', () => {
   });
 });
 
+const REQUIRED_COMPOSITE_BINDING: CardAssetBinding = {
+  slot: 'evidence',
+  assetId: 'approved-evidence',
+  filePath: 'data:image/png;base64,iVBORw0KGgo=',
+  kind: 'image',
+  usage: 'required',
+  required: true,
+  lockedByUser: true,
+  treatment: {
+    profile: 'technical-product',
+    lighting: 'neutral',
+    palette: 'source',
+    shadow: 'none',
+    perspective: 'source',
+  },
+  placement: { x: 0, y: 0, width: 1920, height: 1080 },
+};
+
+const COMPOSITE_WITHOUT_MEDIA = `import { AbsoluteFill } from 'remotion';
+export default function Card() {
+  return <AbsoluteFill style={{ background: '#101820' }} />;
+}`;
+
+const compositeWithMedia = (style: string) => `import { AbsoluteFill } from 'remotion';
+export default function Card({ BoundMedia }) {
+  return <AbsoluteFill style={{ background: '#101820' }}>
+    <BoundMedia slot="evidence" style={${style}} />
+  </AbsoluteFill>;
+}`;
+
+describe('Agent composite required-media gate', () => {
+  it('rejects a composite that binds required media but never renders it through BoundMedia', async () => {
+    const result = await validateMotionCardTsx(COMPOSITE_WITHOUT_MEDIA, {
+      qualityProfile: 'agent-composite',
+      assetBindings: [REQUIRED_COMPOSITE_BINDING],
+      checkRenderedLayout: false,
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'required-composite-media-not-visible', severity: 'error' }),
+    ]));
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an opacity-zero or token-sized required media reference', async () => {
+    for (const style of [
+      "{ position: 'absolute', left: 100, top: 100, width: 900, height: 600, opacity: 0 }",
+      "{ position: 'absolute', left: 100, top: 100, width: 20, height: 20 }",
+    ]) {
+      const result = await validateMotionCardTsx(compositeWithMedia(style), {
+        qualityProfile: 'agent-composite',
+        assetBindings: [REQUIRED_COMPOSITE_BINDING],
+        frames: [0],
+        checkRenderedLayout: true,
+      });
+      expect(result.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'required-composite-media-not-visible', severity: 'error' }),
+      ]));
+    }
+  }, 120_000);
+
+  it('rejects required media that is mostly clipped by an overflow ancestor', async () => {
+    const clipped = `import { AbsoluteFill } from 'remotion';
+export default function Card({ BoundMedia }) {
+  return <AbsoluteFill style={{ background: '#101820' }}>
+    <div style={{ position: 'absolute', left: 100, top: 100, width: 24, height: 24, overflow: 'hidden' }}>
+      <BoundMedia slot="evidence" style={{ width: 960, height: 620 }} />
+    </div>
+  </AbsoluteFill>;
+}`;
+    const result = await validateMotionCardTsx(clipped, {
+      qualityProfile: 'agent-composite',
+      assetBindings: [REQUIRED_COMPOSITE_BINDING],
+      frames: [0],
+      checkRenderedLayout: true,
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'required-composite-media-not-visible', severity: 'error' }),
+    ]));
+  }, 120_000);
+
+  it('fails closed when required-media box-model verification is disabled', async () => {
+    const result = await validateMotionCardTsx(compositeWithMedia(
+      "{ position: 'absolute', left: 120, top: 90, width: 960, height: 620 }",
+    ), {
+      qualityProfile: 'agent-composite',
+      assetBindings: [REQUIRED_COMPOSITE_BINDING],
+      frames: [0],
+      checkRenderedLayout: false,
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'required-composite-visibility-unverified', severity: 'error' }),
+    ]));
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects an optional-only pool when the Agent renders no approved media', async () => {
+    const optionalBinding = {
+      ...REQUIRED_COMPOSITE_BINDING,
+      usage: 'optional' as const,
+      required: false,
+    };
+    const result = await validateMotionCardTsx(COMPOSITE_WITHOUT_MEDIA, {
+      qualityProfile: 'agent-composite',
+      assetBindings: [optionalBinding],
+      frames: [0],
+      checkRenderedLayout: true,
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'agent-composite-media-not-visible', severity: 'error' }),
+    ]));
+    expect(result.ok).toBe(false);
+  }, 120_000);
+
+  it('accepts an optional-only pool when the Agent visibly adopts one approved asset', async () => {
+    const optionalBinding = {
+      ...REQUIRED_COMPOSITE_BINDING,
+      usage: 'optional' as const,
+      required: false,
+    };
+    const result = await validateMotionCardTsx(compositeWithMedia(
+      "{ position: 'absolute', left: 120, top: 90, width: 960, height: 620 }",
+    ), {
+      qualityProfile: 'agent-composite',
+      assetBindings: [optionalBinding],
+      frames: [0],
+      checkRenderedLayout: true,
+    });
+    expect(result.issues.filter((issue) => issue.code === 'agent-composite-media-not-visible')).toEqual([]);
+  }, 120_000);
+
+  it('accepts required media that occupies a meaningful visible region', async () => {
+    const result = await validateMotionCardTsx(compositeWithMedia(
+      "{ position: 'absolute', left: 120, top: 90, width: 960, height: 620 }",
+    ), {
+      qualityProfile: 'agent-composite',
+      assetBindings: [REQUIRED_COMPOSITE_BINDING],
+      frames: [0],
+      checkRenderedLayout: true,
+    });
+    expect(result.issues.filter((issue) => issue.code === 'required-composite-media-not-visible')).toEqual([]);
+  }, 120_000);
+});
+
 describe('motion card contact sheet', () => {
   it('cache key is stable for same source/frames and changes when frames change', () => {
     const a = motionCardContactSheetCacheKey({ tsx: GOOD, frames: [0, 75, 149], storyboard: 's' });
@@ -209,6 +352,15 @@ describe('内容盒累计高度溢出探针', () => {
   it('单原语卡内容在容量内 -> 不报 content-box-overflow', async () => {
     const result = await validateMotionCardTsx(FIT_KIT_CARD, {
       cues: [0, 20],
+      checkRenderedLayout: true,
+    });
+    expect(result.issues.filter((i) => i.code === 'content-box-overflow')).toEqual([]);
+  }, 120_000);
+
+  it('Agent 原子合成不套用普通 Motion 的 0.72H 纵向容量限制', async () => {
+    const result = await validateMotionCardTsx(OVERLOADED_KIT_CARD, {
+      cues: [0, 10, 20, 30, 40, 50, 60, 70],
+      qualityProfile: 'agent-composite',
       checkRenderedLayout: true,
     });
     expect(result.issues.filter((i) => i.code === 'content-box-overflow')).toEqual([]);

@@ -1,4 +1,11 @@
-import type { MotionBible, MotionBibleTransition, TimingBeatRole } from './motion';
+import type {
+  MotionBible,
+  MotionBibleTransition,
+  MotionDirectiveCameraMove,
+  MotionDirectiveComposition,
+  MotionDirectiveMediaRole,
+  TimingBeatRole,
+} from './motion';
 import type { GenerationProvenance } from './director';
 
 export type VisualShotPurpose =
@@ -83,6 +90,9 @@ export interface VisualShot {
   purpose: VisualShotPurpose;
   carrier: string;
   intensity: 1 | 2 | 3;
+  composition?: MotionDirectiveComposition;
+  cameraMove?: MotionDirectiveCameraMove;
+  mediaRole?: MotionDirectiveMediaRole;
   beats: VisualShotBeat[];
   assetRequests: MediaAssetRequest[];
   audioCueIds: string[];

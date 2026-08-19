@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { loadProjectFile, saveProjectSection } from '../project-file';
 import type { ProjectData, ProjectSection } from '../../src/lib/project-persistence';
+import type { ProductionMutationGuard } from '../../src/lib/production-mutations';
 import { PIPELINE_ERROR_CODES } from './types';
 
 export type ProjectContext =
@@ -67,7 +68,8 @@ export class HeadlessProjectContext {
   async saveSection<S extends ProjectSection>(
     section: S,
     value: ProjectData[S],
+    productionGuard?: ProductionMutationGuard,
   ): Promise<void> {
-    await saveProjectSection(this.projectPath, section, value);
+    await saveProjectSection(this.projectPath, section, value, productionGuard);
   }
 }

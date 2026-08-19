@@ -1,6 +1,5 @@
 import { ipcMain, app } from 'electron';
 import { join } from 'node:path';
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { AccountStore } from './accounts';
 import { getPlatform } from './platforms';
 import { parseAccountId } from './account-id';
@@ -70,30 +69,6 @@ export function registerPublishIpc(): void {
   ipcMain.handle('publish:cancel', async () => {
     cancelled = true;
     await abortActivePublish();
-  });
-
-  // ─── 自由发布（无项目）状态：userData/publish/standalone/{state.json,covers/} ──
-  // 草稿/主题/历史的 schema 由渲染层拥有，主进程只做透明 JSON 读写（原子写）。
-  const standaloneRoot = () => join(app.getPath('userData'), 'publish', 'standalone');
-  ipcMain.handle('publish:standalone-load', async () => {
-    const root = standaloneRoot();
-    const coversDir = join(root, 'covers');
-    await mkdir(coversDir, { recursive: true });
-    let state: unknown = null;
-    try {
-      state = JSON.parse(await readFile(join(root, 'state.json'), 'utf-8'));
-    } catch {
-      state = null;
-    }
-    return { root, coversDir, state };
-  });
-  ipcMain.handle('publish:standalone-save', async (_e, state: unknown) => {
-    const root = standaloneRoot();
-    await mkdir(root, { recursive: true });
-    const file = join(root, 'state.json');
-    const tmp = `${file}.tmp`;
-    await writeFile(tmp, JSON.stringify(state, null, 2), 'utf-8');
-    await rename(tmp, file);
   });
 
   // ─── 依赖运行时按需下载（统一工厂：status + download + progress + cancel） ──────

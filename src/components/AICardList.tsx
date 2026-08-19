@@ -1,6 +1,6 @@
 import { AnimatePresence, m } from 'framer-motion';
 import { useState } from 'react';
-import { Film, Image as ImageIcon, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react';
+import { Film, Image as ImageIcon, Layers3, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react';
 import { toFileSrc } from '../lib/utils';
 import { CARRIER_META } from '../lib/motion-storyboard';
 import { useAIStore } from '../store/ai';
@@ -67,12 +67,23 @@ function buildThumbnailSrc(
       ? (media.posterPath ?? media.assetPath ?? null)
       : media.assetPath;
   if (!value) return null;
-  if (value.startsWith('file://') || value.startsWith('http://') || value.startsWith('https://')) {
-    return value;
-  }
+  return resolveThumbnailSrc(value, currentProjectDir);
+}
+
+function buildCompositeThumbnailSrc(card: AICard, currentProjectDir: string | null): string | null {
+  const binding = card.assetBindings?.find((item) => item.thumbnailFile)
+    ?? card.assetBindings?.find((item) => (
+      item.kind === 'image' || /\.(?:avif|gif|jpe?g|png|webp)$/iu.test(item.filePath)
+    ));
+  const value = binding?.thumbnailFile ?? binding?.filePath;
+  return value ? resolveThumbnailSrc(value, currentProjectDir) : null;
+}
+
+function resolveThumbnailSrc(value: string, currentProjectDir: string | null): string | null {
+  if (/^(?:file|https?):\/\//u.test(value)) return value;
+  if (value.startsWith('/') || /^[a-zA-Z]:[\\/]/u.test(value)) return toFileSrc(value);
   if (!currentProjectDir) return null;
-  const abs = `${currentProjectDir.replace(/\/$/, '')}/${value.replace(/^\//, '')}`;
-  return toFileSrc(abs);
+  return toFileSrc(`${currentProjectDir.replace(/[\\/]$/u, '')}/${value.replace(/^[\\/]/u, '')}`);
 }
 
 const CARD_TYPE_META: Record<AICardType, { label: string; color: string; tone: string }> = {
@@ -81,8 +92,14 @@ const CARD_TYPE_META: Record<AICardType, { label: string; color: string; tone: s
   video: { label: '视频卡', color: '#FFD60A', tone: 'yellow' },
 };
 
+const STRATEGY_META = {
+  'agent-composite': { label: 'Agent Composite', color: '#64D2FF', tone: 'blue' },
+  'standalone-media': { label: '真实素材', color: '#32D74B', tone: 'green' },
+} as const;
+
 export function AICardList({
   cards,
+  placements,
   onToggleEnabled,
   onDeleteCard,
   onEditCard,
@@ -134,16 +151,29 @@ export function AICardList({
         {cards.map((card) => {
           const baseMeta = CARD_TYPE_META[card.type] ?? CARD_TYPE_META.motion;
           const carrier = card.motionCard?.storyboard?.carrier;
-          const meta =
-            card.type === 'motion' && carrier && CARRIER_META[carrier]
+          const meta = card.renderStrategy === 'agent-composite'
+            ? STRATEGY_META['agent-composite']
+            : card.renderStrategy === 'standalone-media'
+              ? STRATEGY_META['standalone-media']
+              : card.type === 'motion' && carrier && CARRIER_META[carrier]
               ? { ...baseMeta, label: CARRIER_META[carrier].label }
               : baseMeta;
           const isMedia = card.type === 'image' || card.type === 'video';
+          const isComposite = card.renderStrategy === 'agent-composite';
           const media = isMedia ? getMediaContent(card) : null;
-          const thumbSrc = isMedia ? buildThumbnailSrc(card, currentProjectDir) : null;
+          const thumbSrc = isMedia
+            ? buildThumbnailSrc(card, currentProjectDir)
+            : isComposite
+              ? buildCompositeThumbnailSrc(card, currentProjectDir)
+              : null;
           const status = media?.generationStatus ?? 'idle';
           const isGenerating = status === 'generating' || status === 'pending';
-          const isFailed = status === 'failed';
+          const productionReport = card.motionCard?.productionReport;
+          const isFailed = status === 'failed'
+            || productionReport?.status === 'failed'
+            || productionReport?.renderOk === false;
+          const fallbackUsed = productionReport?.fallbackUsed === true;
+          const placement = placements?.[card.id];
 
           return (
             <m.article
@@ -151,6 +181,7 @@ export function AICardList({
               layoutId={`ai-card-${card.id}`}
               className={styles.card}
               data-ai-card-type={card.type}
+              data-ai-card-render-strategy={card.renderStrategy ?? 'motion-card'}
               data-enabled={card.enabled}
               onClick={() => onEditCard(card.id)}
               initial={{ opacity: 0, x: -12 }}
@@ -171,8 +202,11 @@ export function AICardList({
                   />
                 </div>
 
-                {isMedia ? (
-                  <div className={styles.thumbnail} data-ai-card-thumbnail={card.type}>
+                {isMedia || isComposite ? (
+                  <div
+                    className={styles.thumbnail}
+                    data-ai-card-thumbnail={isComposite ? 'agent-composite' : card.type}
+                  >
                     {thumbSrc ? (
                       <img
                         src={thumbSrc}
@@ -182,7 +216,11 @@ export function AICardList({
                       />
                     ) : (
                       <span className={styles.thumbnailPlaceholder} aria-hidden="true">
-                        {card.type === 'image' ? <ImageIcon size={16} /> : <Film size={16} />}
+                        {isComposite
+                          ? <Layers3 size={16} />
+                          : card.type === 'image'
+                            ? <ImageIcon size={16} />
+                            : <Film size={16} />}
                       </span>
                     )}
                     {isGenerating ? (
@@ -197,6 +235,13 @@ export function AICardList({
                         className={`${styles.statusBadge} ${styles.badgeFailed}`}
                         data-ai-card-status="failed"
                         aria-label="生成失败"
+                      />
+                    ) : null}
+                    {fallbackUsed && !isFailed ? (
+                      <span
+                        className={`${styles.statusBadge} ${styles.badgeFallback}`}
+                        data-ai-card-status="fallback"
+                        aria-label="已使用退路"
                       />
                     ) : null}
                   </div>
@@ -269,6 +314,15 @@ export function AICardList({
               <p className={styles.body} data-ai-card-copy="true">
                 {getPreviewText(card.content)}
               </p>
+              {isComposite || fallbackUsed || placement ? (
+                <div className={styles.cardMeta}>
+                  {isComposite ? (
+                    <span>{card.assetBindings?.length ?? 0} 项合成素材</span>
+                  ) : null}
+                  {fallbackUsed ? <span data-tone="warning">已使用制作退路</span> : null}
+                  {placement ? <span>{placement.trackLabel}</span> : null}
+                </div>
+              ) : null}
             </m.article>
           );
         })}

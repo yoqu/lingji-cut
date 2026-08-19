@@ -27,7 +27,6 @@ import { getAllRoles } from '../lib/script-templates';
 import heroBg from '../assets/hero-bg.png';
 import { DonateDialog } from '../components/Donate';
 import { ContactDialog } from '../components/Contact';
-import { AccountBadge } from '../components/account/AccountBadge';
 import styles from './Setup.module.css';
 
 interface SetupProps {
@@ -57,8 +56,8 @@ interface SetupProps {
   ) => Promise<void>;
   /** 导入项目回调：打开导入项目向导（处理跨机器项目目录识别与路径修复） */
   onImportProject: () => void;
-  /** 自由发布入口：任意视频 + 主题 → AI 文案/封面 → 一键发布全平台 */
-  onOpenFreePublish: () => void;
+  /** 发布中心入口：打开工作目录 → 识别回填 → 一键发布 */
+  onOpenPublishHub: () => void;
 }
 
 export function Setup({
@@ -69,7 +68,7 @@ export function Setup({
   onImportScript,
   onMediaImport,
   onImportProject,
-  onOpenFreePublish,
+  onOpenPublishHub,
 }: SetupProps) {
   // ── 导入媒体弹窗（抖音 / 本地视频 / 本地音频，统一多 Tab，create 模式）──
   const [mediaImportOpen, setMediaImportOpen] = useState(false);
@@ -237,7 +236,6 @@ export function Setup({
             </div>
           )}
           <div className={styles.heroTopRight}>
-            <AccountBadge />
             <button
               type="button"
               className={styles.donateBadge}
@@ -303,11 +301,11 @@ export function Setup({
             </div>
             <span className={styles.quickItemLabel}>导入项目</span>
           </button>
-          {/* 自由发布入口：任意视频 + 主题，AI 生成封面/文案后一键发布全平台 */}
+          {/* 发布中心：工作目录识别回填后一键发布全平台 */}
           <button
             type="button"
             className={styles.quickItem}
-            onClick={onOpenFreePublish}
+            onClick={onOpenPublishHub}
           >
             <div className={styles.quickItemIcon}>
               <Send size={22} strokeWidth={1.5} />

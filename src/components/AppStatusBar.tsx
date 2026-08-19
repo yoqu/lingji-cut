@@ -11,6 +11,8 @@ import { StatusBarProgressLine } from './StatusBarProgressLine';
 import { StatusBarTaskSummary } from './StatusBarTaskSummary';
 import { TaskProgressPanel } from './TaskProgressPanel';
 import { AgentObservationPanel } from './AgentObservationPanel';
+import { StatusBarConnections } from './StatusBarConnections';
+import type { SettingsTab } from '../pages/Settings';
 
 // ─── 圆形进度图标常量 ──────────────────────────────────────
 const ICON_RADIUS = 6;
@@ -26,15 +28,6 @@ function formatPercent(percent: number | null): string {
 function formatNumber(n: number): string {
   return n.toLocaleString();
 }
-
-// ─── 连接状态标签 ───────────────────────────────────────────
-const STATUS_LABELS: Record<string, string> = {
-  disconnected: '未连接',
-  connecting: '连接中…',
-  connected: '已连接',
-  prompting: '思考中…',
-  error: '连接错误',
-};
 
 // ─── 上下文窗口弹出面板 ──────────────────────────────────────
 function ContextPopover({
@@ -149,29 +142,6 @@ function ObservationIndicator() {
   );
 }
 
-// ─── 连接状态指示器 ─────────────────────────────────────────
-function ConnectionIndicator() {
-  const status = useAgentStore((s) => s.status);
-  const autoConnectError = useAgentStore((s) => s.autoConnectError);
-
-  const displayStatus = autoConnectError && status === 'disconnected' ? 'error' : status;
-  const label = STATUS_LABELS[displayStatus] || displayStatus;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div className={styles.connectionStatus}>
-          <div className={styles.statusDot} data-status={displayStatus} />
-          <span>{label}</span>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="top" align="end">
-        {autoConnectError || label}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
 // ─── 写稿工作台统计 ────────────────────────────────────────
 function WorkbenchStatsIndicator() {
   const mounted = useScriptStore((s) => s.workbenchMounted);
@@ -218,7 +188,7 @@ function AiEditLockIndicator() {
   );
 }
 
-export function AppStatusBar() {
+export function AppStatusBar({ onOpenSettings }: { onOpenSettings?: (tab: SettingsTab) => void }) {
   return (
     <div className={styles.statusBar} data-agent-zone="status-bar">
       <StatusBarProgressLine />
@@ -232,7 +202,7 @@ export function AppStatusBar() {
       <div className={styles.right}>
         <ObservationIndicator />
         <ContextWindowIndicator />
-        <ConnectionIndicator />
+        <StatusBarConnections onOpenSettings={onOpenSettings} />
       </div>
     </div>
   );
